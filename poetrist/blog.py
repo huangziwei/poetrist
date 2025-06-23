@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import click
+import markdown
 from flask import (
     Flask,
     abort,
@@ -30,6 +31,7 @@ from flask import (
     session,
     url_for,
 )
+from markupsafe import Markup
 from werkzeug.security import check_password_hash, generate_password_hash
 
 _secret_file = Path('.secret_key')
@@ -79,9 +81,17 @@ def init_db():
                 title TEXT,
                 body TEXT NOT NULL,
                 link TEXT,
-                published_at TEXT NOT NULL,
-                author TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT,
                 kind TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS entry_version (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                entry_id     INTEGER NOT NULL,
+                title        TEXT,
+                body         TEXT,
+                link         TEXT,
+                saved_at     TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS settings (
                 key   TEXT PRIMARY KEY,
@@ -92,6 +102,13 @@ def init_db():
             """
     )
     db.commit()
+
+def ensure_updated_at():
+    db = get_db()
+    col = db.execute("PRAGMA table_info(entry);").fetchall()
+    if not any(c["name"] == "updated_at" for c in col):
+        db.execute("ALTER TABLE entry ADD COLUMN updated_at TEXT;")
+        db.commit()
 
 ###############################################################################
 # CLI – create admin + token
@@ -153,6 +170,12 @@ def classify(title, link):
         return 'pin'
     return 'post'
 
+def current_username() -> str:
+    """Return the (only) account’s username, falling back to 'admin'."""
+    row = get_db().execute('SELECT username FROM user LIMIT 1').fetchone()
+    return row['username'] if row else 'admin'
+
+
 ###############################################################################
 # Views
 ###############################################################################
@@ -168,16 +191,16 @@ def index():
         if body:
             kind  = classify('', '')
             now   = datetime.now(timezone.utc).isoformat(timespec='seconds')
-            db.execute("""INSERT INTO entry (body, published_at, author, kind)
-                          VALUES (?,?,?,?)""",
-                       (body, now, 'admin', kind))
+            db.execute("""INSERT INTO entry (body, created_at, kind)
+                          VALUES (?,?,?)""",
+                       (body, now, kind))
             db.commit()
             return redirect(url_for('index'))
 
-    cur = db.execute('SELECT * FROM entry ORDER BY published_at DESC')
+    cur = db.execute('SELECT * FROM entry ORDER BY created_at DESC')
     entries = cur.fetchall()
     title = get_setting('site_name', 'po.etr.ist')
-    return render_template_string(TEMPL_INDEX, entries=entries, title=title)
+    return render_template_string(TEMPL_INDEX, entries=entries, title=title, username=current_username())
 
 
 @app.route('/<kind>', methods=['GET', 'POST'])
@@ -205,17 +228,24 @@ def by_kind(kind):
 
         now = datetime.now(timezone.utc).isoformat(timespec='seconds')
         db.execute("""INSERT INTO entry
-                         (title, body, link, published_at, author, kind)
-                      VALUES (?,?,?,?,?,?)""",
-                   (title or None, body, link or None, now, 'admin', kind))
+                        (title, body, link, created_at, kind)
+                     VALUES (?,?,?,?,?)""",
+                   (title or None, body, link or None, now, kind))
+        # db.execute("""INSERT INTO entry
+        #                  (title, body, link, created_at, kind)
+        #               VALUES (?,?,?,?,?,?)""",
+        #            (title or None, body, link or None, now, current_username(), kind))
         db.commit()
         
         return redirect(url_for('by_kind', kind=kind))
 
-    rows = db.execute('SELECT * FROM entry WHERE kind=? ORDER BY published_at DESC', (kind,)).fetchall()
-    title = get_setting('site_name', 'po.etr.ist')
+    rows = db.execute('SELECT * FROM entry WHERE kind=? ORDER BY created_at DESC', (kind,)).fetchall()
 
-    return render_template_string(TEMPL_LIST, rows=rows, heading=kind.capitalize()+"s", kind=kind, title=title)
+    return render_template_string(TEMPL_LIST, 
+                                  rows=rows, 
+                                  heading=kind.capitalize()+"s", 
+                                  kind=kind, 
+                                  title=get_setting('site_name', 'po.etr.ist'), username=current_username())
 
 def get_setting(key, default=None):
     row = get_db().execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone()
@@ -254,10 +284,57 @@ def settings():
     cur_username = db.execute('SELECT username FROM user LIMIT 1').fetchone()['username']
     return render_template_string(
         TEMPL_SETTINGS,
-        title='Settings',
-        site_name=get_setting('site_name', 'po.etr.ist'),
-        username=cur_username
+        title = get_setting('site_name', 'po.etr.ist'),
+        site_name = get_setting('site_name', 'po.etr.ist'),
+        username = cur_username
     )
+
+###############################################################################
+# Edit / Versioning
+###############################################################################
+@app.route('/edit/<int:entry_id>', methods=['GET', 'POST'])
+def edit_entry(entry_id):
+    if not session.get('logged_in'):
+        abort(403)
+
+    db  = get_db()
+    row = db.execute('SELECT * FROM entry WHERE id=?', (entry_id,)).fetchone()
+    if not row:
+        abort(404)
+
+    if request.method == 'POST':
+        title = request.form.get('title','').strip() or None
+        body  = request.form['body'].strip()
+        link  = request.form.get('link','').strip() or None
+
+        if not body:
+            flash('Body is required.')
+            return redirect(url_for('edit_entry', entry_id=entry_id))
+
+        # --- store old version before overwriting ---
+        db.execute("""INSERT INTO entry_version
+                         (entry_id, title, body, link, saved_at)
+                      VALUES (?,?,?,?,?)""",
+                   (row['id'], row['title'], row['body'], row['link'],
+                    datetime.now(timezone.utc).isoformat(timespec='seconds')))
+
+        # --- update live row ---
+        db.execute("""UPDATE entry
+                         SET title=?,
+                             body=?,
+                             link=?,
+                             updated_at=?
+                       WHERE id=?""",
+                   (title, body, link,
+                    datetime.now(timezone.utc).isoformat(timespec='seconds'),
+                    entry_id))
+        db.commit()
+        return redirect(url_for('index'))
+
+    # GET → render form
+    return render_template_string(TEMPL_EDIT,
+                                  e=row,
+                                  title='Edit')
 
 
 ###############################################################################
@@ -268,7 +345,7 @@ TEMPL_BASE = """
 <link rel=stylesheet href="https://unpkg.com/sakura.css/css/sakura-dark.css">
 <div class="container" style="max-width: 60rem; margin: 3rem auto;">
     <h1 style="margin-top:0">{{title or 'po.etr.ist'}}</h1>
-    <nav>
+    <nav style="margin-bottom:1rem;">
       <a href="{{url_for('index')}}">Home</a> |
       <a href="{{ url_for('by_kind', kind='say')  }}">Says</a> |
       <a href="{{ url_for('by_kind', kind='post') }}">Posts</a> |
@@ -280,7 +357,6 @@ TEMPL_BASE = """
           <a href="{{url_for('login')}}">Login</a>
       {% endif %}
     </nav>
-    <hr>
     {% with msgs = get_flashed_messages() %}
       {% if msgs %}
         <ul>{% for m in msgs %}<li>{{m}}</li>{% endfor %}</ul>
@@ -291,27 +367,31 @@ TEMPL_BASE = """
 
 TEMPL_INDEX = TEMPL_BASE + """
     {% block body %}
-    {% if session.get('logged_in') %}
-    <form method=post>
-    <textarea name=body rows=3 style="width:100%;" placeholder="What's on your mind?"></textarea>
-    <button>Add Say</button>
-    </form>
-    <hr>
-    {% endif %}
-    {% for e in entries %}
-    <article>
-        {% if e['kind']=='pin' %}
-        <h3><a href="{{e['link']}}" target=_blank rel=noopener>{{e['title']}}</a></h3>
-        {% elif e['kind']=='post' and e['title'] %}
-        <h3>{{e['title']}}</h3>
+        {% if session.get('logged_in') %}
+        <form method=post>
+        <textarea name=body rows=3 style="width:100%;margin-bottom:0rem;" placeholder="What's on your mind?"></textarea>
+        <button>Add Say</button>
+        </form>
+        <hr>
         {% endif %}
-        <p>{{e['body']|safe}}</p>
-        <small>{{e['kind']}} — {{e['published_at']}} by {{e['author']}}</small>
-    </article><hr>
-    {% else %}
-    <p>No entries yet.</p>
-    {% endfor %}
-    {% endblock %}
+        {% for e in entries %}
+            <article style="padding-bottom:1rem; ;border-bottom:1px solid #444;"">
+                {% if e['kind']=='pin' %}
+                <h3><a href="{{e['link']}}" target=_blank rel=noopener>{{e['title']}}</a></h3>
+                {% elif e['kind']=='post' and e['title'] %}
+                <h3>{{e['title']}}</h3>
+                {% endif %}
+                <p>{{e['body']|md}}</p>
+                <small>{{e['kind']|capitalize}} — {{e['created_at']}} by {{ username }}
+                {% if session.get('logged_in') %}
+                    | <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a>
+                {% endif %}
+                </small>
+            </article>
+        {% else %}
+            <p>No entries yet.</p>
+        {% endfor %}
+    {% endblock body %}
 </div>
 """
 
@@ -343,7 +423,7 @@ TEMPL_LIST = TEMPL_BASE + """
             {% if kind == 'pin' %}
                 <input name="link" style="width:100%" placeholder="Link">
             {% endif %}
-            <textarea name="body" rows="3" style="width:100%;" placeholder="what's on your mind?"></textarea>
+            <textarea name="body" rows="3" style="width:100%;margin-bottom:0rem;" placeholder="what's on your mind?"></textarea>
             <button>Add&nbsp;{{ kind.capitalize() }}</button>
             </form>
             <hr>
@@ -356,16 +436,19 @@ TEMPL_LIST = TEMPL_BASE + """
             {% elif e['title'] %}
             <h3>{{ e['title'] }}</h3>
             {% endif %}
-            <p>{{ e['body']|safe }}</p>
+            <p>{{ e['body']|md }}</p>
             {% if e['link'] and e['kind'] != 'pin' %}
             <p>🔗 <a href="{{ e['link'] }}" target="_blank" rel="noopener">{{ e['link'] }}</a></p>
             {% endif %}
-            <small>{{ e['published_at'] }} by {{ e['author'] }}</small>
+            <small>{{ e['created_at'] }} by {{  username  }}
+            {% if session.get('logged_in') %}
+                | <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a>
+            {% endif %}
+            </small>
         </article><hr>
         {% else %}
         <p>No {{ heading.lower() }} yet.</p>
         {% endfor %}
-
 
     {% endblock %}
 </div>
@@ -412,6 +495,54 @@ TEMPL_SETTINGS = TEMPL_BASE + """
     {% endblock %}
 </div>
 """
+
+TEMPL_EDIT = TEMPL_BASE + """
+{% block body %}
+<form method="post">
+  {% if e['kind'] in ('post','pin') %}
+    <input name="title" value="{{ e['title'] or '' }}" style="width:100%" placeholder="Title"><br>
+  {% endif %}
+
+  {% if e['kind'] == 'pin' %}
+    <input name="link"  value="{{ e['link'] or '' }}"  style="width:100%" placeholder="Link"><br>
+  {% endif %}
+
+  <textarea name="body" rows="8" style="width:100%;">{{ e['body'] }}</textarea><br>
+  <button>Save</button>
+  <small><a href="{{ url_for('index') }}">Cancel</a></small>
+</form>
+
+{% if e['updated_at'] %}
+  <p><em>First published {{ e['created_at'] }}</em></p>
+  <p>Last edited {{ e['updated_at'] }}</p>
+{% else %}
+  <p><em>Published {{ e['created_at'] }}</em></p>
+{% endif %}
+{% endblock %}
+</div>
+"""
+
+
+################################################################################
+# ── Markdown renderer with PyMdown extras ────────────────────────────────
+md = markdown.Markdown(
+    extensions=[
+        "pymdownx.extra",       # tables, fenced-code…
+        "pymdownx.magiclink",   # auto-link bare URLs
+        "pymdownx.tilde",       # ~~strike~~
+        "pymdownx.mark",        # ==mark==
+        "pymdownx.superfences", # improved ``` code fences
+        "pymdownx.highlight",   # pygments highlighting
+    ],
+    extension_configs={
+        "pymdownx.highlight": {"guess_lang": True},
+    },
+)
+
+@app.template_filter("md")
+def md_filter(text: str | None) -> Markup:
+    """Render Markdown; raw HTML is already escaped by pymdownx.escapeall."""
+    return Markup(md.reset().convert(text or ""))
 
 
 ###############################################################################
