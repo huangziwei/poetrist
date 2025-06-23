@@ -7,17 +7,31 @@ A minimal micro-, link- and long-form blog in one file.
   $ FLASK_APP=blog.py flask run
 """
 
-import os, sqlite3, secrets, datetime, getpass, click
-from flask import (
-    Flask, g, request, redirect, url_for, render_template_string,
-    session, abort, flash
-)
-from werkzeug.security import generate_password_hash, check_password_hash
+import getpass
+import os
+import secrets
+import sqlite3
+from datetime import datetime, timezone
 
 ###############################################################################
 # Configuration
 ###############################################################################
 from pathlib import Path
+
+import click
+from flask import (
+    Flask,
+    abort,
+    flash,
+    g,
+    redirect,
+    render_template_string,
+    request,
+    session,
+    url_for,
+)
+from werkzeug.security import check_password_hash, generate_password_hash
+
 _secret_file = Path('.secret_key')
 
 if _secret_file.exists():
@@ -53,21 +67,29 @@ def close_db(error=None):
 def init_db():
     db = get_db()
     db.executescript(
-        """CREATE TABLE IF NOT EXISTS user (
-               id INTEGER PRIMARY KEY,
-               username TEXT UNIQUE NOT NULL,
-               pwd_hash TEXT NOT NULL,
-               token_hash TEXT NOT NULL
-           );
-           CREATE TABLE IF NOT EXISTS entry (
-               id INTEGER PRIMARY KEY AUTOINCREMENT,
-               title TEXT,
-               body TEXT NOT NULL,
-               link TEXT,
-               published_at TEXT NOT NULL,
-               author TEXT,
-               kind TEXT NOT NULL
-           );"""
+        """
+            CREATE TABLE IF NOT EXISTS user (
+                id INTEGER PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                pwd_hash TEXT NOT NULL,
+                token_hash TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS entry (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT,
+                body TEXT NOT NULL,
+                link TEXT,
+                published_at TEXT NOT NULL,
+                author TEXT,
+                kind TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT
+            );
+            INSERT OR IGNORE INTO settings (key, value)
+                VALUES ('site_name', 'po.etr.ist');
+            """
     )
     db.commit()
 
@@ -145,7 +167,7 @@ def index():
         body = request.form['body'].strip()
         if body:
             kind  = classify('', '')
-            now   = datetime.datetime.utcnow().isoformat(timespec='seconds')
+            now   = datetime.now(timezone.utc).isoformat(timespec='seconds')
             db.execute("""INSERT INTO entry (body, published_at, author, kind)
                           VALUES (?,?,?,?)""",
                        (body, now, 'admin', kind))
@@ -154,7 +176,8 @@ def index():
 
     cur = db.execute('SELECT * FROM entry ORDER BY published_at DESC')
     entries = cur.fetchall()
-    return render_template_string(TEMPL_INDEX, entries=entries)
+    title = get_setting('site_name', 'po.etr.ist')
+    return render_template_string(TEMPL_INDEX, entries=entries, title=title)
 
 
 @app.route('/<kind>', methods=['GET', 'POST'])
@@ -180,16 +203,62 @@ def by_kind(kind):
             flash(f'This form can only add {kind}s.')
             return redirect(url_for('by_kind', kind=kind))
 
-        now = datetime.datetime.utcnow().isoformat(timespec='seconds')
+        now = datetime.now(timezone.utc).isoformat(timespec='seconds')
         db.execute("""INSERT INTO entry
                          (title, body, link, published_at, author, kind)
                       VALUES (?,?,?,?,?,?)""",
                    (title or None, body, link or None, now, 'admin', kind))
         db.commit()
+        
         return redirect(url_for('by_kind', kind=kind))
 
     rows = db.execute('SELECT * FROM entry WHERE kind=? ORDER BY published_at DESC', (kind,)).fetchall()
-    return render_template_string(TEMPL_LIST, rows=rows, heading=kind.capitalize()+"s", kind=kind)
+    title = get_setting('site_name', 'po.etr.ist')
+
+    return render_template_string(TEMPL_LIST, rows=rows, heading=kind.capitalize()+"s", kind=kind, title=title)
+
+def get_setting(key, default=None):
+    row = get_db().execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone()
+    return row['value'] if row else default
+
+
+def set_setting(key, value):
+    db = get_db()
+    db.execute(
+        'INSERT INTO settings (key,value) VALUES (?,?) '
+        'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+        (key, value))
+    db.commit()
+
+@app.route('/settings', methods=['GET', 'POST'])
+def settings():
+    if not session.get('logged_in'):
+        abort(403)
+
+    db = get_db()
+
+    if request.method == 'POST':
+        site_name = request.form['site_name'].strip()
+        username  = request.form['username'].strip()
+
+        if site_name:
+            set_setting('site_name', site_name)
+
+        if username:
+            db.execute('UPDATE user SET username=? WHERE id=1', (username,))
+            db.commit()
+        
+        flash('Settings saved.')
+        return redirect(url_for('settings'))
+
+    cur_username = db.execute('SELECT username FROM user LIMIT 1').fetchone()['username']
+    return render_template_string(
+        TEMPL_SETTINGS,
+        title='Settings',
+        site_name=get_setting('site_name', 'po.etr.ist'),
+        username=cur_username
+    )
+
 
 ###############################################################################
 # Embedde​d templates – drop into separate files later if you like
@@ -205,6 +274,7 @@ TEMPL_BASE = """
       <a href="{{ url_for('by_kind', kind='post') }}">Posts</a> |
       <a href="{{ url_for('by_kind', kind='pin')  }}">Pins</a> |
       {% if session.get('logged_in') %}
+          <a href="{{ url_for('settings') }}">Settings</a> | 
           <a href="{{url_for('logout')}}">Logout</a>
       {% else %}
           <a href="{{url_for('login')}}">Login</a>
@@ -263,7 +333,6 @@ TEMPL_LOGIN = TEMPL_BASE + """
 
 TEMPL_LIST = TEMPL_BASE + """
     {% block body %}
-    
         {% if session.get('logged_in') %}
             <form method="post">
             {# Title field for Posts & Pins #}
@@ -274,7 +343,7 @@ TEMPL_LIST = TEMPL_BASE + """
             {% if kind == 'pin' %}
                 <input name="link" style="width:100%" placeholder="Link">
             {% endif %}
-            <textarea name="body" rows="6" style="width:100%;" placeholder="what's on your mind?"></textarea>
+            <textarea name="body" rows="3" style="width:100%;" placeholder="what's on your mind?"></textarea>
             <button>Add&nbsp;{{ kind.capitalize() }}</button>
             </form>
             <hr>
@@ -297,6 +366,48 @@ TEMPL_LIST = TEMPL_BASE + """
         <p>No {{ heading.lower() }} yet.</p>
         {% endfor %}
 
+
+    {% endblock %}
+</div>
+"""
+
+TEMPL_SETTINGS = TEMPL_BASE + """
+    {% block body %}
+    <form method="post">
+    <!-- Site name field -->
+    <div style="position:relative;">
+        <input id="site_name"
+            name="site_name"
+            value="{{ site_name }}"
+            style="width:100%; padding-right:7rem;">
+        <label for="site_name"
+            style="position:absolute;
+                    right:.5rem;
+                    top:40%;
+                    transform:translateY(-50%);
+                    pointer-events:none;
+                    font-size:.75em;
+                    color:#888;">Site&nbsp;name</label>
+    </div>
+
+    <!-- Username field -->
+    <div style="position:relative; margin-top:1rem;">
+        <input id="username"
+            name="username"
+            value="{{ username }}"
+            style="width:100%; padding-right:6rem;">
+        <label for="username"
+            style="position:absolute;
+                    right:.5rem;
+                    top:40%;
+                    transform:translateY(-50%);
+                    pointer-events:none;
+                    font-size:.75em;
+                    color:#888;">Username</label>
+    </div>
+
+    <button style="margin-top:1rem;">Save</button>
+    </form>
 
     {% endblock %}
 </div>
