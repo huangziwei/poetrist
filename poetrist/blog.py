@@ -17,7 +17,7 @@ blog.py
 
 import secrets
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -139,7 +139,7 @@ def init_db():
                 link TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT,
-                slug_ts TEXT UNIQUE NOT NULL,
+                slug TEXT UNIQUE NOT NULL,
                 kind TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS settings (
@@ -159,17 +159,29 @@ def ensure_updated_at():
         db.execute("ALTER TABLE entry ADD COLUMN updated_at TEXT;")
         db.commit()
 
-def ensure_slug_ts():
-    """Add slug_ts and generate it for legacy rows once."""
+def ensure_slug():
+    """Add slug and generate it for legacy rows once."""
     db = get_db()
     col = db.execute("PRAGMA table_info(entry);").fetchall()
-    if not any(c["name"] == "slug_ts" for c in col):
-        db.execute("ALTER TABLE entry ADD COLUMN slug_ts TEXT;")
+    if not any(c["name"] == "slug" for c in col):
+        db.execute("ALTER TABLE entry ADD COLUMN slug TEXT;")
         # fill historic rows
-        for row in db.execute("SELECT id, created_at FROM entry WHERE slug_ts IS NULL"):
+        for row in db.execute("SELECT id, created_at FROM entry WHERE slug IS NULL"):
             ts = datetime.fromisoformat(row["created_at"]).strftime("%Y%m%d%H%M%S")
-            db.execute("UPDATE entry SET slug_ts=? WHERE id=?", (ts, row["id"]))
+            db.execute("UPDATE entry SET slug=? WHERE id=?", (ts, row["id"]))
         db.commit()
+
+
+# -------------------------------------------------------------------------
+# Time helpers
+# -------------------------------------------------------------------------
+def local_now() -> datetime:
+    """
+    Return an *aware* datetime that is already converted to the server’s
+    local time-zone.  (Equivalent to datetime.now().astimezone())
+    """
+    return datetime.now().astimezone()
+
 
 ###############################################################################
 # CLI – create admin + token
@@ -363,13 +375,13 @@ def index():
         body = request.form['body'].strip()
         if body:
             kind  = classify('', '')
-            now_dt  = datetime.now(timezone.utc)
+            now_dt  = local_now()
             now = now_dt.isoformat(timespec='seconds')
-            slug_ts = now_dt.strftime("%Y%m%d%H%M%S")
+            slug = now_dt.strftime("%Y%m%d%H%M%S")
 
-            db.execute("""INSERT INTO entry (body, created_at, slug_ts, kind)
+            db.execute("""INSERT INTO entry (body, created_at, slug, kind)
                           VALUES (?,?,?,?)""",
-                       (body, now, slug_ts, kind))
+                       (body, now, slug, kind))
             db.commit()
             return redirect(url_for('index'))
 
@@ -440,13 +452,13 @@ def by_kind(slug):
             flash(f'{nice.capitalize()} {"is" if len(missing)==1 else "are"} required.')
             return redirect(url_for('by_kind', slug=kind_to_slug(kind)))
 
-        now_dt = datetime.now(timezone.utc)
+        now_dt = local_now()
         now = now_dt.isoformat(timespec='seconds')
-        slug_ts = now_dt.strftime("%Y%m%d%H%M%S")
+        slug = now_dt.strftime("%Y%m%d%H%M%S")
         db.execute("""INSERT INTO entry
-                        (title, body, link, created_at, slug_ts, kind)
+                        (title, body, link, created_at, slug, kind)
                      VALUES (?,?,?,?,?,?)""",
-                   (title or None, body, link or None, now, slug_ts, kind))
+                   (title or None, body, link or None, now, slug, kind))
         db.commit()
         
         return redirect(url_for('by_kind', slug=kind_to_slug(kind)))
@@ -524,7 +536,7 @@ def entry_detail(slug, ts):
         abort(404)
 
     row = get_db().execute(
-        "SELECT * FROM entry WHERE kind=? AND slug_ts=?",
+        "SELECT * FROM entry WHERE kind=? AND slug=?",
         (kind, ts)
     ).fetchone()
 
@@ -552,7 +564,7 @@ def edit_entry(entry_id):
         title = request.form.get('title','').strip() or None
         body  = request.form['body'].strip()
         link  = request.form.get('link','').strip() or None
-        new_slug = request.form.get('slug_ts', '').strip() or row['slug_ts']
+        new_slug = request.form.get('slug', '').strip() or row['slug']
 
         if not body:
             flash('Body is required.')
@@ -563,7 +575,7 @@ def edit_entry(entry_id):
                          SET title=?,
                              body=?,
                              link=?,
-                             slug_ts=?,
+                             slug=?,
                              updated_at=?
                        WHERE id=?""",
                    (title, body, link, new_slug,
@@ -603,7 +615,12 @@ def delete_entry(entry_id):
 ###############################################################################
 
 TEMPL_BASE = """
-<!doctype html><title>{{title or 'po.etr.ist'}}</title>
+<!doctype html>
+<html lang="en">
+<title>{{title or 'po.etr.ist'}}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no"> 
+<meta charset="utf-8">
+<meta name="description" content="po.etr.ist – a minimal blog">
 <link rel="stylesheet" href="{{ url_for('sakura_dark') }}">
 <link rel="icon" href="{{ url_for('favicon') }}">
 
@@ -679,8 +696,8 @@ TEMPL_INDEX = TEMPL_BASE + """
                     <h3>{{e['title']}}</h3>
                 {% endif %}
                 <p>{{e['body']|md}}</p>
-                <small style="color:#888;">
-                    <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug_ts']) }}"
+                <small style="color:#aaa;">
+                    <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug']) }}"
                         style="text-decoration:none; color:inherit;">
                         {{ e['kind']|capitalize }} — {{ e['created_at']|ts }}
                     </a>
@@ -760,8 +777,8 @@ TEMPL_LIST = TEMPL_BASE + """
             {% if e['link'] and e['kind'] != 'pin' %}
                 <p>🔗 <a href="{{ e['link'] }}" target="_blank" rel="noopener">{{ e['link'] }}</a></p>
             {% endif %}
-            <small style="color:#888;">
-                <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug_ts']) }}"
+            <small style="color:#aaa;">
+                <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug']) }}"
                    style="text-decoration:none; color:inherit;">
                    {{ e['kind']|capitalize }} — {{ e['created_at']|ts }}
                 </a>
@@ -803,12 +820,12 @@ TEMPL_SETTINGS = TEMPL_BASE + """
             <legend style="font-weight:bold; margin-bottom:.5rem;">Site</legend>
 
             <label style="display:block; margin:.5rem 0">
-                <span style="font-size:.8em; color:#888">Site name</span><br>
+                <span style="font-size:.8em; color:#aaa">Site name</span><br>
                 <input name="site_name" value="{{ site_name }}" style="width:100%">
             </label>
 
             <label style="display:block; margin:.5rem 0">
-                <span style="font-size:.8em; color:#888">Username</span><br>
+                <span style="font-size:.8em; color:#aaa">Username</span><br>
                 <input name="username" value="{{ username }}" style="width:100%">
             </label>
         </fieldset>
@@ -818,15 +835,15 @@ TEMPL_SETTINGS = TEMPL_BASE + """
             <legend style="font-weight:bold; margin-bottom:.5rem;">URL slugs</legend>
                 <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(10rem,1fr)); gap:.75rem;">
                     <label>
-                        <span style="font-size:.8em; color:#888">Says</span><br>
+                        <span style="font-size:.8em; color:#aaa">Says</span><br>
                         <input name="slug_say"  value="{{ get_setting('slug_say',  'say')  }}" style="width:100%">
                     </label>
                     <label>
-                        <span style="font-size:.8em; color:#888">Posts</span><br>
+                        <span style="font-size:.8em; color:#aaa">Posts</span><br>
                         <input name="slug_post" value="{{ get_setting('slug_post', 'post') }}" style="width:100%">
                     </label>
                     <label>
-                        <span style="font-size:.8em; color:#888">Pins</span><br>
+                        <span style="font-size:.8em; color:#aaa">Pins</span><br>
                         <input name="slug_pin" value="{{ get_setting('slug_pin',  'pin')  }}" style="width:100%">
                     </label>
             </div>
@@ -836,7 +853,7 @@ TEMPL_SETTINGS = TEMPL_BASE + """
         <fieldset style="margin:0 0 1.5rem 0; border:0; padding:0">
             <legend style="font-weight:bold; margin-bottom:.5rem;">Display</legend>
             <label style="display:block; margin:.5rem 0">
-                <span style="font-size:.8em; color:#888">Entries per page</span><br>
+                <span style="font-size:.8em; color:#aaa">Entries per page</span><br>
                 <input name="page_size"
                     value="{{ get_setting('page_size', PAGE_DEFAULT) }}"
                     style="width:8rem">
@@ -869,7 +886,7 @@ TEMPL_DETAIL = TEMPL_BASE + """
 
   <p>{{ e['body']|md }}</p>
   
-  <small style="color:#888;">
+  <small style="color:#aaa;">
       <a href="{{ url_for('by_kind', slug=kind_to_slug(e['kind'])) }}"
          style="text-decoration:none; color:inherit;">
          {{ e['created_at']|ts }}
@@ -906,7 +923,7 @@ TEMPL_EDIT = TEMPL_BASE + """
                 transform:translateY(-50%);
                 pointer-events:none;
                 font-size:.75em;
-                color:#888;">
+                color:#aaa;">
                     Title
             </label>
         </div>
@@ -925,30 +942,30 @@ TEMPL_EDIT = TEMPL_BASE + """
                 transform:translateY(-50%);
                 pointer-events:none;
                 font-size:.75em;
-                color:#888;">
+                color:#aaa;">
                     Link
             </label>
         </div>
     {% endif %}
 
     <div style="position:relative;">
-        <input name="slug_ts" value="{{ e['slug_ts'] }}"
+        <input name="slug" value="{{ e['slug'] }}"
             style="width:100%; padding-right:7rem;">
-        <label for="slug_ts"
+        <label for="slug"
                 style="position:absolute;
                         right:.5rem;
                         top:40%;
                         transform:translateY(-50%);
                         pointer-events:none;
                         font-size:.75em;
-                        color:#888;">
+                        color:#aaa;">
                     Slug
         </label>
     </div>
 
     <textarea name="body" rows="8" style="width:100%;">{{ e['body'] }}</textarea><br>
     <button>Save</button>
-    <small style="color:#888;"><a href="{{ url_for('index') }}">Cancel</a></small>
+    <small style="color:#aaa;"><a href="{{ url_for('index') }}">Cancel</a></small>
 </form>
 
 {% if e['updated_at'] %}
@@ -967,7 +984,7 @@ TEMPL_DELETE = TEMPL_BASE + """
   <article style="border-left:3px solid #c00; padding-left:1rem;">
       {% if e['title'] %}<h3>{{ e['title'] }}</h3>{% endif %}
       <p>{{ e['body']|md }}</p>
-      <small style="color:#888;">{{ e['created_at']|ts }}</small>
+      <small style="color:#aaa;">{{ e['created_at']|ts }}</small>
   </article>
   <form method="post" style="margin-top:1rem;">
       <button style="background:#c00; color:#fff;">Yes – delete it</button>
