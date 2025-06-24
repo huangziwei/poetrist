@@ -51,7 +51,7 @@ SECRET_FILE.write_text(SECRET_KEY)
 
 
 ################################################################################
-# App + Markdown filter
+# App + template filters
 ################################################################################
 app = Flask(__name__)
 app.config.update(SECRET_KEY=SECRET_KEY, DATABASE=str(DB_FILE))
@@ -74,6 +74,23 @@ md = markdown.Markdown(
 def md_filter(text: str | None) -> Markup:
     """Render Markdown; raw HTML is already escaped by pymdownx.escapeall."""
     return Markup(md.reset().convert(text or ""))
+
+@app.template_filter("ts")
+def ts_filter(iso: str | None) -> str:
+    """
+    Convert an ISO-8601 string like '2025-06-24T09:22:20+00:00'
+    to '2025.06.24 09:22:20'.  Falls back to the original value
+    if parsing fails.
+    """
+    if not iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        return iso
+    # If you prefer local time instead of UTC, replace the next
+    # line with:  dt = dt.astimezone()   (system-local tz)
+    return dt.strftime("%Y.%m.%d %H:%M:%S")
 
 
 ###############################################################################
@@ -109,14 +126,6 @@ def init_db():
                 created_at TEXT NOT NULL,
                 updated_at TEXT,
                 kind TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS entry_version (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                entry_id     INTEGER NOT NULL,
-                title        TEXT,
-                body         TEXT,
-                link         TEXT,
-                saved_at     TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS settings (
                 key   TEXT PRIMARY KEY,
@@ -349,9 +358,19 @@ def settings():
         username = cur_username
     )
 
-###############################################################################
-# Edit / Versioning
-###############################################################################
+@app.route('/entry/<int:entry_id>')
+def entry_detail(entry_id):
+    db  = get_db()
+    row = db.execute('SELECT * FROM entry WHERE id=?', (entry_id,)).fetchone()
+    if not row:
+        abort(404)
+
+    return render_template_string(TEMPL_DETAIL,
+                                  e=row,
+                                  title=get_setting('site_name', 'po.etr.ist'),
+                                  username=current_username())
+
+
 @app.route('/edit/<int:entry_id>', methods=['GET', 'POST'])
 def edit_entry(entry_id):
     login_required()
@@ -369,13 +388,6 @@ def edit_entry(entry_id):
         if not body:
             flash('Body is required.')
             return redirect(url_for('edit_entry', entry_id=entry_id))
-
-        # --- store old version before overwriting ---
-        db.execute("""INSERT INTO entry_version
-                         (entry_id, title, body, link, saved_at)
-                      VALUES (?,?,?,?,?)""",
-                   (row['id'], row['title'], row['body'], row['link'],
-                    datetime.now(timezone.utc).isoformat(timespec='seconds')))
 
         # --- update live row ---
         db.execute("""UPDATE entry
@@ -395,6 +407,27 @@ def edit_entry(entry_id):
                                   e=row,
                                   title='Edit')
 
+@app.route('/delete/<int:entry_id>', methods=['GET', 'POST'])
+def delete_entry(entry_id):
+    login_required()
+    db  = get_db()
+
+    # ── Step 2: POST → actually delete ───────────────────────────────────────
+    if request.method == 'POST':
+        db.execute('DELETE FROM entry WHERE id=?', (entry_id,))
+        db.commit()
+        flash('Entry deleted.')
+        return redirect(url_for('index'))
+
+    # ── Step 1: GET  → show lightweight confirm page ─────────────────────────
+    row = db.execute('SELECT * FROM entry WHERE id=?', (entry_id,)).fetchone()
+    if not row:
+        abort(404)
+
+    return render_template_string(TEMPL_DELETE,
+                                  e=row,
+                                  title='Delete',
+                                  )
 
 ###############################################################################
 # Embedde​d templates
@@ -432,8 +465,9 @@ TEMPL_INDEX = TEMPL_BASE + """
         <textarea name=body rows=3 style="width:100%;margin-bottom:0rem;" placeholder="What's on your mind?"></textarea>
         <button>Add Say</button>
         </form>
-        <hr>
         {% endif %}
+        <hr>
+
         {% for e in entries %}
             <article style="padding-bottom:1rem; ;border-bottom:1px solid #444;"">
                 {% if e['kind']=='pin' %}
@@ -442,10 +476,16 @@ TEMPL_INDEX = TEMPL_BASE + """
                 <h3>{{e['title']}}</h3>
                 {% endif %}
                 <p>{{e['body']|md}}</p>
-                <small>{{e['kind']|capitalize}} — {{e['created_at']}} by {{ username }}
-                {% if session.get('logged_in') %}
-                    | <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a>
-                {% endif %}
+                <small style="color:#888;">
+                    <a href="{{ url_for('entry_detail', entry_id=e['id']) }}"
+                        style="text-decoration:none; color:inherit;">
+                        {{ e['kind']|capitalize }} — {{ e['created_at']|ts }}
+                    </a>
+                    by {{ username }}
+                    {% if session.get('logged_in') %}
+                        | <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a>
+                        | <a href="{{ url_for('delete_entry', entry_id=e['id']) }}">Delete</a>
+                    {% endif %}
                 </small>
             </article>
         {% else %}
@@ -475,35 +515,40 @@ TEMPL_LIST = TEMPL_BASE + """
     {% block body %}
         {% if session.get('logged_in') %}
             <form method="post">
-            {# Title field for Posts & Pins #}
-            {% if kind in ('post', 'pin') %}
-                <input name="title" style="width:100%" placeholder="Title"><br>
-            {% endif %}
-            {# Link field only for Pins #}
-            {% if kind == 'pin' %}
-                <input name="link" style="width:100%" placeholder="Link">
-            {% endif %}
-            <textarea name="body" rows="3" style="width:100%;margin-bottom:0rem;" placeholder="what's on your mind?"></textarea>
-            <button>Add&nbsp;{{ kind.capitalize() }}</button>
+                {# Title field for Posts & Pins #}
+                {% if kind in ('post', 'pin') %}
+                    <input name="title" style="width:100%" placeholder="Title"><br>
+                {% endif %}
+                {# Link field only for Pins #}
+                {% if kind == 'pin' %}
+                    <input name="link" style="width:100%" placeholder="Link">
+                {% endif %}
+                <textarea name="body" rows="3" style="width:100%;margin-bottom:0rem;" placeholder="what's on your mind?"></textarea>
+                <button>Add&nbsp;{{ kind.capitalize() }}</button>
             </form>
-            <hr>
         {% endif %}
-
+        <hr>
         {% for e in rows %}
         <article>
             {% if e['kind'] == 'pin' %}
-            <h3><a href="{{ e['link'] }}" target="_blank" rel="noopener">{{ e['title'] }}</a></h3>
+                <h3><a href="{{ e['link'] }}" target="_blank" rel="noopener">{{ e['title'] }}</a></h3>
             {% elif e['title'] %}
-            <h3>{{ e['title'] }}</h3>
+                <h3>{{ e['title'] }}</h3>
             {% endif %}
             <p>{{ e['body']|md }}</p>
             {% if e['link'] and e['kind'] != 'pin' %}
-            <p>🔗 <a href="{{ e['link'] }}" target="_blank" rel="noopener">{{ e['link'] }}</a></p>
+                <p>🔗 <a href="{{ e['link'] }}" target="_blank" rel="noopener">{{ e['link'] }}</a></p>
             {% endif %}
-            <small>{{ e['created_at'] }} by {{  username  }}
-            {% if session.get('logged_in') %}
-                | <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a>
-            {% endif %}
+            <small style="color:#888;">
+                <a href="{{ url_for('entry_detail', entry_id=e['id']) }}"
+                   style="text-decoration:none; color:inherit;">
+                   {{ e['kind']|capitalize }} — {{ e['created_at']|ts }}
+                </a>
+                by {{ username }}
+                {% if session.get('logged_in') %}
+                    | <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a>
+                    | <a href="{{ url_for('delete_entry', entry_id=e['id']) }}">Delete</a>
+                {% endif %}
             </small>
         </article><hr>
         {% else %}
@@ -549,10 +594,32 @@ TEMPL_SETTINGS = TEMPL_BASE + """
                     color:#888;">Username</label>
     </div>
 
-    <button style="margin-top:1rem;">Save</button>
+    <button style="margin-top:1rem;">Save Settings</button>
     </form>
 
     {% endblock %}
+</div>
+"""
+
+TEMPL_DETAIL = TEMPL_BASE + """
+{% block body %}
+<hr>
+<article>
+  {% if e['title'] %}<h2>{{ e['title'] }}</h2>{% endif %}
+  <p>{{ e['body']|md }}</p>
+  {% if e['link'] %}<p>🔗 <a href="{{ e['link'] }}" target="_blank" rel="noopener">{{ e['link'] }}</a></p>{% endif %}
+  <small style="color:#888;">
+      {{ e['kind']|capitalize }} — {{ e['created_at']|ts }}
+      {% if e['updated_at'] %}(updated {{ e['updated_at']|ts }}){% endif %}
+      by {{ username }}
+      {% if session.get('logged_in') %}
+          | <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a>
+          | <a href="{{ url_for('delete_entry', entry_id=e['id']) }}">Delete</a>
+      {% endif %}
+  </small>
+</article>
+<p><a href="{{ url_for('index') }}">← Back</a></p>
+{% endblock %}
 </div>
 """
 
@@ -569,15 +636,31 @@ TEMPL_EDIT = TEMPL_BASE + """
 
   <textarea name="body" rows="8" style="width:100%;">{{ e['body'] }}</textarea><br>
   <button>Save</button>
-  <small><a href="{{ url_for('index') }}">Cancel</a></small>
+  <small style="color:#888;"><a href="{{ url_for('index') }}">Cancel</a></small>
 </form>
 
 {% if e['updated_at'] %}
-  <p><em>First published {{ e['created_at'] }}</em></p>
-  <p>Last edited {{ e['updated_at'] }}</p>
+  <p><em>First published {{ e['created_at']|ts }}</em></p>
+  <p>Last edited {{ e['updated_at']|ts }}</p>
 {% else %}
-  <p><em>Published {{ e['created_at'] }}</em></p>
+  <p><em>Published {{ e['created_at']|ts }}</em></p>
 {% endif %}
+{% endblock %}
+</div>
+"""
+
+TEMPL_DELETE = TEMPL_BASE + """
+{% block body %}
+  <h2>Delete entry?</h2>
+  <article style="border-left:3px solid #c00; padding-left:1rem;">
+      {% if e['title'] %}<h3>{{ e['title'] }}</h3>{% endif %}
+      <p>{{ e['body']|md }}</p>
+      <small style="color:#888;">{{ e['created_at']|ts }}</small>
+  </article>
+  <form method="post" style="margin-top:1rem;">
+      <button style="background:#c00; color:#fff;">Yes – delete it</button>
+      <a href="{{ url_for('index') }}" style="margin-left:1rem;">Cancel</a>
+  </form>
 {% endblock %}
 </div>
 """
@@ -589,6 +672,7 @@ T = {
     "list":   TEMPL_LIST,
     "edit":   TEMPL_EDIT,
     "settings": TEMPL_SETTINGS,
+    "delete": TEMPL_DELETE,
 }
 
 
