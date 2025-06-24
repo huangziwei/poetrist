@@ -44,12 +44,13 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 ROOT        = Path(__file__).parent
 DB_FILE     = ROOT / "blog.sqlite3"
-TOKEN_BYTES = 48
+TOKEN_LEN = 48
 SECRET_FILE = ROOT / ".secret_key"
 SECRET_KEY  = SECRET_FILE.read_text().strip() if SECRET_FILE.exists() \
               else secrets.token_hex(32)
 SECRET_FILE.write_text(SECRET_KEY)
-
+SLUG_DEFAULTS = {"say": "says", "post": "posts", "pin": "pins"}
+PAGE_DEFAULT = 100 
 
 
 ################################################################################
@@ -188,7 +189,7 @@ def local_now() -> datetime:
 ###############################################################################
 def _create_admin(db, *, username: str, password: str) -> str:
     """Insert admin user and return the one-time token."""
-    token = secrets.token_urlsafe(TOKEN_BYTES)
+    token = secrets.token_urlsafe(TOKEN_LEN)
     db.execute(
         "INSERT INTO user (username, pwd_hash, token_hash) VALUES (?,?,?)",
         (username,
@@ -201,7 +202,7 @@ def _create_admin(db, *, username: str, password: str) -> str:
 
 def _rotate_token(db) -> str:
     """Generate + store a *new* one-time token, return it for display."""
-    token = secrets.token_urlsafe(TOKEN_BYTES)
+    token = secrets.token_urlsafe(TOKEN_LEN)
     db.execute(
         "UPDATE user SET token_hash=? WHERE id=1",
         (generate_password_hash(token),)
@@ -258,7 +259,7 @@ def login():
              else request.args.get('token', '')).strip()
 
     if token and validate_token(token):
-        # ── ✅  token matched → burn it right away ────────────────────────
+        # ── token matched → burn it right away ────────────────────────
         db = get_db()
         db.execute('UPDATE user SET token_hash=? WHERE id=1',
                    (generate_password_hash(secrets.token_hex(16)),))
@@ -297,7 +298,7 @@ def favicon():
 ###############################################################################
 # Content helpers
 ###############################################################################
-def classify(title, link):
+def infer_kind(title, link):
     if not title and not link:
         return 'say'
     if link and title:
@@ -323,9 +324,6 @@ def set_setting(key, value):
     db.commit()
 
 # Slug helpers
-
-SLUG_DEFAULTS = {"say": "says", "post": "posts", "pin": "pins"}
-
 def slug_map() -> dict[str, str]:
     """Return {'say':'saying', 'post':'post', …} with fall-back defaults."""
     return {
@@ -341,14 +339,13 @@ def slug_to_kind(slug: str) -> str | None:
     return rev.get(slug)         
 
 # Pagination helpers
-
-PAGE_DEFAULT = 100 
 def page_size() -> int:
     try:
         return int(get_setting('page_size', PAGE_DEFAULT))
     except (TypeError, ValueError):
         return PAGE_DEFAULT
 
+# Expose helpers to templates
 app.jinja_env.globals.update(kind_to_slug=kind_to_slug, get_setting=get_setting)
 app.jinja_env.globals['external_icon'] = lambda: Markup("""
     <svg xmlns="http://www.w3.org/2000/svg"
@@ -374,7 +371,7 @@ def index():
         login_required()
         body = request.form['body'].strip()
         if body:
-            kind  = classify('', '')
+            kind  = infer_kind('', '')
             now_dt  = local_now()
             now = now_dt.isoformat(timespec='seconds')
             slug = now_dt.strftime("%Y%m%d%H%M%S")
@@ -579,7 +576,7 @@ def edit_entry(entry_id):
                              updated_at=?
                        WHERE id=?""",
                    (title, body, link, new_slug,
-                    datetime.now(timezone.utc).isoformat(timespec='seconds'),
+                    local_now().isoformat(timespec='seconds'),
                     entry_id))
         db.commit()
         return redirect(url_for('index'))
