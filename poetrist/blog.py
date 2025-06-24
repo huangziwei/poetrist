@@ -53,6 +53,7 @@ SECRET_KEY  = SECRET_FILE.read_text().strip() if SECRET_FILE.exists() \
               else secrets.token_hex(32)
 SECRET_FILE.write_text(SECRET_KEY)
 SLUG_DEFAULTS = {"say": "says", "post": "posts", "pin": "pins"}
+KINDS = ("say", "post", "pin", "page")
 PAGE_DEFAULT = 100 
 TAG_RE = re.compile(r'(?<!\w)#([\w\-]+)')
 HASH_LINK_RE = re.compile(r'(?<![A-Za-z0-9_])#([\w\-]+)')
@@ -478,6 +479,12 @@ def entry_tags(entry_id: int, *, db) -> list[str]:
         "WHERE et.entry_id=? ORDER BY LOWER(t.name)", (entry_id,))
     return [r['name'] for r in rows]
 
+def nav_pages():
+    """List of dicts: [{'title':'About', 'slug':'about'}, …] sorted A-Z."""
+    db = get_db()
+    return db.execute(
+        "SELECT title, slug FROM entry WHERE kind='page' ORDER BY LOWER(title)"
+    ).fetchall()
 
 # Expose helpers to templates
 app.jinja_env.globals.update(kind_to_slug=kind_to_slug, get_setting=get_setting)
@@ -493,6 +500,7 @@ app.jinja_env.globals['external_icon'] = lambda: Markup("""
     </svg>""")
 app.jinja_env.globals['PAGE_DEFAULT'] = PAGE_DEFAULT
 app.jinja_env.globals['entry_tags'] = lambda eid: entry_tags(eid, db=get_db())
+app.jinja_env.globals['nav_pages'] = nav_pages
 
 ###############################################################################
 # Views
@@ -541,11 +549,22 @@ def index():
 
 @app.route('/<slug>', methods=['GET', 'POST'])
 def by_kind(slug):
+    db = get_db()
+
+    page = db.execute("SELECT * FROM entry WHERE kind='page' AND slug=?", (slug,)).fetchone()
+    if page:
+        return render_template_string(
+            TEMPL_PAGE,
+            e        = page,
+            title    = get_setting('site_name', 'po.etr.ist'),
+            username = current_username(),
+            kind     = 'page',
+        )
+
     kind = slug_to_kind(slug)
-    if kind not in ('say', 'post', 'pin'):
+    if kind not in KINDS[:-1]:
         abort(404)
 
-    db = get_db()
     # ---------- create new entry when the admin submits the inline form ----
     if request.method == 'POST':
         login_required()
@@ -684,15 +703,25 @@ def edit_entry(entry_id):
             flash('Body is required.')
             return redirect(url_for('edit_entry', entry_id=entry_id))
 
+        form_flag = request.form.get('is_page')          
+
+        if form_flag is None:            
+            new_kind = row['kind']
+        elif form_flag == "1":              
+            new_kind = 'page'
+        else:                   
+            new_kind = infer_kind(title, link)
+
         # --- update live row ---
         db.execute("""UPDATE entry
                          SET title=?,
                              body=?,
                              link=?,
                              slug=?,
+                             kind=?,
                              updated_at=?
                        WHERE id=?""",
-                   (title, body, link, new_slug,
+                   (title, body, link, new_slug, new_kind,
                     local_now().isoformat(timespec='seconds'),
                     entry_id))
         sync_tags(entry_id, extract_tags(body), db=db)
@@ -763,8 +792,15 @@ TEMPL_BASE = """
                 {% if kind|default('')=='tags' %}style="font-weight:bold;text-decoration:none"{% endif %}>
                 Tags
             </a>
+            {% for p in nav_pages() %}
+                &nbsp;&nbsp;
+                <a href="{{ '/' ~ p['slug'] }}"
+                {% if request.path|trim('/') == p['slug'] %}style="font-weight:bold;text-decoration:none;"{% endif %}>
+                {{ p['title'] }}
+                </a>
+            {% endfor %}
         </div>
-        <div style="margin-left:auto; white-space:nowrap;">
+        <div style="margin-left:auto; white-space:nowrap;display:flex;"">
             {% if session.get('logged_in') %}
                 <a href="{{ url_for('settings') }}">Settings</a>&nbsp;&nbsp;
                 <a href="{{url_for('logout')}}">Logout</a>
@@ -903,7 +939,7 @@ TEMPL_LIST = TEMPL_BASE + """
             <small style="color:#aaa;">
                 <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug']) }}"
                    style="text-decoration:none; color:inherit;">
-                   {{ e['kind']|capitalize }} — {{ e['created_at']|ts }}
+                   {{ e['created_at']|ts }}
                 </a>
                 {% if session.get('logged_in') %}
                     | <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a>
@@ -1033,7 +1069,7 @@ TEMPL_DETAIL = TEMPL_BASE + """
 TEMPL_EDIT = TEMPL_BASE + """
 {% block body %}
 <form method="post">
-    {% if e['kind'] in ('post','pin') %}
+    {% if e['kind'] in ('post','pin', 'page') %}
         <div style="position:relative;">
             <input id="title"
                 name="title"
@@ -1087,15 +1123,29 @@ TEMPL_EDIT = TEMPL_BASE + """
     </div>
 
     <textarea name="body" rows="8" style="width:100%;">{{ e['body'] }}</textarea><br>
-    <button>Save</button>
-    <small style="color:#aaa;"><a href="{{ url_for('index') }}">Cancel</a></small>
+    <div style="display:flex;gap:.75rem;">
+        <button>Save</button>
+
+        {% if e['kind']=='page' %}
+            <button name="is_page" value="0"
+                    style="background:#444;border:1px solid #888;">
+                Demote&nbsp;to&nbsp;Post
+            </button>
+        {% else %}
+            <button name="is_page" value="1"
+                    style="background:#444;border:1px solid #888;">
+                Save&nbsp;as&nbsp;Page
+            </button>
+        {% endif %}
+    </div>
 </form>
 
 {% if e['updated_at'] %}
-  <p><em>First published {{ e['created_at']|ts }}</em></p>
-  <p>Last edited {{ e['updated_at']|ts }}</p>
+  <small>Last edited {{ e['updated_at']|ts }}</small>
+  <br>
+  <small>First published {{ e['created_at']|ts }}</small>
 {% else %}
-  <p><em>Published {{ e['created_at']|ts }}</em></p>
+  <small>Published {{ e['created_at']|ts }}</small>
 {% endif %}
 {% endblock %}
 </div>
@@ -1129,8 +1179,7 @@ TEMPL_TAGS = TEMPL_BASE + """
                         color:#F8B500;
                         font-size:{{ t['size'] }};">
                 {{ t['name'] }}
-                
-            </a><small>({{ t['cnt'] }})</small> &nbsp
+            </a><small>({{ t['cnt'] }})&nbsp;</small>
         {% else %}
             <span>No tags yet.</span>
         {% endfor %}
@@ -1166,6 +1215,22 @@ TEMPL_TAG_LIST = TEMPL_BASE + """
         <p>No entries for this tag.</p>
     {% endfor %}
     {% endblock %}
+</div>
+"""
+
+TEMPL_PAGE = TEMPL_BASE + """
+{% block body %}
+<hr>
+<article>
+  <p>{{ e['body']|md }}</p>
+  {% if session.get('logged_in') %}
+      <small>
+          <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a> |
+          <a href="{{ url_for('delete_entry', entry_id=e['id']) }}">Delete</a>
+      </small>
+  {% endif %}
+</article>
+{% endblock %}
 </div>
 """
 
