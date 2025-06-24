@@ -527,14 +527,13 @@ def index():
             db.commit()
             return redirect(url_for('index'))
 
-    cur = db.execute('SELECT * FROM entry ORDER BY created_at DESC')
-    entries = cur.fetchall()
 
     # pagination
     page = max(int(request.args.get('page', 1)), 1)
     ps   = page_size()
 
-    entries, total_pages = paginate("SELECT * FROM entry ORDER BY created_at DESC", (), page=page, per_page=ps, db=db)
+    BASE_SQL = "SELECT * FROM entry WHERE kind!='page' ORDER BY created_at DESC"
+    entries, total_pages = paginate(BASE_SQL, (), page=page, per_page=ps, db=db)
 
     pages = list(range(1, total_pages+1))
 
