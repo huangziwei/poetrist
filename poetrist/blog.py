@@ -326,15 +326,34 @@ def favicon():
 
 @app.route('/tags')
 def tags():
-    rows = get_db().execute(
-        "SELECT t.name, COUNT(et.entry_id) AS cnt "
-        "FROM tag t LEFT JOIN entry_tag et ON t.id=et.tag_id "
-        "GROUP BY t.id ORDER BY LOWER(t.name)").fetchall()
-    return render_template_string(TEMPL_TAGS,
-                                  tags=rows,
-                                  title=get_setting('site_name','po.etr.ist'),
-                                  kind='tags',
-                                  username=current_username())
+    cur = get_db().execute(
+        """SELECT t.name, COUNT(et.entry_id) AS cnt
+           FROM tag t LEFT JOIN entry_tag et ON t.id = et.tag_id
+           GROUP BY t.id ORDER BY LOWER(t.name)"""
+    )
+
+    rows = [dict(r) for r in cur]             # ← make them mutable dicts
+
+    # ── scale count → font-size ------------------------------------------------
+    counts = [r["cnt"] for r in rows]
+    if counts:
+        lo, hi = min(counts), max(counts)
+        span   = max(1, hi - lo)
+        for r in rows:
+            weight = (r["cnt"] - lo) / span      # 0‥1
+            size   = 0.75 + weight * 1.2          # 0.75 em – 1.95 em
+            r["size"] = f"{size:.2f}em"
+    else:
+        for r in rows:
+            r["size"] = "1em"
+
+    return render_template_string(
+        TEMPL_TAGS,
+        tags  = rows,
+        title = get_setting('site_name', 'po.etr.ist'),
+        kind  = 'tags',
+        username = current_username(),
+    )
 
 @app.route('/tags/<path:tag_list>')
 def tags_detail(tag_list):
@@ -1097,21 +1116,19 @@ TEMPL_TAGS = TEMPL_BASE + """
     {% block body %}
     <hr>
     <!-- flex row that wraps automatically -->
-    <div style="display:flex;
-                flex-wrap:wrap;
-                gap:.5rem .75rem;">
+    <div>
         {% for t in tags %}
-        <a href="{{ url_for('tags_detail', tag_list=t['name']) }}"
-            style="text-decoration:none;
-                    white-space:nowrap;
-                    color:#F8B500;">
-            {{ t['name'] }}
-            <small>({{ t['cnt'] }})</small>
-        </a>
+            <a href="{{ url_for('tags_detail', tag_list=t['name']) }}"
+                style="text-decoration:none;
+                        white-space:nowrap;
+                        color:#F8B500;
+                        font-size:{{ t['size'] }};">
+                {{ t['name'] }}
+                
+            </a><small>({{ t['cnt'] }})</small> &nbsp
         {% else %}
-        <span>No tags yet.</span>
+            <span>No tags yet.</span>
         {% endfor %}
-
     </div>
     {% endblock %}
 </div>
