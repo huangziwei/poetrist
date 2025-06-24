@@ -125,6 +125,7 @@ def init_db():
                 link TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT,
+                slug_ts TEXT UNIQUE NOT NULL,
                 kind TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS settings (
@@ -142,6 +143,18 @@ def ensure_updated_at():
     col = db.execute("PRAGMA table_info(entry);").fetchall()
     if not any(c["name"] == "updated_at" for c in col):
         db.execute("ALTER TABLE entry ADD COLUMN updated_at TEXT;")
+        db.commit()
+
+def ensure_slug_ts():
+    """Add slug_ts and generate it for legacy rows once."""
+    db = get_db()
+    col = db.execute("PRAGMA table_info(entry);").fetchall()
+    if not any(c["name"] == "slug_ts" for c in col):
+        db.execute("ALTER TABLE entry ADD COLUMN slug_ts TEXT;")
+        # fill historic rows
+        for row in db.execute("SELECT id, created_at FROM entry WHERE slug_ts IS NULL"):
+            ts = datetime.fromisoformat(row["created_at"]).strftime("%Y%m%d%H%M%S")
+            db.execute("UPDATE entry SET slug_ts=? WHERE id=?", (ts, row["id"]))
         db.commit()
 
 ###############################################################################
@@ -264,6 +277,23 @@ def set_setting(key, value):
         (key, value))
     db.commit()
 
+SLUG_DEFAULTS = {"say": "says", "post": "posts", "pin": "pins"}
+
+def slug_map() -> dict[str, str]:
+    """Return {'say':'saying', 'post':'post', …} with fall-back defaults."""
+    return {
+        k: get_setting(f"slug_{k}", v) or v
+        for k, v in SLUG_DEFAULTS.items()
+    }
+
+def kind_to_slug(kind: str) -> str:
+    return slug_map().get(kind, kind)          
+
+def slug_to_kind(slug: str) -> str | None:
+    rev = {v: k for k, v in slug_map().items()}
+    return rev.get(slug)         
+
+app.jinja_env.globals.update(kind_to_slug=kind_to_slug, get_setting=get_setting)
 
 ###############################################################################
 # Views
@@ -278,10 +308,13 @@ def index():
         body = request.form['body'].strip()
         if body:
             kind  = classify('', '')
-            now   = datetime.now(timezone.utc).isoformat(timespec='seconds')
-            db.execute("""INSERT INTO entry (body, created_at, kind)
-                          VALUES (?,?,?)""",
-                       (body, now, kind))
+            now_dt  = datetime.now(timezone.utc)
+            now = now_dt.isoformat(timespec='seconds')
+            slug_ts = now_dt.strftime("%Y%m%d%H%M%S")
+
+            db.execute("""INSERT INTO entry (body, created_at, slug_ts, kind)
+                          VALUES (?,?,?,?)""",
+                       (body, now, slug_ts, kind))
             db.commit()
             return redirect(url_for('index'))
 
@@ -291,10 +324,12 @@ def index():
     return render_template_string(TEMPL_INDEX, entries=entries, title=title, username=current_username())
 
 
-@app.route('/<kind>', methods=['GET', 'POST'])
-def by_kind(kind):
+@app.route('/<slug>', methods=['GET', 'POST'])
+def by_kind(slug):
+    kind = slug_to_kind(slug)
     if kind not in ('say', 'post', 'pin'):
         abort(404)
+
     db = get_db()
     # ---------- create new entry when the admin submits the inline form ----
     if request.method == 'POST':
@@ -313,11 +348,13 @@ def by_kind(kind):
             flash(f'This form can only add {kind}s.')
             return redirect(url_for('by_kind', kind=kind))
 
-        now = datetime.now(timezone.utc).isoformat(timespec='seconds')
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat(timespec='seconds')
+        slug_ts = now_dt.strftime("%Y%m%d%H%M%S")
         db.execute("""INSERT INTO entry
-                        (title, body, link, created_at, kind)
+                        (title, body, link, created_at, slug_ts, kind)
                      VALUES (?,?,?,?,?)""",
-                   (title or None, body, link or None, now, kind))
+                   (title or None, body, link or None, now, slug_ts, kind))
         db.commit()
         
         return redirect(url_for('by_kind', kind=kind))
@@ -346,7 +383,12 @@ def settings():
         if username:
             db.execute('UPDATE user SET username=? WHERE id=1', (username,))
             db.commit()
-        
+
+        set_setting('slug_say',  request.form.get('slug_say',  '').strip() or 'say')
+        set_setting('slug_post', request.form.get('slug_post', '').strip() or 'post')
+        set_setting('slug_pin',  request.form.get('slug_pin',  '').strip() or 'pin')
+
+
         flash('Settings saved.')
         return redirect(url_for('settings'))
 
@@ -358,19 +400,27 @@ def settings():
         username = cur_username
     )
 
-@app.route('/entry/<int:entry_id>')
-def entry_detail(entry_id):
-    db  = get_db()
-    row = db.execute('SELECT * FROM entry WHERE id=?', (entry_id,)).fetchone()
+@app.route('/<slug>/<ts>')
+def entry_detail(slug, ts):
+    kind = slug_to_kind(slug)
+    if kind not in ('say', 'post', 'pin'):
+        abort(404)
+
+    row = get_db().execute(
+        "SELECT * FROM entry WHERE kind=? AND slug_ts=?",
+        (kind, ts)
+    ).fetchone()
+
     if not row:
         abort(404)
 
-    return render_template_string(TEMPL_DETAIL,
-                                  e=row,
-                                  title=get_setting('site_name', 'po.etr.ist'),
-                                  username=current_username(),
-                                  kind=row['kind'])
-
+    return render_template_string(
+        TEMPL_DETAIL,
+        e=row,
+        title=get_setting('site_name', 'po.etr.ist'),
+        username=current_username(),
+        kind=row['kind']
+    )
 
 @app.route('/edit/<int:entry_id>', methods=['GET', 'POST'])
 def edit_entry(entry_id):
@@ -444,15 +494,15 @@ TEMPL_BASE = """
          {% if kind|default('')=='' %}style="font-weight:bold;text-decoration:none;"{% endif %}>
          Home
       </a> |
-      <a href="{{ url_for('by_kind', kind='say')  }}"
+      <a href="{{ url_for('by_kind', slug=kind_to_slug('say')) }}"
          {% if kind|default('')=='say'  %}style="font-weight:bold;text-decoration:none;"{% endif %}>
            Says
       </a> |
-      <a href="{{ url_for('by_kind', kind='post') }}"
+      <a href="{{ url_for('by_kind', slug=kind_to_slug('post')) }}"
          {% if kind|default('')=='post' %}style="font-weight:bold;text-decoration:none;"{% endif %}>
            Posts
       </a> |
-      <a href="{{ url_for('by_kind', kind='pin')  }}"
+      <a href="{{ url_for('by_kind', slug=kind_to_slug('pin')) }}"
          {% if kind|default('')=='pin'  %}style="font-weight:bold;text-decoration:none;"{% endif %}>
            Pins
       </a> |
@@ -490,11 +540,10 @@ TEMPL_INDEX = TEMPL_BASE + """
                 {% endif %}
                 <p>{{e['body']|md}}</p>
                 <small style="color:#888;">
-                    <a href="{{ url_for('entry_detail', entry_id=e['id']) }}"
+                    <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug_ts']) }}"
                         style="text-decoration:none; color:inherit;">
                         {{ e['kind']|capitalize }} — {{ e['created_at']|ts }}
                     </a>
-                    by {{ username }}
                     {% if session.get('logged_in') %}
                         | <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a>
                         | <a href="{{ url_for('delete_entry', entry_id=e['id']) }}">Delete</a>
@@ -553,11 +602,10 @@ TEMPL_LIST = TEMPL_BASE + """
                 <p>🔗 <a href="{{ e['link'] }}" target="_blank" rel="noopener">{{ e['link'] }}</a></p>
             {% endif %}
             <small style="color:#888;">
-                <a href="{{ url_for('entry_detail', entry_id=e['id']) }}"
+                <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug_ts']) }}"
                    style="text-decoration:none; color:inherit;">
                    {{ e['kind']|capitalize }} — {{ e['created_at']|ts }}
                 </a>
-                by {{ username }}
                 {% if session.get('logged_in') %}
                     | <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a>
                     | <a href="{{ url_for('delete_entry', entry_id=e['id']) }}">Delete</a>
@@ -607,6 +655,28 @@ TEMPL_SETTINGS = TEMPL_BASE + """
                     color:#888;">Username</label>
     </div>
 
+    <!-- Slug fields -->
+    <div style="position:relative; margin-top:1rem;">
+        <input name="slug_say" value="{{ get_setting('slug_say', 'say') }}"
+                style="width:100%; padding-right:6rem;">
+        <label style="position:absolute; right:.5rem; top:40%; transform:translateY(-50%);
+                        pointer-events:none; font-size:.75em; color:#888;">Slug for Says</label>
+    </div>
+
+    <div style="position:relative; margin-top:1rem;">
+        <input name="slug_post" value="{{ get_setting('slug_post', 'post') }}"
+                style="width:100%; padding-right:6rem;">
+        <label style="position:absolute; right:.5rem; top:40%; transform:translateY(-50%);
+                        pointer-events:none; font-size:.75em; color:#888;">Slug for Posts</label>
+    </div>
+
+    <div style="position:relative; margin-top:1rem;">
+        <input name="slug_pin" value="{{ get_setting('slug_pin', 'pin') }}"
+                style="width:100%; padding-right:6rem;">
+        <label style="position:absolute; right:.5rem; top:40%; transform:translateY(-50%);
+                        pointer-events:none; font-size:.75em; color:#888;">Slug for Pins</label>
+    </div>
+
     <button style="margin-top:1rem;">Save Settings</button>
     </form>
 
@@ -622,7 +692,7 @@ TEMPL_DETAIL = TEMPL_BASE + """
   <p>{{ e['body']|md }}</p>
   {% if e['link'] %}<p>🔗 <a href="{{ e['link'] }}" target="_blank" rel="noopener">{{ e['link'] }}</a></p>{% endif %}
   <small style="color:#888;">
-      <a href="{{ url_for('by_kind', kind=e['kind']) }}"
+      <a href="{{ url_for('by_kind', slug=kind_to_slug(e['kind'])) }}"
          style="text-decoration:none; color:inherit;">
          {{ e['kind']|capitalize }} — {{ e['created_at']|ts }}
       </a>
