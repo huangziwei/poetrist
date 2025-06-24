@@ -143,13 +143,18 @@ def validate_token(token: str) -> bool:
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    if request.method == 'POST':
-        token = request.form['token'].strip()
-    else:
-        token = request.args.get('token', '').strip()
+    # ── read token from form or query string ──────────────────────────────
+    token = (request.form['token'] if request.method == 'POST'
+             else request.args.get('token', '')).strip()
 
     if token and validate_token(token):
-        session.permanent = True 
+        # ── ✅  token matched → burn it right away ────────────────────────
+        db = get_db()
+        db.execute('UPDATE user SET token_hash=? WHERE id=1',
+                   (generate_password_hash(secrets.token_hex(16)),))
+        db.commit()
+
+        session.permanent = True      # keep user logged in across browser restarts
         session['logged_in'] = True
         return redirect(url_for('index'))
 
@@ -159,6 +164,18 @@ def login():
 def logout():
     session.clear()
     return redirect(url_for('index'))
+
+@app.cli.command('token')
+def cli_token():
+    """Generate a fresh login token that is valid exactly once."""
+    db = get_db()
+    token = secrets.token_urlsafe(TOKEN_BYTES)        # the value you’ll copy
+    db.execute('UPDATE user SET token_hash=? WHERE id=1',
+               (generate_password_hash(token),))
+    db.commit()
+    click.echo(f"\n🔑  One-time login token (valid until first use):\n\n{token}\n")
+    click.echo("Use it at /login?token=<token>  (or paste it into the form).")
+
 
 ###############################################################################
 # Content helpers
