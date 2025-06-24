@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 """
-A minimal micro-, link- and long-form blog in one file.
+A single-file minimal blog.
 
-  $ pip install flask werkzeug        # the only external deps
-  $ python blog.py init               # one-time setup, creates DB + admin
-  $ FLASK_APP=blog.py flask run
+blog.py
+│
+├─ 1  Imports & constants
+├─ 2  App + Markdown filter
+├─ 3  DB helpers
+├─ 4  CLI (grouped)
+├─ 5  Auth helpers + routes
+├─ 6  Content helpers
+├─ 7  Views (/  /<kind>  /edit  /settings)
+├─ 8  Embedded templates (dict)
+└─ 9  __main__
 """
 
-import getpass
-import os
 import secrets
 import sqlite3
 from datetime import datetime, timezone
-
-###############################################################################
-# Configuration
-###############################################################################
 from pathlib import Path
 
 import click
@@ -34,22 +36,45 @@ from flask import (
 from markupsafe import Markup
 from werkzeug.security import check_password_hash, generate_password_hash
 
-_secret_file = Path('.secret_key')
+################################################################################
+# Imports & constants
+################################################################################
 
-if _secret_file.exists():
-    SECRET_KEY = _secret_file.read_text().strip()
-else:
-    SECRET_KEY = secrets.token_hex(32)
-    _secret_file.write_text(SECRET_KEY)
+ROOT        = Path(__file__).parent
+DB_FILE     = ROOT / "blog.sqlite3"
+TOKEN_BYTES = 48
+SECRET_FILE = ROOT / ".secret_key"
+SECRET_KEY  = SECRET_FILE.read_text().strip() if SECRET_FILE.exists() \
+              else secrets.token_hex(32)
+SECRET_FILE.write_text(SECRET_KEY)
 
 
-DATABASE = os.path.join(os.path.dirname(__file__), 'blog.sqlite3')
-# SECRET_KEY = secrets.token_hex(16)          # session signing
-# SECRET_KEY = os.getenv("SECRET_KEY") or secrets.token_hex(32)
-TOKEN_BYTES = 48                            # length of login token
 
+################################################################################
+# App + Markdown filter
+################################################################################
 app = Flask(__name__)
-app.config.from_mapping(SECRET_KEY=SECRET_KEY, DATABASE=DATABASE)
+app.config.update(SECRET_KEY=SECRET_KEY, DATABASE=str(DB_FILE))
+
+md = markdown.Markdown(
+    extensions=[
+        "pymdownx.extra",       # tables, fenced-code…
+        "pymdownx.magiclink",   # auto-link bare URLs
+        "pymdownx.tilde",       # ~~strike~~
+        "pymdownx.mark",        # ==mark==
+        "pymdownx.superfences", # improved ``` code fences
+        "pymdownx.highlight",   # pygments highlighting
+    ],
+    extension_configs={
+        "pymdownx.highlight": {"guess_lang": True},
+    },
+)
+
+@app.template_filter("md")
+def md_filter(text: str | None) -> Markup:
+    """Render Markdown; raw HTML is already escaped by pymdownx.escapeall."""
+    return Markup(md.reset().convert(text or ""))
+
 
 ###############################################################################
 # Database helpers
@@ -113,33 +138,70 @@ def ensure_updated_at():
 ###############################################################################
 # CLI – create admin + token
 ###############################################################################
-@app.cli.command('init')
-def cli_init():
-    """Initialise DB and create the only account."""
-    init_db()
-    db = get_db()
-
-    username = input("Admin username: ").strip()
-    password = getpass.getpass("Admin password (will not echo): ").strip()
-    token    = secrets.token_urlsafe(TOKEN_BYTES)
-
+def _create_admin(db, *, username: str, password: str) -> str:
+    """Insert admin user and return the one-time token."""
+    token = secrets.token_urlsafe(TOKEN_BYTES)
     db.execute(
-        'INSERT INTO user (username, pwd_hash, token_hash) VALUES (?,?,?)',
+        "INSERT INTO user (username, pwd_hash, token_hash) VALUES (?,?,?)",
         (username,
          generate_password_hash(password),
          generate_password_hash(token))
     )
     db.commit()
-    click.echo(f"\n✅  Admin created. Save this **one-time** login token:\n\n{token}\n")
-    click.echo("Use it at /login?token=<token>  (or paste into the login form).")
+    return token
+
+
+def _rotate_token(db) -> str:
+    """Generate + store a *new* one-time token, return it for display."""
+    token = secrets.token_urlsafe(TOKEN_BYTES)
+    db.execute(
+        "UPDATE user SET token_hash=? WHERE id=1",
+        (generate_password_hash(token),)
+    )
+    db.commit()
+    return token
+
+@app.cli.command("init")
+@click.option("--username", prompt=True,
+              help="Admin username (will be created if DB empty)")
+@click.option("--password", prompt=True, hide_input=True,
+              confirmation_prompt=True,
+              help="Admin password")
+def cli_init(username: str, password: str):
+    """Initialise DB *and* create the first admin account."""
+    init_db()                           # no-op if already there
+    db = get_db()
+    token = _create_admin(db,
+                          username=username.strip(),
+                          password=password.strip())
+
+    click.secho("\n✅  Admin created.", fg="green")
+    click.echo(f"\nOne-time login token:\n\n{token}\n")
+    click.echo("Use it at /login?token=<token> or paste it into the form.")
+
+
+@app.cli.command("token")
+def cli_token():
+    """Rotate the admin’s one-time login token."""
+    db = get_db()
+    token = _rotate_token(db)
+
+    click.secho("\n🔑  Fresh login token generated.\n", fg="yellow")
+    click.echo(f"{token}\n")
+    click.echo("Valid until first use → /login?token=<token>")
 
 ###############################################################################
-# Authentication
+# Authentication + routes
 ###############################################################################
 def validate_token(token: str) -> bool:
     db = get_db()
     row = db.execute('SELECT token_hash FROM user LIMIT 1').fetchone()
     return row and check_password_hash(row['token_hash'], token)
+
+
+def login_required() -> None:         
+    if not session.get("logged_in"):
+        abort(403)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -164,18 +226,6 @@ def login():
 def logout():
     session.clear()
     return redirect(url_for('index'))
-
-@app.cli.command('token')
-def cli_token():
-    """Generate a fresh login token that is valid exactly once."""
-    db = get_db()
-    token = secrets.token_urlsafe(TOKEN_BYTES)        # the value you’ll copy
-    db.execute('UPDATE user SET token_hash=? WHERE id=1',
-               (generate_password_hash(token),))
-    db.commit()
-    click.echo(f"\n🔑  One-time login token (valid until first use):\n\n{token}\n")
-    click.echo("Use it at /login?token=<token>  (or paste it into the form).")
-
 
 ###############################################################################
 # Content helpers
@@ -538,29 +588,6 @@ TEMPL_EDIT = TEMPL_BASE + """
 {% endblock %}
 </div>
 """
-
-
-################################################################################
-# ── Markdown renderer with PyMdown extras ────────────────────────────────
-md = markdown.Markdown(
-    extensions=[
-        "pymdownx.extra",       # tables, fenced-code…
-        "pymdownx.magiclink",   # auto-link bare URLs
-        "pymdownx.tilde",       # ~~strike~~
-        "pymdownx.mark",        # ==mark==
-        "pymdownx.superfences", # improved ``` code fences
-        "pymdownx.highlight",   # pygments highlighting
-    ],
-    extension_configs={
-        "pymdownx.highlight": {"guess_lang": True},
-    },
-)
-
-@app.template_filter("md")
-def md_filter(text: str | None) -> Markup:
-    """Render Markdown; raw HTML is already escaped by pymdownx.escapeall."""
-    return Markup(md.reset().convert(text or ""))
-
 
 ###############################################################################
 if __name__ == '__main__':     # Allow `python blog.py` to run the server, too

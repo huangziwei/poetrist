@@ -13,6 +13,7 @@ dependencies = [
     "html-sanitizer>=2.5.0",
     "markdown>=3.8.2",
     "pymdown-extensions>=10.16",
+    "webauthn>=2.6.0",
 ]
 readme = {file = "README.md", content-type = "text/markdown"}
 
