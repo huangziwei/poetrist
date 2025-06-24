@@ -242,6 +242,19 @@ def current_username() -> str:
     row = get_db().execute('SELECT username FROM user LIMIT 1').fetchone()
     return row['username'] if row else 'admin'
 
+def get_setting(key, default=None):
+    row = get_db().execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone()
+    return row['value'] if row else default
+
+
+def set_setting(key, value):
+    db = get_db()
+    db.execute(
+        'INSERT INTO settings (key,value) VALUES (?,?) '
+        'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+        (key, value))
+    db.commit()
+
 
 ###############################################################################
 # Views
@@ -252,8 +265,7 @@ def index():
 
     # Quick-add “Say” for logged-in admin
     if request.method == 'POST':
-        if not session.get('logged_in'):
-            abort(403)
+        login_required()
         body = request.form['body'].strip()
         if body:
             kind  = classify('', '')
@@ -277,8 +289,7 @@ def by_kind(kind):
     db = get_db()
     # ---------- create new entry when the admin submits the inline form ----
     if request.method == 'POST':
-        if not session.get('logged_in'):
-            abort(403)
+        login_required()
 
         title = request.form.get('title', '').strip()
         body  = request.form.get('body',  '').strip()
@@ -298,10 +309,6 @@ def by_kind(kind):
                         (title, body, link, created_at, kind)
                      VALUES (?,?,?,?,?)""",
                    (title or None, body, link or None, now, kind))
-        # db.execute("""INSERT INTO entry
-        #                  (title, body, link, created_at, kind)
-        #               VALUES (?,?,?,?,?,?)""",
-        #            (title or None, body, link or None, now, current_username(), kind))
         db.commit()
         
         return redirect(url_for('by_kind', kind=kind))
@@ -314,23 +321,9 @@ def by_kind(kind):
                                   kind=kind, 
                                   title=get_setting('site_name', 'po.etr.ist'), username=current_username())
 
-def get_setting(key, default=None):
-    row = get_db().execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone()
-    return row['value'] if row else default
-
-
-def set_setting(key, value):
-    db = get_db()
-    db.execute(
-        'INSERT INTO settings (key,value) VALUES (?,?) '
-        'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-        (key, value))
-    db.commit()
-
 @app.route('/settings', methods=['GET', 'POST'])
 def settings():
-    if not session.get('logged_in'):
-        abort(403)
+    login_required()
 
     db = get_db()
 
@@ -361,8 +354,7 @@ def settings():
 ###############################################################################
 @app.route('/edit/<int:entry_id>', methods=['GET', 'POST'])
 def edit_entry(entry_id):
-    if not session.get('logged_in'):
-        abort(403)
+    login_required()
 
     db  = get_db()
     row = db.execute('SELECT * FROM entry WHERE id=?', (entry_id,)).fetchone()
@@ -405,8 +397,9 @@ def edit_entry(entry_id):
 
 
 ###############################################################################
-# Embedde​d templates – drop into separate files later if you like
+# Embedde​d templates
 ###############################################################################
+
 TEMPL_BASE = """
 <!doctype html><title>{{title or 'po.etr.ist'}}</title>
 <link rel=stylesheet href="https://unpkg.com/sakura.css/css/sakura-dark.css">
@@ -588,6 +581,16 @@ TEMPL_EDIT = TEMPL_BASE + """
 {% endblock %}
 </div>
 """
+
+T = {
+    "base":   TEMPL_BASE,
+    "index":  TEMPL_INDEX,
+    "login":  TEMPL_LOGIN,
+    "list":   TEMPL_LIST,
+    "edit":   TEMPL_EDIT,
+    "settings": TEMPL_SETTINGS,
+}
+
 
 ###############################################################################
 if __name__ == '__main__':     # Allow `python blog.py` to run the server, too
