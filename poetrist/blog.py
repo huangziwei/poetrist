@@ -19,6 +19,7 @@ import secrets
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 import click
 import markdown
@@ -88,10 +89,22 @@ def ts_filter(iso: str | None) -> str:
         dt = datetime.fromisoformat(iso)
     except ValueError:
         return iso
-    # If you prefer local time instead of UTC, replace the next
-    # line with:  dt = dt.astimezone()   (system-local tz)
-    return dt.strftime("%Y.%m.%d %H:%M:%S")
 
+    return dt.astimezone().strftime("%Y.%m.%d %H:%M:%S")
+
+@app.template_filter("url")
+def url_filter(url: str | None) -> str:
+    """
+    https://psyche.co/ideas/foo → https://psyche.co/
+    Returns the original string if it can’t be parsed.
+    """
+    if not url:
+        return ""
+    try:
+        p = urlparse(url)
+        return f"{p.scheme}://{p.netloc}/"
+    except Exception:
+        return url
 
 ###############################################################################
 # Database helpers
@@ -294,7 +307,16 @@ def slug_to_kind(slug: str) -> str | None:
     return rev.get(slug)         
 
 app.jinja_env.globals.update(kind_to_slug=kind_to_slug, get_setting=get_setting)
-
+app.jinja_env.globals['external_icon'] = lambda: Markup("""
+    <svg xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 20 20"
+        width="11" height="11"
+        style="vertical-align:baseline; margin-left:.2em; fill:currentColor"
+        aria-hidden="true" focusable="false">
+    <path d="M14 2h4v4h-2V4.41L9.41 11 8 9.59 14.59 3H14V2z"/>
+    <path d="M15 9v7H4V4h7V2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2
+            2 0 0 0 2-2V9h-3z"/>
+    </svg>""")
 ###############################################################################
 # Views
 ###############################################################################
@@ -339,25 +361,39 @@ def by_kind(slug):
         body  = request.form.get('body',  '').strip()
         link  = request.form.get('link',  '').strip()
 
-        if not body:
-            flash('Body is required.')
-            return redirect(url_for('by_kind', kind=kind))
+        missing = []
 
-        real_kind = classify(title, link)
-        if real_kind != kind:
-            flash(f'This form can only add {kind}s.')
-            return redirect(url_for('by_kind', kind=kind))
+        if kind == 'say':
+            if not body:
+                missing.append('body')
+
+        elif kind == 'post':
+            if not title:
+                missing.append('title')
+            if not body:
+                missing.append('body')
+
+        elif kind == 'pin':                # body is OPTIONAL here
+            if not title:
+                missing.append('title')
+            if not link:
+                missing.append('link')
+
+        if missing:
+            nice = ' and '.join(missing)
+            flash(f'{nice.capitalize()} {"is" if len(missing)==1 else "are"} required.')
+            return redirect(url_for('by_kind', slug=kind_to_slug(kind)))
 
         now_dt = datetime.now(timezone.utc)
         now = now_dt.isoformat(timespec='seconds')
         slug_ts = now_dt.strftime("%Y%m%d%H%M%S")
         db.execute("""INSERT INTO entry
                         (title, body, link, created_at, slug_ts, kind)
-                     VALUES (?,?,?,?,?)""",
+                     VALUES (?,?,?,?,?,?)""",
                    (title or None, body, link or None, now, slug_ts, kind))
         db.commit()
         
-        return redirect(url_for('by_kind', kind=kind))
+        return redirect(url_for('by_kind', slug=kind_to_slug(kind)))
 
     rows = db.execute('SELECT * FROM entry WHERE kind=? ORDER BY created_at DESC', (kind,)).fetchall()
 
@@ -435,6 +471,7 @@ def edit_entry(entry_id):
         title = request.form.get('title','').strip() or None
         body  = request.form['body'].strip()
         link  = request.form.get('link','').strip() or None
+        new_slug = request.form.get('slug_ts', '').strip() or row['slug_ts']
 
         if not body:
             flash('Body is required.')
@@ -445,9 +482,10 @@ def edit_entry(entry_id):
                          SET title=?,
                              body=?,
                              link=?,
+                             slug_ts=?,
                              updated_at=?
                        WHERE id=?""",
-                   (title, body, link,
+                   (title, body, link, new_slug,
                     datetime.now(timezone.utc).isoformat(timespec='seconds'),
                     entry_id))
         db.commit()
@@ -467,7 +505,6 @@ def delete_entry(entry_id):
     if request.method == 'POST':
         db.execute('DELETE FROM entry WHERE id=?', (entry_id,))
         db.commit()
-        flash('Entry deleted.')
         return redirect(url_for('index'))
 
     # ── Step 1: GET  → show lightweight confirm page ─────────────────────────
@@ -514,10 +551,25 @@ TEMPL_BASE = """
       {% endif %}
     </nav>
     {% with msgs = get_flashed_messages() %}
-      {% if msgs %}
-        <ul>{% for m in msgs %}<li>{{m}}</li>{% endfor %}</ul>
-      {% endif %}
+    {% if msgs %}
+        {# --- toast ----------------------------------------------------------- #}
+        <div style="position:fixed;
+                    top:1rem; right:1rem;
+                    background:#323232; color:#fff;
+                    padding:.75rem 1rem;
+                    border-radius:.4rem;
+                    font-size:.9rem; line-height:1.3;
+                    box-shadow:0 2px 6px rgba(0,0,0,.4);
+                    max-width:24rem; z-index:999;">
+        {{ msgs|join('<br>')|safe }}
+        </div>
+
+        {# --- auto-dismiss: reload current URL after 3 s ---------------------- #}
+        <meta http-equiv="refresh"
+            content="3;url={{ request.path }}">
+    {% endif %}
     {% endwith %}
+
 <!-- the closing div is in other templates -->
 """
 
@@ -534,9 +586,14 @@ TEMPL_INDEX = TEMPL_BASE + """
         {% for e in entries %}
             <article style="padding-bottom:1rem; ;border-bottom:1px solid #444;"">
                 {% if e['kind']=='pin' %}
-                <h3><a href="{{e['link']}}" target=_blank rel=noopener>{{e['title']}}</a></h3>
+                    <h3>
+                        <a href="{{ e['link'] }}" target="_blank" rel="noopener">
+                            {{ e['title'] }}
+                        </a>
+                        {{ external_icon() }} 
+                    </h3>
                 {% elif e['kind']=='post' and e['title'] %}
-                <h3>{{e['title']}}</h3>
+                    <h3>{{e['title']}}</h3>
                 {% endif %}
                 <p>{{e['body']|md}}</p>
                 <small style="color:#888;">
@@ -593,7 +650,12 @@ TEMPL_LIST = TEMPL_BASE + """
         {% for e in rows %}
         <article style="padding-bottom:1rem; border-bottom:1px solid #444;">
             {% if e['kind'] == 'pin' %}
-                <h3><a href="{{ e['link'] }}" target="_blank" rel="noopener">{{ e['title'] }}</a></h3>
+                <h3>
+                    <a href="{{ e['link'] }}" target="_blank" rel="noopener">
+                        {{ e['title'] }}
+                    </a>
+                    {{ external_icon() }} 
+                </h3>            
             {% elif e['title'] %}
                 <h3>{{ e['title'] }}</h3>
             {% endif %}
@@ -688,15 +750,33 @@ TEMPL_DETAIL = TEMPL_BASE + """
 {% block body %}
 <hr>
 <article>
-  {% if e['title'] %}<h3>{{ e['title'] }}</h3>{% endif %}
+
+  {% if e['kind']=='pin' %}
+      <h3 style="margin-top:0">
+        <a href="{{ e['link'] }}" target="_blank" rel="noopener"
+           style="word-break:break-all; overflow-wrap:anywhere;">
+           {{ e['title'] }} 
+        </a>
+        {{ external_icon() }}
+      </h3>
+      <small>({{ e['link']|url }})</small> 
+
+  {% elif e['title'] %}
+      <h3>{{ e['title'] }}</h3>
+  {% endif %}
+
   <p>{{ e['body']|md }}</p>
-  {% if e['link'] %}<p>🔗 <a href="{{ e['link'] }}" target="_blank" rel="noopener">{{ e['link'] }}</a></p>{% endif %}
+  
   <small style="color:#888;">
       <a href="{{ url_for('by_kind', slug=kind_to_slug(e['kind'])) }}"
          style="text-decoration:none; color:inherit;">
-         {{ e['kind']|capitalize }} — {{ e['created_at']|ts }}
+         {{ e['created_at']|ts }}
       </a>
-      {% if e['updated_at'] %}(updated {{ e['updated_at']|ts }}){% endif %}
+      {% if e['updated_at'] %}
+        <span title="Updated {{ e['updated_at']|ts }}">
+            (updated)
+        </span>
+      {% endif %}
       by {{ username }}
       {% if session.get('logged_in') %}
           | <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a>
@@ -711,6 +791,20 @@ TEMPL_DETAIL = TEMPL_BASE + """
 TEMPL_EDIT = TEMPL_BASE + """
 {% block body %}
 <form method="post">
+    <div style="position:relative;">
+        <input name="slug_ts" value="{{ e['slug_ts'] }}"
+            style="width:100%; padding-right:7rem;">
+        <label for="slug_ts"
+                style="position:absolute;
+                        right:.5rem;
+                        top:40%;
+                        transform:translateY(-50%);
+                        pointer-events:none;
+                        font-size:.75em;
+                        color:#888;">Slug</label>
+    </div>
+
+
   {% if e['kind'] in ('post','pin') %}
     <input name="title" value="{{ e['title'] or '' }}" style="width:100%" placeholder="Title"><br>
   {% endif %}
