@@ -809,14 +809,14 @@ TEMPL_INDEX = TEMPL_BASE + """
         {% for e in entries %}
             <article style="padding-bottom:1rem; ;border-bottom:1px solid #444;"">
                 {% if e['kind']=='pin' %}
-                    <h3>
+                    <h2>
                         <a href="{{ e['link'] }}" target="_blank" rel="noopener">
                             {{ e['title'] }}
                         </a>
                         {{ external_icon() }} 
-                    </h3>
+                    </h2>
                 {% elif e['kind']=='post' and e['title'] %}
-                    <h3>{{e['title']}}</h3>
+                    <h2>{{e['title']}}</h2>
                 {% endif %}
                 <p>{{e['body']|md}}</p>
                 <small style="color:#aaa;">
