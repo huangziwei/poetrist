@@ -15,6 +15,7 @@ blog.py
 └─ 9  __main__
 """
 
+import re
 import secrets
 import sqlite3
 from datetime import datetime
@@ -51,7 +52,8 @@ SECRET_KEY  = SECRET_FILE.read_text().strip() if SECRET_FILE.exists() \
 SECRET_FILE.write_text(SECRET_KEY)
 SLUG_DEFAULTS = {"say": "says", "post": "posts", "pin": "pins"}
 PAGE_DEFAULT = 100 
-
+TAG_RE = re.compile(r'(?<!\w)#([\w\-]+)')
+HASH_LINK_RE = re.compile(r'(?<![A-Za-z0-9_])#([\w\-]+)')
 
 ################################################################################
 # App + template filters
@@ -67,6 +69,8 @@ md = markdown.Markdown(
         "pymdownx.mark",        # ==mark==
         "pymdownx.superfences", # improved ``` code fences
         "pymdownx.highlight",   # pygments highlighting
+        "pymdownx.betterem",
+        "pymdownx.saneheaders"
     ],
     extension_configs={
         "pymdownx.highlight": {"guess_lang": True},
@@ -75,8 +79,20 @@ md = markdown.Markdown(
 
 @app.template_filter("md")
 def md_filter(text: str | None) -> Markup:
-    """Render Markdown; raw HTML is already escaped by pymdownx.escapeall."""
-    return Markup(md.reset().convert(text or ""))
+    """
+    Render Markdown and turn every #tag into
+    <a href="/tags/<tag>">#tag</a>.
+    """
+    html = md.reset().convert(text or "")
+
+    # post-process the generated HTML
+    def repl(match):
+        tag = match.group(1).lower()
+        href = url_for("tags_detail", tag_list=tag)
+        return f'<a href="{href}" style="text-decoration:none;color:#F8B500">#{tag}</a>'
+
+    html = HASH_LINK_RE.sub(repl, html)
+    return Markup(html)
 
 @app.template_filter("ts")
 def ts_filter(iso: str | None) -> str:
@@ -114,6 +130,7 @@ def url_filter(url: str | None) -> str:
 def get_db():
     if 'db' not in g:
         g.db = sqlite3.connect(app.config['DATABASE'])
+        g.db.execute("PRAGMA foreign_keys = ON;")
         g.db.row_factory = sqlite3.Row
     return g.db
 
@@ -146,6 +163,18 @@ def init_db():
             CREATE TABLE IF NOT EXISTS settings (
                 key   TEXT PRIMARY KEY,
                 value TEXT
+            );
+            CREATE TABLE IF NOT EXISTS tag (
+                id   INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS entry_tag (
+                entry_id INTEGER NOT NULL,
+                tag_id   INTEGER NOT NULL,
+                PRIMARY KEY (entry_id, tag_id),
+                FOREIGN KEY (entry_id) REFERENCES entry(id) ON DELETE CASCADE,
+                FOREIGN KEY (tag_id)   REFERENCES tag(id)   ON DELETE CASCADE
             );
             INSERT OR IGNORE INTO settings (key, value)
                 VALUES ('site_name', 'po.etr.ist');
@@ -295,6 +324,43 @@ def favicon():
         max_age=60*60*24*365            # 1-year cache header
     )
 
+@app.route('/tags')
+def tags():
+    rows = get_db().execute(
+        "SELECT t.name, COUNT(et.entry_id) AS cnt "
+        "FROM tag t LEFT JOIN entry_tag et ON t.id=et.tag_id "
+        "GROUP BY t.id ORDER BY LOWER(t.name)").fetchall()
+    return render_template_string(TEMPL_TAGS,
+                                  tags=rows,
+                                  title=get_setting('site_name','po.etr.ist'),
+                                  kind='tags',
+                                  username=current_username())
+
+@app.route('/tags/<path:tag_list>')
+def tags_detail(tag_list):
+    tags = [t.lower() for t in re.split(r'[,+/]', tag_list) if t]  # foo+bar/baz
+    if not tags:
+        abort(404)
+
+    q_marks   = ','.join('?' * len(tags))
+    sql = f"""SELECT e.*
+              FROM entry e
+              JOIN entry_tag et ON et.entry_id = e.id
+              JOIN tag t        ON t.id = et.tag_id
+              WHERE t.name IN ({q_marks})
+              GROUP BY e.id
+              HAVING COUNT(DISTINCT t.name)=?      -- AND-filter
+              ORDER BY e.created_at DESC"""
+    rows = get_db().execute(sql, (*tags, len(tags))).fetchall()
+
+    return render_template_string(TEMPL_TAG_LIST,
+                                  entries=rows,
+                                  tag='+'.join(tags),
+                                  selected=tags, 
+                                  title=get_setting("site_name","po.etr.ist"),
+                                  kind='tags',
+                                  username=current_username())
+
 ###############################################################################
 # Content helpers
 ###############################################################################
@@ -351,6 +417,46 @@ def paginate(base_sql: str, params: tuple, *, page: int, per_page: int, db):
     rows  = db.execute(f"{base_sql} LIMIT ? OFFSET ?", params + (per_page, (page-1)*per_page)).fetchall()
     return rows, pages
 
+
+def extract_tags(text: str) -> set[str]:
+    """Return a **lower-cased** set of #tags found in *text*."""
+    return {m.lower() for m in TAG_RE.findall(text or "")}
+
+def sync_tags(entry_id: int, tags: set[str], *, db):
+    """
+    Bring `entry_tag` + `tag` tables in sync with *tags* for *entry_id*.
+    Removes orphaned tags automatically.
+    """
+    # current tags on that entry
+    cur = {r['name'] for r in db.execute(
+        "SELECT t.name FROM tag t JOIN entry_tag et ON t.id=et.tag_id "
+        "WHERE et.entry_id=?", (entry_id,))}
+    add    = tags - cur
+    remove = cur - tags
+
+    # -- add new ones ------------------------------------------------------
+    for t in add:
+        db.execute("INSERT OR IGNORE INTO tag(name) VALUES(?)", (t,))
+        tag_id = db.execute("SELECT id FROM tag WHERE name=?", (t,)).fetchone()['id']
+        db.execute("INSERT OR IGNORE INTO entry_tag VALUES (?,?)",  (entry_id, tag_id))
+        
+    # -- drop unneeded -----------------------------------------------------
+    for t in remove:
+        tag_id = db.execute("SELECT id FROM tag WHERE name=?", (t,)).fetchone()['id']
+        db.execute("DELETE FROM entry_tag WHERE entry_id=? AND tag_id=?", (entry_id, tag_id))
+
+    # -- garbage-collect unused tags --------------------------------------
+    db.execute("DELETE FROM tag WHERE id NOT IN (SELECT DISTINCT tag_id FROM entry_tag)")
+    db.commit()
+
+def entry_tags(entry_id: int, *, db) -> list[str]:
+    """Return a *sorted* list of tag names for one entry."""
+    rows = db.execute(
+        "SELECT t.name FROM tag t JOIN entry_tag et ON t.id=et.tag_id "
+        "WHERE et.entry_id=? ORDER BY LOWER(t.name)", (entry_id,))
+    return [r['name'] for r in rows]
+
+
 # Expose helpers to templates
 app.jinja_env.globals.update(kind_to_slug=kind_to_slug, get_setting=get_setting)
 app.jinja_env.globals['external_icon'] = lambda: Markup("""
@@ -364,6 +470,7 @@ app.jinja_env.globals['external_icon'] = lambda: Markup("""
             2 0 0 0 2-2V9h-3z"/>
     </svg>""")
 app.jinja_env.globals['PAGE_DEFAULT'] = PAGE_DEFAULT
+app.jinja_env.globals['entry_tags'] = lambda eid: entry_tags(eid, db=get_db())
 
 ###############################################################################
 # Views
@@ -385,6 +492,8 @@ def index():
             db.execute("""INSERT INTO entry (body, created_at, slug, kind)
                           VALUES (?,?,?,?)""",
                        (body, now, slug, kind))
+            entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+            sync_tags(entry_id, extract_tags(body), db=db)
             db.commit()
             return redirect(url_for('index'))
 
@@ -453,6 +562,8 @@ def by_kind(slug):
                         (title, body, link, created_at, slug, kind)
                      VALUES (?,?,?,?,?,?)""",
                    (title or None, body, link or None, now, slug, kind))
+        entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        sync_tags(entry_id, extract_tags(body), db=db)
         db.commit()
         
         return redirect(url_for('by_kind', slug=kind_to_slug(kind)))
@@ -461,7 +572,7 @@ def by_kind(slug):
     page = max(int(request.args.get('page', 1)), 1)
     ps   = page_size()
 
-    entries, total_pages = paginate("SELECT * FROM entry ORDER BY created_at DESC", (), page=page, per_page=ps, db=db)
+    entries, total_pages = paginate('SELECT * FROM entry WHERE kind=? ORDER BY created_at DESC', (kind,), page=page, per_page=ps, db=db)
     pages = list(range(1, total_pages+1))
 
     return render_template_string(
@@ -562,6 +673,7 @@ def edit_entry(entry_id):
                    (title, body, link, new_slug,
                     local_now().isoformat(timespec='seconds'),
                     entry_id))
+        sync_tags(entry_id, extract_tags(body), db=db)
         db.commit()
         return redirect(url_for('index'))
 
@@ -578,6 +690,8 @@ def delete_entry(entry_id):
     # ── Step 2: POST → actually delete ───────────────────────────────────────
     if request.method == 'POST':
         db.execute('DELETE FROM entry WHERE id=?', (entry_id,))
+        db.commit()
+        db.execute("DELETE FROM tag WHERE id NOT IN (SELECT DISTINCT tag_id FROM entry_tag)")
         db.commit()
         return redirect(url_for('index'))
 
@@ -620,6 +734,10 @@ TEMPL_BASE = """
             <a href="{{ url_for('by_kind', slug=kind_to_slug('pin')) }}"
                 {% if kind|default('')=='pin'  %}style="font-weight:bold;text-decoration:none;"{% endif %}>
                 Pins
+            </a>&nbsp;&nbsp;
+            <a href="{{ url_for('tags') }}"
+                {% if kind|default('')=='tags' %}style="font-weight:bold;text-decoration:none"{% endif %}>
+                Tags
             </a>
         </div>
         <div style="margin-left:auto; white-space:nowrap;">
@@ -974,6 +1092,61 @@ TEMPL_DELETE = TEMPL_BASE + """
 {% endblock %}
 </div>
 """
+
+TEMPL_TAGS = TEMPL_BASE + """
+    {% block body %}
+    <hr>
+    <!-- flex row that wraps automatically -->
+    <div style="display:flex;
+                flex-wrap:wrap;
+                gap:.5rem .75rem;">
+        {% for t in tags %}
+        <a href="{{ url_for('tags_detail', tag_list=t['name']) }}"
+            style="text-decoration:none;
+                    white-space:nowrap;
+                    color:#F8B500;">
+            {{ t['name'] }}
+            <small>({{ t['cnt'] }})</small>
+        </a>
+        {% else %}
+        <span>No tags yet.</span>
+        {% endfor %}
+
+    </div>
+    {% endblock %}
+</div>
+"""
+
+TEMPL_TAG_LIST = TEMPL_BASE + """
+{% block body %}
+    <hr>
+    <h3>#{{ tag }}</h3>
+    {% for e in entries %}
+        <article style="border-bottom:1px solid #444; padding-bottom:1rem;">
+        {% if e['title'] %}
+            <h4 style="margin:.25rem 0 .5rem 0;">{{ e['title'] }}</h4>
+        {% endif %}
+
+        <p>{{ e['body']|md }}</p>
+
+        <small style="color:#aaa;">
+            <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug']) }}"
+            style="text-decoration:none; color:inherit;">
+            {{ e['kind']|capitalize }} — {{ e['created_at']|ts }}
+            </a>
+            {% if session.get('logged_in') %}
+            | <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a>
+            | <a href="{{ url_for('delete_entry', entry_id=e['id']) }}">Delete</a>
+            {% endif %}
+        </small>
+        </article>
+    {% else %}
+        <p>No entries for this tag.</p>
+    {% endfor %}
+    {% endblock %}
+</div>
+"""
+
 
 ###############################################################################
 if __name__ == '__main__':     # Allow `python blog.py` to run the server, too
