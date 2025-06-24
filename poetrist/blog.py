@@ -344,6 +344,12 @@ def page_size() -> int:
         return int(get_setting('page_size', PAGE_DEFAULT))
     except (TypeError, ValueError):
         return PAGE_DEFAULT
+    
+def paginate(base_sql: str, params: tuple, *, page: int, per_page: int, db):
+    total = db.execute(f"SELECT COUNT(*) FROM ({base_sql})", params).fetchone()[0]
+    pages = (total + per_page - 1) // per_page
+    rows  = db.execute(f"{base_sql} LIMIT ? OFFSET ?", params + (per_page, (page-1)*per_page)).fetchall()
+    return rows, pages
 
 # Expose helpers to templates
 app.jinja_env.globals.update(kind_to_slug=kind_to_slug, get_setting=get_setting)
@@ -389,16 +395,7 @@ def index():
     page = max(int(request.args.get('page', 1)), 1)
     ps   = page_size()
 
-    total_rows = db.execute('SELECT COUNT(*) FROM entry').fetchone()[0]
-    total_pages = (total_rows + ps - 1) // ps          # ceil-div
-
-    limit  = ps
-    offset = (page-1)*ps
-    entries = db.execute(
-        '''SELECT * FROM entry
-           ORDER BY created_at DESC
-           LIMIT ? OFFSET ?''', (limit, offset)
-    ).fetchall()
+    entries, total_pages = paginate("SELECT * FROM entry ORDER BY created_at DESC", (), page=page, per_page=ps, db=db)
 
     pages = list(range(1, total_pages+1))
 
@@ -464,26 +461,13 @@ def by_kind(slug):
     page = max(int(request.args.get('page', 1)), 1)
     ps   = page_size()
 
-    total_rows = db.execute(
-        'SELECT COUNT(*) FROM entry WHERE kind=?', (kind,)
-    ).fetchone()[0]
-    total_pages = (total_rows + ps - 1) // ps
-
-    limit  = ps
-    offset = (page-1)*ps
-    rows = db.execute(
-        '''SELECT * FROM entry
-           WHERE kind=?
-           ORDER BY created_at DESC
-           LIMIT ? OFFSET ?''', (kind, limit, offset)
-    ).fetchall()
-
+    entries, total_pages = paginate("SELECT * FROM entry ORDER BY created_at DESC", (), page=page, per_page=ps, db=db)
     pages = list(range(1, total_pages+1))
 
     return render_template_string(
         TEMPL_LIST,
-        rows     = rows,
-        pages    = pages,      #  ← new
+        rows     = entries,
+        pages    = pages,
         page     = page,
         heading  = kind.capitalize()+'s',
         kind     = kind,
@@ -990,17 +974,6 @@ TEMPL_DELETE = TEMPL_BASE + """
 {% endblock %}
 </div>
 """
-
-T = {
-    "base":   TEMPL_BASE,
-    "index":  TEMPL_INDEX,
-    "login":  TEMPL_LOGIN,
-    "list":   TEMPL_LIST,
-    "edit":   TEMPL_EDIT,
-    "settings": TEMPL_SETTINGS,
-    "delete": TEMPL_DELETE,
-}
-
 
 ###############################################################################
 if __name__ == '__main__':     # Allow `python blog.py` to run the server, too
