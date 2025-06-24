@@ -19,6 +19,8 @@ import re
 import secrets
 import sqlite3
 from datetime import datetime
+from email.utils import format_datetime
+from html import escape
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -54,6 +56,7 @@ SLUG_DEFAULTS = {"say": "says", "post": "posts", "pin": "pins"}
 PAGE_DEFAULT = 100 
 TAG_RE = re.compile(r'(?<!\w)#([\w\-]+)')
 HASH_LINK_RE = re.compile(r'(?<![A-Za-z0-9_])#([\w\-]+)')
+RFC2822_FMT = "%a, %d %b %Y %H:%M:%S %z"
 
 ################################################################################
 # App + template filters
@@ -737,6 +740,8 @@ TEMPL_BASE = """
 <meta name="description" content="po.etr.ist – a minimal blog">
 <link rel="stylesheet" href="{{ url_for('sakura_dark') }}">
 <link rel="icon" href="{{ url_for('favicon') }}">
+<link rel="alternate" type="application/rss+xml"
+      href="{{ url_for('global_rss') }}" title="{{ title }} – RSS">
 
 <div class="container" style="max-width: 60rem; margin: 3rem auto;">
     <h1 style="margin-top:0"><a href="{{ url_for('index') }}">{{title or 'po.etr.ist'}}</a></h1>
@@ -1163,6 +1168,104 @@ TEMPL_TAG_LIST = TEMPL_BASE + """
     {% endblock %}
 </div>
 """
+
+###############################################################################
+# RSS feed
+###############################################################################
+def _rfc2822(dt_str: str) -> str:
+    """ISO-8601 → RFC 2822 (Tue, 24 Jun 2025 09:22:20 +0200)."""
+    try:
+        return datetime.fromisoformat(dt_str).astimezone().strftime(RFC2822_FMT)
+    except Exception:
+        return dt_str                           # fall back unchanged
+
+def _rss(entries, *, title, feed_url, site_url):
+    """
+    Build a minimal RSS 2.0 document in **one** string.
+    `entries` must be an iterable of rows from the `entry` table.
+    """
+    items = []
+    for e in entries:
+        link = url_for('entry_detail',
+                       slug=kind_to_slug(e['kind']),
+                       ts=e['slug'],
+                       _external=True)          # absolute URL
+        # Markdown → HTML (already safe; we escape around CDATA)
+        body_html = md.reset().convert(e['body'] or "")
+        items.append(f"""
+        <item>
+          <title>{escape(e['title'] or (e['body'][:60] + '…'))}</title>
+          <link>{link}</link>
+          <guid>{link}</guid>
+          <pubDate>{_rfc2822(e['created_at'])}</pubDate>
+          <description><![CDATA[{body_html}]]></description>
+        </item>""")
+
+    return f"""<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0">
+  <channel>
+    <title>{escape(title)}</title>
+    <link>{site_url}</link>
+    <description>{escape(title)} – RSS</description>
+    <generator>po.etr.ist</generator>
+    <docs>https://validator.w3.org/feed/docs/rss2.html</docs>
+    <lastBuildDate>{format_datetime(datetime.now().astimezone())}</lastBuildDate>
+    <atom:link xmlns:atom href="{feed_url}" rel="self" type="application/rss+xml"/>
+    {''.join(items)}
+  </channel>
+</rss>"""
+
+# ------------------------------------------------------------------
+#  ✨  RSS feeds
+# ------------------------------------------------------------------
+@app.route('/rss')
+def global_rss():
+    db  = get_db()
+    rows = db.execute("SELECT * FROM entry ORDER BY created_at DESC LIMIT 50").fetchall()
+    xml  = _rss(rows,
+                title = get_setting('site_name', 'po.etr.ist'),
+                feed_url = url_for('global_rss', _external=True),
+                site_url = request.url_root.rstrip('/'))
+    return app.response_class(xml, mimetype='application/rss+xml')
+
+
+@app.route('/<slug>/rss')
+def kind_rss(slug):
+    kind = slug_to_kind(slug)
+    if kind not in ('say', 'post', 'pin'):
+        abort(404)
+    db   = get_db()
+    rows = db.execute("SELECT * FROM entry WHERE kind=? ORDER BY created_at DESC LIMIT 50",
+                      (kind,)).fetchall()
+    xml  = _rss(rows,
+                title = f"{kind.capitalize()}s – {get_setting('site_name','po.etr.ist')}",
+                feed_url = request.url,                 # already correct
+                site_url = request.url_root.rstrip('/'))
+    return app.response_class(xml, mimetype='application/rss+xml')
+
+
+@app.route('/tags/<path:tag_list>/rss')
+def tags_rss(tag_list):
+    tags = [t.lower() for t in re.split(r'[,+/]', tag_list) if t]
+    if not tags:
+        abort(404)
+
+    q_marks = ','.join('?' * len(tags))
+    sql = f"""SELECT e.* FROM entry e
+              JOIN entry_tag et ON et.entry_id = e.id
+              JOIN tag t        ON t.id        = et.tag_id
+              WHERE t.name IN ({q_marks})
+              GROUP BY e.id HAVING COUNT(DISTINCT t.name)=?
+              ORDER BY e.created_at DESC LIMIT 50"""
+    rows = get_db().execute(sql, (*tags, len(tags))).fetchall()
+
+    pretty = ' + '.join(tags)
+    xml    = _rss(rows,
+                  title   = f"#{pretty} – {get_setting('site_name','po.etr.ist')}",
+                  feed_url = request.url,               # already correct
+                  site_url = request.url_root.rstrip('/'))
+    return app.response_class(xml, mimetype='application/rss+xml')
+
 
 
 ###############################################################################
