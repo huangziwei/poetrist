@@ -290,6 +290,8 @@ def set_setting(key, value):
         (key, value))
     db.commit()
 
+# Slug helpers
+
 SLUG_DEFAULTS = {"say": "says", "post": "posts", "pin": "pins"}
 
 def slug_map() -> dict[str, str]:
@@ -306,6 +308,15 @@ def slug_to_kind(slug: str) -> str | None:
     rev = {v: k for k, v in slug_map().items()}
     return rev.get(slug)         
 
+# Pagination helpers
+
+PAGE_DEFAULT = 30 
+def page_size() -> int:
+    try:
+        return int(get_setting('page_size', PAGE_DEFAULT))
+    except (TypeError, ValueError):
+        return PAGE_DEFAULT
+
 app.jinja_env.globals.update(kind_to_slug=kind_to_slug, get_setting=get_setting)
 app.jinja_env.globals['external_icon'] = lambda: Markup("""
     <svg xmlns="http://www.w3.org/2000/svg"
@@ -317,6 +328,8 @@ app.jinja_env.globals['external_icon'] = lambda: Markup("""
     <path d="M15 9v7H4V4h7V2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2
             2 0 0 0 2-2V9h-3z"/>
     </svg>""")
+app.jinja_env.globals['PAGE_DEFAULT'] = PAGE_DEFAULT
+
 ###############################################################################
 # Views
 ###############################################################################
@@ -342,9 +355,32 @@ def index():
 
     cur = db.execute('SELECT * FROM entry ORDER BY created_at DESC')
     entries = cur.fetchall()
-    title = get_setting('site_name', 'po.etr.ist')
-    return render_template_string(TEMPL_INDEX, entries=entries, title=title, username=current_username())
 
+    # pagination
+    page = max(int(request.args.get('page', 1)), 1)
+    ps   = page_size()
+
+    total_rows = db.execute('SELECT COUNT(*) FROM entry').fetchone()[0]
+    total_pages = (total_rows + ps - 1) // ps          # ceil-div
+
+    limit  = ps
+    offset = (page-1)*ps
+    entries = db.execute(
+        '''SELECT * FROM entry
+           ORDER BY created_at DESC
+           LIMIT ? OFFSET ?''', (limit, offset)
+    ).fetchall()
+
+    pages = list(range(1, total_pages+1))
+
+    return render_template_string(
+        TEMPL_INDEX,
+        entries = entries,
+        page    = page,
+        pages   = pages,          
+        title   = get_setting('site_name', 'po.etr.ist'),
+        username= current_username(),
+    )
 
 @app.route('/<slug>', methods=['GET', 'POST'])
 def by_kind(slug):
@@ -395,13 +431,36 @@ def by_kind(slug):
         
         return redirect(url_for('by_kind', slug=kind_to_slug(kind)))
 
-    rows = db.execute('SELECT * FROM entry WHERE kind=? ORDER BY created_at DESC', (kind,)).fetchall()
+    # --- pagination -------------------------------------------------------
+    page = max(int(request.args.get('page', 1)), 1)
+    ps   = page_size()
 
-    return render_template_string(TEMPL_LIST, 
-                                  rows=rows, 
-                                  heading=kind.capitalize()+"s", 
-                                  kind=kind, 
-                                  title=get_setting('site_name', 'po.etr.ist'), username=current_username())
+    total_rows = db.execute(
+        'SELECT COUNT(*) FROM entry WHERE kind=?', (kind,)
+    ).fetchone()[0]
+    total_pages = (total_rows + ps - 1) // ps
+
+    limit  = ps
+    offset = (page-1)*ps
+    rows = db.execute(
+        '''SELECT * FROM entry
+           WHERE kind=?
+           ORDER BY created_at DESC
+           LIMIT ? OFFSET ?''', (kind, limit, offset)
+    ).fetchall()
+
+    pages = list(range(1, total_pages+1))
+
+    return render_template_string(
+        TEMPL_LIST,
+        rows     = rows,
+        pages    = pages,      #  ← new
+        page     = page,
+        heading  = kind.capitalize()+'s',
+        kind     = kind,
+        title    = get_setting('site_name', 'po.etr.ist'),
+        username = current_username(),
+    )
 
 @app.route('/settings', methods=['GET', 'POST'])
 def settings():
@@ -424,6 +483,8 @@ def settings():
         set_setting('slug_post', request.form.get('slug_post', '').strip() or 'post')
         set_setting('slug_pin',  request.form.get('slug_pin',  '').strip() or 'pin')
 
+        set_setting('page_size',
+                    max(1, int(request.form.get('page_size', PAGE_DEFAULT))))
 
         flash('Settings saved.')
         return redirect(url_for('settings'))
@@ -606,6 +667,21 @@ TEMPL_INDEX = TEMPL_BASE + """
         {% else %}
             <p>No entries yet.</p>
         {% endfor %}
+
+        {% if pages|length > 1 %}
+        <nav style="margin-top:1rem">
+            {% for p in pages %}
+                {% if p == page %}
+                    <strong>{{ p }}</strong>
+                {% else %}
+                    <a href="{{ request.path }}?page={{ p }}">{{ p }}</a>
+                {% endif %}
+                {# add thin spacing between numbers #}
+                {% if not loop.last %}&nbsp;{% endif %}
+            {% endfor %}
+        </nav>
+        {% endif %}
+
     {% endblock body %}
 </div>
 """
@@ -674,6 +750,21 @@ TEMPL_LIST = TEMPL_BASE + """
             <p>No {{ heading.lower() }} yet.</p>
         {% endfor %}
 
+        {% if pages|length > 1 %}
+            <nav style="margin-top:1rem">
+                {% for p in pages %}
+                    {% if p == page %}
+                        <strong>{{ p }}</strong>
+                    {% else %}
+                        <a href="{{ request.path }}?page={{ p }}">{{ p }}</a>
+                    {% endif %}
+                    {# add thin spacing between numbers #}
+                    {% if not loop.last %}&nbsp;{% endif %}
+                {% endfor %}
+            </nav>
+        {% endif %}
+
+
     {% endblock %}
 </div>
 """
@@ -733,6 +824,15 @@ TEMPL_SETTINGS = TEMPL_BASE + """
                 style="width:100%; padding-right:6rem;">
         <label style="position:absolute; right:.5rem; top:40%; transform:translateY(-50%);
                         pointer-events:none; font-size:.75em; color:#888;">Slug for Pins</label>
+    </div>
+
+    <div style="position:relative; margin-top:1rem;">
+        <input name="page_size" value="{{ get_setting('page_size', PAGE_DEFAULT) }}"
+                style="width:100%; padding-right:6rem;">
+        <label style="position:absolute; right:.5rem; top:40%; transform:translateY(-50%);
+                        pointer-events:none; font-size:.75em; color:#888;">
+                Entries per page
+        </label>
     </div>
 
     <button style="margin-top:1rem;">Save Settings</button>
