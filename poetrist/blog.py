@@ -525,12 +525,8 @@ TEMPL_BASE = """
 <!doctype html><title>{{title or 'po.etr.ist'}}</title>
 <link rel=stylesheet href="https://unpkg.com/sakura.css/css/sakura-dark.css">
 <div class="container" style="max-width: 60rem; margin: 3rem auto;">
-    <h1 style="margin-top:0">{{title or 'po.etr.ist'}}</h1>
+    <h1 style="margin-top:0"><a href="{{ url_for('index') }}">{{title or 'po.etr.ist'}}</a></h1>
     <nav style="margin-bottom:1rem;">
-      <a href="{{ url_for('index') }}"
-         {% if kind|default('')=='' %}style="font-weight:bold;text-decoration:none;"{% endif %}>
-         Home
-      </a> |
       <a href="{{ url_for('by_kind', slug=kind_to_slug('say')) }}"
          {% if kind|default('')=='say'  %}style="font-weight:bold;text-decoration:none;"{% endif %}>
            Says
@@ -791,6 +787,44 @@ TEMPL_DETAIL = TEMPL_BASE + """
 TEMPL_EDIT = TEMPL_BASE + """
 {% block body %}
 <form method="post">
+    {% if e['kind'] in ('post','pin') %}
+        <div style="position:relative;">
+            <input id="title"
+                name="title"
+                value="{{ e['title'] or '' }}"
+                style="width:100%; padding-right:7rem;">
+            <label for="title"
+                style="position:absolute;
+                right:.5rem;
+                top:40%;
+                transform:translateY(-50%);
+                pointer-events:none;
+                font-size:.75em;
+                color:#888;">
+                    Title
+            </label>
+        </div>
+    {% endif %}
+
+    {% if e['kind'] == 'pin' %}
+        <div style="position:relative;">
+            <input id="Link"
+                name="Link"
+                value="{{ e['link'] or '' }}"
+                style="width:100%; padding-right:7rem;">
+            <label for="Link"
+                style="position:absolute;
+                right:.5rem;
+                top:40%;
+                transform:translateY(-50%);
+                pointer-events:none;
+                font-size:.75em;
+                color:#888;">
+                    Link
+            </label>
+        </div>
+    {% endif %}
+
     <div style="position:relative;">
         <input name="slug_ts" value="{{ e['slug_ts'] }}"
             style="width:100%; padding-right:7rem;">
@@ -801,21 +835,14 @@ TEMPL_EDIT = TEMPL_BASE + """
                         transform:translateY(-50%);
                         pointer-events:none;
                         font-size:.75em;
-                        color:#888;">Slug</label>
+                        color:#888;">
+                    Slug
+        </label>
     </div>
 
-
-  {% if e['kind'] in ('post','pin') %}
-    <input name="title" value="{{ e['title'] or '' }}" style="width:100%" placeholder="Title"><br>
-  {% endif %}
-
-  {% if e['kind'] == 'pin' %}
-    <input name="link"  value="{{ e['link'] or '' }}"  style="width:100%" placeholder="Link"><br>
-  {% endif %}
-
-  <textarea name="body" rows="8" style="width:100%;">{{ e['body'] }}</textarea><br>
-  <button>Save</button>
-  <small style="color:#888;"><a href="{{ url_for('index') }}">Cancel</a></small>
+    <textarea name="body" rows="8" style="width:100%;">{{ e['body'] }}</textarea><br>
+    <button>Save</button>
+    <small style="color:#888;"><a href="{{ url_for('index') }}">Cancel</a></small>
 </form>
 
 {% if e['updated_at'] %}
