@@ -368,7 +368,8 @@ def entry_detail(entry_id):
     return render_template_string(TEMPL_DETAIL,
                                   e=row,
                                   title=get_setting('site_name', 'po.etr.ist'),
-                                  username=current_username())
+                                  username=current_username(),
+                                  kind=row['kind'])
 
 
 @app.route('/edit/<int:entry_id>', methods=['GET', 'POST'])
@@ -439,10 +440,22 @@ TEMPL_BASE = """
 <div class="container" style="max-width: 60rem; margin: 3rem auto;">
     <h1 style="margin-top:0">{{title or 'po.etr.ist'}}</h1>
     <nav style="margin-bottom:1rem;">
-      <a href="{{url_for('index')}}">Home</a> |
-      <a href="{{ url_for('by_kind', kind='say')  }}">Says</a> |
-      <a href="{{ url_for('by_kind', kind='post') }}">Posts</a> |
-      <a href="{{ url_for('by_kind', kind='pin')  }}">Pins</a> |
+      <a href="{{ url_for('index') }}"
+         {% if kind|default('')=='' %}style="font-weight:bold;text-decoration:none;"{% endif %}>
+         Home
+      </a> |
+      <a href="{{ url_for('by_kind', kind='say')  }}"
+         {% if kind|default('')=='say'  %}style="font-weight:bold;text-decoration:none;"{% endif %}>
+           Says
+      </a> |
+      <a href="{{ url_for('by_kind', kind='post') }}"
+         {% if kind|default('')=='post' %}style="font-weight:bold;text-decoration:none;"{% endif %}>
+           Posts
+      </a> |
+      <a href="{{ url_for('by_kind', kind='pin')  }}"
+         {% if kind|default('')=='pin'  %}style="font-weight:bold;text-decoration:none;"{% endif %}>
+           Pins
+      </a> |
       {% if session.get('logged_in') %}
           <a href="{{ url_for('settings') }}">Settings</a> | 
           <a href="{{url_for('logout')}}">Logout</a>
@@ -529,7 +542,7 @@ TEMPL_LIST = TEMPL_BASE + """
         {% endif %}
         <hr>
         {% for e in rows %}
-        <article>
+        <article style="padding-bottom:1rem; border-bottom:1px solid #444;">
             {% if e['kind'] == 'pin' %}
                 <h3><a href="{{ e['link'] }}" target="_blank" rel="noopener">{{ e['title'] }}</a></h3>
             {% elif e['title'] %}
@@ -550,9 +563,9 @@ TEMPL_LIST = TEMPL_BASE + """
                     | <a href="{{ url_for('delete_entry', entry_id=e['id']) }}">Delete</a>
                 {% endif %}
             </small>
-        </article><hr>
+        </article>
         {% else %}
-        <p>No {{ heading.lower() }} yet.</p>
+            <p>No {{ heading.lower() }} yet.</p>
         {% endfor %}
 
     {% endblock %}
@@ -605,11 +618,14 @@ TEMPL_DETAIL = TEMPL_BASE + """
 {% block body %}
 <hr>
 <article>
-  {% if e['title'] %}<h2>{{ e['title'] }}</h2>{% endif %}
+  {% if e['title'] %}<h3>{{ e['title'] }}</h3>{% endif %}
   <p>{{ e['body']|md }}</p>
   {% if e['link'] %}<p>🔗 <a href="{{ e['link'] }}" target="_blank" rel="noopener">{{ e['link'] }}</a></p>{% endif %}
   <small style="color:#888;">
-      {{ e['kind']|capitalize }} — {{ e['created_at']|ts }}
+      <a href="{{ url_for('by_kind', kind=e['kind']) }}"
+         style="text-decoration:none; color:inherit;">
+         {{ e['kind']|capitalize }} — {{ e['created_at']|ts }}
+      </a>
       {% if e['updated_at'] %}(updated {{ e['updated_at']|ts }}){% endif %}
       by {{ username }}
       {% if session.get('logged_in') %}
@@ -618,7 +634,6 @@ TEMPL_DETAIL = TEMPL_BASE + """
       {% endif %}
   </small>
 </article>
-<p><a href="{{ url_for('index') }}">← Back</a></p>
 {% endblock %}
 </div>
 """
