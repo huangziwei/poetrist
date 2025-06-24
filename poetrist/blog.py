@@ -31,6 +31,7 @@ from flask import (
     redirect,
     render_template_string,
     request,
+    send_from_directory,
     session,
     url_for,
 )
@@ -262,6 +263,25 @@ def logout():
     session.clear()
     return redirect(url_for('index'))
 
+@app.route("/sakura-dark.css")
+def sakura_dark():
+    """Serve the local Sakura stylesheet with long-term caching."""
+    return send_from_directory(
+        Path(__file__).parent,          # directory where blog.py lives
+        "sakura-dark.css",              # the file you downloaded
+        mimetype="text/css",
+        max_age=60*60*24*365            # 1-year cache header
+    )
+
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory(
+        Path(__file__).parent,          # directory where blog.py lives
+        "favicon.ico",                  # the file you downloaded
+        mimetype='image/vnd.microsoft.icon',
+        max_age=60*60*24*365            # 1-year cache header
+    )
+
 ###############################################################################
 # Content helpers
 ###############################################################################
@@ -310,7 +330,7 @@ def slug_to_kind(slug: str) -> str | None:
 
 # Pagination helpers
 
-PAGE_DEFAULT = 30 
+PAGE_DEFAULT = 100 
 def page_size() -> int:
     try:
         return int(get_setting('page_size', PAGE_DEFAULT))
@@ -483,8 +503,8 @@ def settings():
         set_setting('slug_post', request.form.get('slug_post', '').strip() or 'post')
         set_setting('slug_pin',  request.form.get('slug_pin',  '').strip() or 'pin')
 
-        set_setting('page_size',
-                    max(1, int(request.form.get('page_size', PAGE_DEFAULT))))
+        size = max(1, int(raw)) if (raw := request.form.get('page_size','').strip()).isdigit() else PAGE_DEFAULT
+        set_setting('page_size', size)
 
         flash('Settings saved.')
         return redirect(url_for('settings'))
@@ -584,28 +604,34 @@ def delete_entry(entry_id):
 
 TEMPL_BASE = """
 <!doctype html><title>{{title or 'po.etr.ist'}}</title>
-<link rel=stylesheet href="https://unpkg.com/sakura.css/css/sakura-dark.css">
+<link rel="stylesheet" href="{{ url_for('sakura_dark') }}">
+<link rel="icon" href="{{ url_for('favicon') }}">
+
 <div class="container" style="max-width: 60rem; margin: 3rem auto;">
     <h1 style="margin-top:0"><a href="{{ url_for('index') }}">{{title or 'po.etr.ist'}}</a></h1>
-    <nav style="margin-bottom:1rem;">
-      <a href="{{ url_for('by_kind', slug=kind_to_slug('say')) }}"
-         {% if kind|default('')=='say'  %}style="font-weight:bold;text-decoration:none;"{% endif %}>
-           Says
-      </a> |
-      <a href="{{ url_for('by_kind', slug=kind_to_slug('post')) }}"
-         {% if kind|default('')=='post' %}style="font-weight:bold;text-decoration:none;"{% endif %}>
-           Posts
-      </a> |
-      <a href="{{ url_for('by_kind', slug=kind_to_slug('pin')) }}"
-         {% if kind|default('')=='pin'  %}style="font-weight:bold;text-decoration:none;"{% endif %}>
-           Pins
-      </a> |
-      {% if session.get('logged_in') %}
-          <a href="{{ url_for('settings') }}">Settings</a> | 
-          <a href="{{url_for('logout')}}">Logout</a>
-      {% else %}
-          <a href="{{url_for('login')}}">Login</a>
-      {% endif %}
+    <nav style="margin-bottom:1rem;display:flex;">
+        <div>
+            <a href="{{ url_for('by_kind', slug=kind_to_slug('say')) }}"
+                {% if kind|default('')=='say'  %}style="font-weight:bold;text-decoration:none;"{% endif %}>
+                Says
+            </a>&nbsp;&nbsp;
+            <a href="{{ url_for('by_kind', slug=kind_to_slug('post')) }}"
+                {% if kind|default('')=='post' %}style="font-weight:bold;text-decoration:none;"{% endif %}>
+                Posts
+            </a>&nbsp;&nbsp;
+            <a href="{{ url_for('by_kind', slug=kind_to_slug('pin')) }}"
+                {% if kind|default('')=='pin'  %}style="font-weight:bold;text-decoration:none;"{% endif %}>
+                Pins
+            </a>
+        </div>
+        <div style="margin-left:auto; white-space:nowrap;">
+            {% if session.get('logged_in') %}
+                <a href="{{ url_for('settings') }}">Settings</a>&nbsp;&nbsp;
+                <a href="{{url_for('logout')}}">Logout</a>
+            {% else %}
+                <a href="{{url_for('login')}}">Login</a>
+            {% endif %}
+        </div>
     </nav>
     {% with msgs = get_flashed_messages() %}
     {% if msgs %}
@@ -669,14 +695,13 @@ TEMPL_INDEX = TEMPL_BASE + """
         {% endfor %}
 
         {% if pages|length > 1 %}
-        <nav style="margin-top:1rem">
+        <nav style="margin-top:1rem;font-size:.75em;">
             {% for p in pages %}
                 {% if p == page %}
                     <strong>{{ p }}</strong>
                 {% else %}
                     <a href="{{ request.path }}?page={{ p }}">{{ p }}</a>
                 {% endif %}
-                {# add thin spacing between numbers #}
                 {% if not loop.last %}&nbsp;{% endif %}
             {% endfor %}
         </nav>
@@ -751,7 +776,7 @@ TEMPL_LIST = TEMPL_BASE + """
         {% endfor %}
 
         {% if pages|length > 1 %}
-            <nav style="margin-top:1rem">
+            <nav style="margin-top:1rem;font-size:.75em;">
                 {% for p in pages %}
                     {% if p == page %}
                         <strong>{{ p }}</strong>
@@ -771,73 +796,54 @@ TEMPL_LIST = TEMPL_BASE + """
 
 TEMPL_SETTINGS = TEMPL_BASE + """
     {% block body %}
-    <form method="post">
-    <!-- Site name field -->
-    <div style="position:relative;">
-        <input id="site_name"
-            name="site_name"
-            value="{{ site_name }}"
-            style="width:100%; padding-right:7rem;">
-        <label for="site_name"
-            style="position:absolute;
-                    right:.5rem;
-                    top:40%;
-                    transform:translateY(-50%);
-                    pointer-events:none;
-                    font-size:.75em;
-                    color:#888;">Site&nbsp;name</label>
-    </div>
+    <form method="post" style="max-width:36rem">
 
-    <!-- Username field -->
-    <div style="position:relative; margin-top:1rem;">
-        <input id="username"
-            name="username"
-            value="{{ username }}"
-            style="width:100%; padding-right:6rem;">
-        <label for="username"
-            style="position:absolute;
-                    right:.5rem;
-                    top:40%;
-                    transform:translateY(-50%);
-                    pointer-events:none;
-                    font-size:.75em;
-                    color:#888;">Username</label>
-    </div>
+        <!-- ──────────── site info ──────────── -->
+        <fieldset style="margin:0 0 1.5rem 0; border:0; padding:0">
+            <legend style="font-weight:bold; margin-bottom:.5rem;">Site</legend>
 
-    <!-- Slug fields -->
-    <div style="position:relative; margin-top:1rem;">
-        <input name="slug_say" value="{{ get_setting('slug_say', 'say') }}"
-                style="width:100%; padding-right:6rem;">
-        <label style="position:absolute; right:.5rem; top:40%; transform:translateY(-50%);
-                        pointer-events:none; font-size:.75em; color:#888;">Slug for Says</label>
-    </div>
+            <label style="display:block; margin:.5rem 0">
+                <span style="font-size:.8em; color:#888">Site name</span><br>
+                <input name="site_name" value="{{ site_name }}" style="width:100%">
+            </label>
 
-    <div style="position:relative; margin-top:1rem;">
-        <input name="slug_post" value="{{ get_setting('slug_post', 'post') }}"
-                style="width:100%; padding-right:6rem;">
-        <label style="position:absolute; right:.5rem; top:40%; transform:translateY(-50%);
-                        pointer-events:none; font-size:.75em; color:#888;">Slug for Posts</label>
-    </div>
+            <label style="display:block; margin:.5rem 0">
+                <span style="font-size:.8em; color:#888">Username</span><br>
+                <input name="username" value="{{ username }}" style="width:100%">
+            </label>
+        </fieldset>
 
-    <div style="position:relative; margin-top:1rem;">
-        <input name="slug_pin" value="{{ get_setting('slug_pin', 'pin') }}"
-                style="width:100%; padding-right:6rem;">
-        <label style="position:absolute; right:.5rem; top:40%; transform:translateY(-50%);
-                        pointer-events:none; font-size:.75em; color:#888;">Slug for Pins</label>
-    </div>
+        <!-- ──────────── slugs ──────────── -->
+        <fieldset style="margin:0 0 1.5rem 0; border:0; padding:0">
+            <legend style="font-weight:bold; margin-bottom:.5rem;">URL slugs</legend>
+                <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(10rem,1fr)); gap:.75rem;">
+                    <label>
+                        <span style="font-size:.8em; color:#888">Says</span><br>
+                        <input name="slug_say"  value="{{ get_setting('slug_say',  'say')  }}" style="width:100%">
+                    </label>
+                    <label>
+                        <span style="font-size:.8em; color:#888">Posts</span><br>
+                        <input name="slug_post" value="{{ get_setting('slug_post', 'post') }}" style="width:100%">
+                    </label>
+                    <label>
+                        <span style="font-size:.8em; color:#888">Pins</span><br>
+                        <input name="slug_pin" value="{{ get_setting('slug_pin',  'pin')  }}" style="width:100%">
+                    </label>
+            </div>
+        </fieldset>
 
-    <div style="position:relative; margin-top:1rem;">
-        <input name="page_size" value="{{ get_setting('page_size', PAGE_DEFAULT) }}"
-                style="width:100%; padding-right:6rem;">
-        <label style="position:absolute; right:.5rem; top:40%; transform:translateY(-50%);
-                        pointer-events:none; font-size:.75em; color:#888;">
-                Entries per page
-        </label>
-    </div>
-
-    <button style="margin-top:1rem;">Save Settings</button>
+        <!-- ──────────── display ──────────── -->
+        <fieldset style="margin:0 0 1.5rem 0; border:0; padding:0">
+            <legend style="font-weight:bold; margin-bottom:.5rem;">Display</legend>
+            <label style="display:block; margin:.5rem 0">
+                <span style="font-size:.8em; color:#888">Entries per page</span><br>
+                <input name="page_size"
+                    value="{{ get_setting('page_size', PAGE_DEFAULT) }}"
+                    style="width:8rem">
+            </label>
+        </fieldset>
+        <button style="margin-top:.5rem;">Save settings</button>
     </form>
-
     {% endblock %}
 </div>
 """
