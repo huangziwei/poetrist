@@ -1193,14 +1193,16 @@ TEMPL_EDIT = wrap("""
 
         {% if e['kind']=='page' %}
             <button name="is_page" value="0"
-                    style="background:#444;border:1px solid #888;">
-                Demote&nbsp;to&nbsp;Post
+                    style="background:#444;color:#ffffff;border:1px solid #888;">
+                Demote to Post
             </button>
         {% else %}
+            {% if e['kind']=='post' %}
             <button name="is_page" value="1"
-                    style="background:#444;border:1px solid #888;">
-                Save&nbsp;as&nbsp;Page
+                    style="background:#444;color:#ffffff;border:1px solid #888;">
+                Promote to Page
             </button>
+            {% endif %}  
         {% endif %}
     </div>
 </form>
@@ -1271,12 +1273,27 @@ TEMPL_TAGS = wrap("""
             {% endif %}
             <p>{{ e['body']|md }}</p>
             <small style="color:#aaa;">
-                <a href="{{ url_for('entry_detail',
-                                    slug=kind_to_slug(e['kind']),
-                                    ts=e['slug']) }}"
-                   style="text-decoration:none;color:inherit;">
-                   {{ e['created_at']|ts }}
+                <span style="
+                    display:inline-block;
+                    padding:.1em .6em;
+                    margin-right:.4em;
+                    background:#444;
+                    color:#fff;
+                    border-radius:1em;
+                    font-size:.75em;
+                    text-transform:capitalize;
+                    vertical-align:middle;
+                ">
+                    {{ e['kind'] }}
+                </span>
+                <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug']) }}"
+                    style="text-decoration:none; color:inherit;vertical-align:middle;">
+                    {{ e['created_at']|ts }}&nbsp;&nbsp;
                 </a>
+                {% if session.get('logged_in') %}
+                    <a href="{{ url_for('edit_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
+                    <a href="{{ url_for('delete_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Delete</a>
+                {% endif %}
             </small>
         </article>
     {% else %}
