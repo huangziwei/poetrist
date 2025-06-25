@@ -512,9 +512,11 @@ def tags(tag_list: str):
         r["href"] = url_for('tags', tag_list='+'.join(sorted(new_sel))) if new_sel else url_for('tags')
 
     # ---------- fetch entries if something is selected ----------------------
+    page = max(int(request.args.get('page', 1)), 1)
+    per  = page_size()
     if selected:
         q_marks = ','.join('?' * len(selected))
-        sql = f"""SELECT e.*
+        base_sql = f"""SELECT e.*
                   FROM entry  e
                   JOIN entry_tag et ON et.entry_id = e.id
                   JOIN tag       t  ON t.id        = et.tag_id
@@ -522,15 +524,21 @@ def tags(tag_list: str):
                   GROUP BY e.id
                   HAVING COUNT(DISTINCT t.name)=?
                   ORDER BY e.created_at DESC"""
-        entries = db.execute(sql, (*selected, len(selected))).fetchall()
+        entries, total_pages = paginate(base_sql,
+                                        (*selected, len(selected)),
+                                        page=page, per_page=per, db=db)
+        pages = list(range(1, total_pages + 1))
     else:
-        entries = None                         # nothing selected → no list
+        entries = None, []                       # nothing selected → no list
+
 
     return render_template_string(
-        TEMPL_TAGS,           # same name, new content below
+        TEMPL_TAGS,
         tags     = rows,
         entries  = entries,
         selected = selected,
+        page     = page,
+        pages    = pages,
         title    = get_setting('site_name', 'po.etr.ist'),
         kind     = 'tags',
         username = current_username(),
@@ -1106,7 +1114,7 @@ TEMPL_INDEX = wrap("""{% block body %}
     <nav style="margin-top:1rem;font-size:.75em;">
         {% for p in pages %}
             {% if p == page %}
-                <strong>{{ p }}</strong>
+                <span style="border-bottom:0.33rem solid #aaa;">{{ p }}</span>
             {% else %}
                 <a href="{{ request.path }}?page={{ p }}">{{ p }}</a>
             {% endif %}
@@ -1189,7 +1197,7 @@ TEMPL_LIST = wrap("""
             <nav style="margin-top:1rem;font-size:.75em;">
                 {% for p in pages %}
                     {% if p == page %}
-                        <strong>{{ p }}</strong>
+                        <span style="border-bottom:0.33rem solid #aaa;">{{ p }}</span>
                     {% else %}
                         <a href="{{ request.path }}?page={{ p }}">{{ p }}</a>
                     {% endif %}
@@ -1505,6 +1513,21 @@ TEMPL_TAGS = wrap("""
     {% else %}
         <p>No entries for this combination.</p>
     {% endfor %}
+                  
+    {% if pages|length > 1 %}
+        <nav style="margin-top:1rem;font-size:.75em;">
+            {% for p in pages %}
+                {% if p == page %}
+                    <span style="border-bottom:0.33rem solid #aaa;">{{ p }}</span>
+                {% else %}
+                    <a href="{{ url_for('tags',
+                                        tag_list='+'.join(selected),
+                                        page=p) }}">{{ p }}</a>
+                {% endif %}
+                {% if not loop.last %}&nbsp;{% endif %}
+            {% endfor %}
+        </nav>
+    {% endif %}
 {% endif %}
 {% endblock %}
 """)
@@ -1617,7 +1640,7 @@ TEMPL_SEARCH = wrap("""
     <nav style="margin-top:1rem;font-size:.75em;">
         {% for p in pages %}
             {% if p == page %}
-                <strong>{{ p }}</strong>
+                <span style="border-bottom:0.33rem solid #aaa;">{{ p }}</span>
             {% else %}
                 <a href="{{ url_for('search', q=query, sort=sort, page=p) }}">{{ p }}</a>
             {% endif %}
