@@ -136,6 +136,12 @@ def get_db():
         g.db = sqlite3.connect(app.config['DATABASE'])
         g.db.execute("PRAGMA foreign_keys = ON;")
         g.db.row_factory = sqlite3.Row
+
+        # one-time, lazy migrations
+        ensure_updated_at()
+        ensure_slug()
+        ensure_fts()          
+
     return g.db
 
 @app.teardown_appcontext
@@ -182,6 +188,37 @@ def init_db():
             );
             INSERT OR IGNORE INTO settings (key, value)
                 VALUES ('site_name', 'po.etr.ist');
+            CREATE VIRTUAL TABLE IF NOT EXISTS entry_fts USING fts5(
+                title,
+                body,
+                link,
+                content='entry', -- auto-sync = simpler triggers
+                content_rowid='id'
+            );
+
+            /* One-off back-fill for existing rows */
+            INSERT OR IGNORE INTO entry_fts(rowid, title, body, link)
+                SELECT id,
+                    COALESCE(title,''),
+                    body,
+                    COALESCE(link,'')
+                FROM entry;
+
+            /* Keep FTS mirror in sync */
+            CREATE TRIGGER IF NOT EXISTS entry_ai AFTER INSERT ON entry BEGIN
+                INSERT INTO entry_fts(rowid, title, body, link)
+                VALUES (new.id, new.title, new.body, new.link);
+            END;
+            CREATE TRIGGER IF NOT EXISTS entry_au AFTER UPDATE ON entry BEGIN
+                UPDATE entry_fts
+                SET title = new.title,
+                    body  = new.body,
+                    link  = new.link
+                WHERE rowid = new.id;
+            END;
+            CREATE TRIGGER IF NOT EXISTS entry_ad AFTER DELETE ON entry BEGIN
+                DELETE FROM entry_fts WHERE rowid = old.id;
+            END;
             """
     )
     db.commit()
@@ -204,6 +241,57 @@ def ensure_slug():
             ts = datetime.fromisoformat(row["created_at"]).strftime("%Y%m%d%H%M%S")
             db.execute("UPDATE entry SET slug=? WHERE id=?", (ts, row["id"]))
         db.commit()
+
+def ensure_fts():
+    """
+    Create the entry_fts virtual table + sync triggers if they are missing,
+    then back-fill it with the current `entry` rows.
+    Run once at start-up, no effect afterwards (“idempotent”).
+    """
+    db = get_db()
+
+    # does the FTS table already exist?
+    row = db.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='table' AND name='entry_fts'").fetchone()
+    if row:                       # nothing to do
+        return
+
+    db.executescript("""
+        /* 1. Table -------------------------------------------------------- */
+        CREATE VIRTUAL TABLE entry_fts USING fts5(
+            title,
+            body,
+            link,
+            content='entry',
+            content_rowid='id'
+        );
+
+        /* 2. Back-fill ---------------------------------------------------- */
+        INSERT INTO entry_fts(rowid, title, body, link)
+            SELECT id,
+                   COALESCE(title,''),
+                   body,
+                   COALESCE(link,'')
+            FROM entry;
+
+        /* 3. Triggers to stay in sync ------------------------------------ */
+        CREATE TRIGGER entry_ai AFTER INSERT ON entry BEGIN
+            INSERT INTO entry_fts(rowid, title, body, link)
+            VALUES (new.id, new.title, new.body, new.link);
+        END;
+        CREATE TRIGGER entry_au AFTER UPDATE ON entry BEGIN
+            UPDATE entry_fts
+               SET title=new.title,
+                   body =new.body,
+                   link =new.link
+             WHERE rowid = new.id;
+        END;
+        CREATE TRIGGER entry_ad AFTER DELETE ON entry BEGIN
+            DELETE FROM entry_fts WHERE rowid = old.id;
+        END;
+    """)
+    db.commit()
 
 
 # -------------------------------------------------------------------------
@@ -857,18 +945,30 @@ TEMPL_PROLOG = """
 TEMPL_EPILOG = """
     <footer style="padding-top:1rem;
                    font-size:.8em;
-                   text-align:left;
-                   color:#888;">
-        <span style="border-top:1px solid #444; padding-top:1rem; display:inline-block;">
+                   color:#888;
+                   display:flex;              /* 🔸 flex container */
+                   align-items:center;        /* vertical centering */
+                   justify-content:space-between;  /* left ⇆ right */
+                   border-top:1px solid #444;">
+        <!-- left-hand side -->
+        <span>
             Built with
             <a href="https://github.com/huangziwei/poetrist"
-            style="color:#F8B500; text-decoration:none;">
-            poetrist
+               style="color:#F8B500; text-decoration:none;">
+               poetrist
             </a>
         </span>
+
+        <!-- right-hand side -->
+        <form action="{{ url_for('search') }}" method="get" style="margin:0;">
+            <input type="search" name="q" placeholder="Search"
+                   value="{{ request.args.get('q','') }}"
+                   style="font-size:.8em; padding:.2em .6em;">
+        </form>
     </footer>
 </div> <!-- container -->
 """
+
 
 TEMPL_LOGIN = wrap("""
     {% block body %}
@@ -1138,7 +1238,6 @@ TEMPL_DETAIL = wrap("""
                     </a>
                     {{ external_icon() }}
                 </h2>
-                <!--<small>({{ e['link']|url }})</small> -->
 
             {% elif e['title'] %}
                 <h2>{{ e['title'] }}</h2>
@@ -1371,6 +1470,55 @@ TEMPL_PAGE = wrap("""
 {% endblock %}
 """)
 
+TEMPL_SEARCH = wrap("""
+{% block body %}
+    <hr>
+    <form action="{{ url_for('search') }}" method="get" style="margin-bottom:1rem;">
+        <input  name="q" value="{{ query }}" placeholder="Search the site"
+                style="width:75%;max-width:26rem;">
+        <button>Search</button>
+    </form>
+
+    {% if query and not rows %}
+        <p>No results for <strong>{{ query }}</strong>.</p>
+    {% endif %}
+
+    {% for e in rows %}
+        <article style="padding-bottom:1.5rem;
+                        {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
+            {% if e['title'] %}
+                <h3 style="margin:.4rem 0;">{{ e['title'] }}</h3>
+            {% endif %}
+            <p>{{ e['body']|md }}</p>
+            <small style="color:#aaa;">
+                <span style="
+                    display:inline-block;
+                    padding:.1em .6em;
+                    margin-right:.4em;
+                    background:#444;
+                    color:#fff;
+                    border-radius:1em;
+                    font-size:.75em;
+                    text-transform:capitalize;
+                    vertical-align:middle;
+                ">
+                    {{ e['kind'] }}
+                </span>
+                <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug']) }}"
+                    style="text-decoration:none; color:inherit;vertical-align:middle;">
+                    {{ e['created_at']|ts }}
+                </a>&nbsp;
+                {% if session.get('logged_in') %}
+                    <a href="{{ url_for('edit_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
+                    <a href="{{ url_for('delete_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Delete</a>
+                {% endif %}
+            </small>
+        </article>
+    {% endfor %}
+{% endblock %}
+""")
+
+
 ###############################################################################
 # RSS feed
 ###############################################################################
@@ -1468,6 +1616,34 @@ def tags_rss(tag_list):
                   site_url = request.url_root.rstrip('/'))
     return app.response_class(xml, mimetype='application/rss+xml')
 
+###############################################################################
+# Search
+###############################################################################
+
+def search_entries(query: str, *, db, limit: int = 50):
+    sql = """
+        SELECT e.*,
+               bm25(entry_fts) AS rank      
+        FROM   entry_fts
+        JOIN   entry e ON e.id = entry_fts.rowid
+        WHERE  entry_fts MATCH ?
+        ORDER  BY rank
+        LIMIT  ?
+    """
+    return db.execute(sql, (query, limit)).fetchall()
+
+@app.route('/search')
+def search():
+    q = request.args.get('q', '').strip()
+    rows = search_entries(q, db=get_db()) if q else []
+    return render_template_string(
+        TEMPL_SEARCH,
+        rows   = rows,
+        query  = q,
+        title  = get_setting('site_name', 'po.etr.ist'),
+        kind   = 'search',
+        username = current_username(),
+    )
 
 
 ###############################################################################
