@@ -21,6 +21,7 @@ import sqlite3
 from datetime import datetime
 from email.utils import format_datetime
 from html import escape
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -58,6 +59,12 @@ PAGE_DEFAULT = 100
 TAG_RE = re.compile(r'(?<!\w)#([\w\-]+)')
 HASH_LINK_RE = re.compile(r'(?<![A-Za-z0-9_])#([\w\-]+)')
 RFC2822_FMT = "%a, %d %b %Y %H:%M:%S %z"
+
+try:
+    __version__ = version("poetrist")
+except PackageNotFoundError:
+    __version__ = "0.1.0-dev"
+
 
 ################################################################################
 # App + template filters
@@ -644,6 +651,7 @@ app.jinja_env.globals['external_icon'] = lambda: Markup("""
 app.jinja_env.globals['PAGE_DEFAULT'] = PAGE_DEFAULT
 app.jinja_env.globals['entry_tags'] = lambda eid: entry_tags(eid, db=get_db())
 app.jinja_env.globals['nav_pages'] = nav_pages
+app.jinja_env.globals['version'] = __version__
 
 ###############################################################################
 # Views
@@ -1004,8 +1012,8 @@ TEMPL_EPILOG = """
             Built with
             <a href="https://github.com/huangziwei/poetrist"
                style="color:#F8B500; text-decoration:none;">
-               poetrist
-            </a>
+               poetrist 
+            </a><span style="font-weight:normal;">v{{ version }}</span>
         </span>
 
         <!-- right-hand side -->
