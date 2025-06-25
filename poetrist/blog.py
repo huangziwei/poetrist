@@ -92,7 +92,7 @@ def md_filter(text: str | None) -> Markup:
     # post-process the generated HTML
     def repl(match):
         tag = match.group(1).lower()
-        href = url_for("tags_detail", tag_list=tag)
+        href = url_for("tags", tag_list=tag)
         return f'<a href="{href}" style="text-decoration:none;color:#F8B500">#{tag}</a>'
 
     html = HASH_LINK_RE.sub(repl, html)
@@ -328,61 +328,67 @@ def favicon():
         max_age=60*60*24*365            # 1-year cache header
     )
 
-@app.route('/tags')
-def tags():
-    cur = get_db().execute(
-        """SELECT t.name, COUNT(et.entry_id) AS cnt
-           FROM tag t LEFT JOIN entry_tag et ON t.id = et.tag_id
-           GROUP BY t.id ORDER BY LOWER(t.name)"""
-    )
+###############################################################################
+# Tags (cloud + filter)  ─────────────────────────────────────────────────────
+###############################################################################
+@app.route('/tags',               defaults={'tag_list': ''})
+@app.route('/tags/<path:tag_list>')
+def tags(tag_list: str):
+    """
+    Show a tag cloud.  Pills can be selected / deselected; the current
+    selection is encoded in the path as  /tags/foo+bar+baz
+    """
+    db = get_db()
 
-    rows = [dict(r) for r in cur]             # ← make them mutable dicts
+    # ---------- tag statistics for the cloud --------------------------------
+    cur  = db.execute("""SELECT t.name, COUNT(et.entry_id) AS cnt
+                         FROM tag t
+                         LEFT JOIN entry_tag et ON t.id = et.tag_id
+                         GROUP BY t.id
+                         ORDER BY LOWER(t.name)""")
+    rows = [dict(r) for r in cur]           # make mutable dicts
 
-    # ── scale count → font-size ------------------------------------------------
+    # ---------- who is currently selected? ----------------------------------
+    selected = {t.lower() for t in tag_list.split('+') if t}
+
+    # ---------- scale counts → font-size (same as before) -------------------
     counts = [r["cnt"] for r in rows]
-    if counts:
-        lo, hi = min(counts), max(counts)
-        span   = max(1, hi - lo)
-        for r in rows:
-            weight = (r["cnt"] - lo) / span      # 0‥1
-            size   = 0.75 + weight * 1.2          # 0.75 em – 1.95 em
-            r["size"] = f"{size:.2f}em"
+    lo, hi = (min(counts), max(counts)) if counts else (0, 0)
+    span   = max(1, hi - lo)
+    for r in rows:
+        weight     = (r["cnt"] - lo) / span if counts else 0
+        r["size"]  = f"{0.75 + weight * 1.2:.2f}em"
+        r["active"] = r["name"] in selected
+
+        # ── URL that would result from clicking the pill ────────────────────
+        new_sel = (selected - {r["name"]}) if r["active"] else (selected | {r["name"]})
+        r["href"] = url_for('tags', tag_list='+'.join(sorted(new_sel))) if new_sel else url_for('tags')
+
+    # ---------- fetch entries if something is selected ----------------------
+    if selected:
+        q_marks = ','.join('?' * len(selected))
+        sql = f"""SELECT e.*
+                  FROM entry  e
+                  JOIN entry_tag et ON et.entry_id = e.id
+                  JOIN tag       t  ON t.id        = et.tag_id
+                  WHERE t.name IN ({q_marks})
+                  GROUP BY e.id
+                  HAVING COUNT(DISTINCT t.name)=?
+                  ORDER BY e.created_at DESC"""
+        entries = db.execute(sql, (*selected, len(selected))).fetchall()
     else:
-        for r in rows:
-            r["size"] = "1em"
+        entries = None                         # nothing selected → no list
 
     return render_template_string(
-        TEMPL_TAGS,
-        tags  = rows,
-        title = get_setting('site_name', 'po.etr.ist'),
-        kind  = 'tags',
+        TEMPL_TAGS,           # same name, new content below
+        tags     = rows,
+        entries  = entries,
+        selected = selected,
+        title    = get_setting('site_name', 'po.etr.ist'),
+        kind     = 'tags',
         username = current_username(),
     )
 
-@app.route('/tags/<path:tag_list>')
-def tags_detail(tag_list):
-    tags = [t.lower() for t in re.split(r'[,+/]', tag_list) if t]  # foo+bar/baz
-    if not tags:
-        abort(404)
-
-    q_marks   = ','.join('?' * len(tags))
-    sql = f"""SELECT e.*
-              FROM entry e
-              JOIN entry_tag et ON et.entry_id = e.id
-              JOIN tag t        ON t.id = et.tag_id
-              WHERE t.name IN ({q_marks})
-              GROUP BY e.id
-              HAVING COUNT(DISTINCT t.name)=?      -- AND-filter
-              ORDER BY e.created_at DESC"""
-    rows = get_db().execute(sql, (*tags, len(tags))).fetchall()
-
-    return render_template_string(TEMPL_TAG_LIST,
-                                  entries=rows,
-                                  tag='+'.join(tags),
-                                  selected=tags, 
-                                  title=get_setting("site_name","po.etr.ist"),
-                                  kind='tags',
-                                  username=current_username())
 
 ###############################################################################
 # Content helpers
@@ -1226,65 +1232,58 @@ TEMPL_DELETE = wrap("""
 """)
 
 TEMPL_TAGS = wrap("""
-    {% block body %}
-    <hr>
-    <!-- flex row that wraps automatically -->
-    <div>
-        {% for t in tags %}
-            <a href="{{ url_for('tags_detail', tag_list=t['name']) }}"
-                style="text-decoration:none;
-                        white-space:nowrap;
-                        color:#F8B500;
-                        font-size:{{ t['size'] }};">
-                {{ t['name'] }}
-            </a><small>({{ t['cnt'] }})&nbsp;</small>
-        {% else %}
-            <span>No tags yet.</span>
-        {% endfor %}
-    </div>
-    {% endblock %}
-""")
-
-TEMPL_TAG_LIST = wrap("""
 {% block body %}
+<hr>
+
+<!-- —— Tag-cloud as selectable pills ——————————————— -->
+<div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
+{% for t in tags %}
+    <a href="{{ t.href }}"
+       style="text-decoration:none !important;
+              border-bottom:none!important;
+              display:inline-flex;  
+              align-items:center;
+              margin:.15rem 0;
+              padding:.15rem .6rem;
+              border-radius:1rem;
+              white-space:nowrap;
+              {% if t.active %}
+                  background:#F8B500; color:#000;
+              {% else %}
+                  background:#444; color:#F8B500;
+              {% endif %}">
+        {{ t.name }}
+        <small style="color:#888;">({{ t.cnt }})</small>
+    </a>
+{% else %}
+    <span>No tags yet.</span>
+{% endfor %}
+</div>
+
+<!-- —— Entry list (only if sth. is selected) ————————— -->
+{% if entries is not none %}
     <hr>
-    <h2>#{{ tag }}</h2>
     {% for e in entries %}
-        <article style="padding-bottom:1.5rem; {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
-        {% if e['title'] %}
-            <h3 style="margin:.25rem 0 .5rem 0;">{{ e['title'] }}</h3>
-        {% endif %}
-
-        <p>{{ e['body']|md }}</p>
-
-        <small style="color:#aaa;">
-            <span style="
-                display:inline-block;
-                padding:.1em .6em;
-                margin-right:.4em;
-                background:#444;
-                color:#fff;
-                border-radius:1em;
-                font-size:.75em;
-                text-transform:capitalize;
-                vertical-align:middle;
-            ">
-                {{ e['kind'] }}
-            </span>
-            <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug']) }}"
-                style="text-decoration:none; color:inherit;vertical-align:middle;">
-                {{ e['created_at']|ts }}&nbsp;&nbsp;
-            </a>
-            {% if session.get('logged_in') %}
-                <a href="{{ url_for('edit_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
-                <a href="{{ url_for('delete_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Delete</a>
+        <article style="padding-bottom:1.5rem;
+                        {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
+            {% if e['title'] %}
+                <h3 style="margin:.25rem 0 .5rem 0;">{{ e['title'] }}</h3>
             {% endif %}
-        </small>
+            <p>{{ e['body']|md }}</p>
+            <small style="color:#aaa;">
+                <a href="{{ url_for('entry_detail',
+                                    slug=kind_to_slug(e['kind']),
+                                    ts=e['slug']) }}"
+                   style="text-decoration:none;color:inherit;">
+                   {{ e['created_at']|ts }}
+                </a>
+            </small>
         </article>
     {% else %}
-        <p>No entries for this tag.</p>
+        <p>No entries for this combination.</p>
     {% endfor %}
-    {% endblock %}
+{% endif %}
+{% endblock %}
 """)
 
 TEMPL_PAGE = wrap("""
