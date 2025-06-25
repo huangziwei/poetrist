@@ -766,8 +766,12 @@ def delete_entry(entry_id):
 ###############################################################################
 # Embedde​d templates
 ###############################################################################
+def wrap(body: str) -> str:
+    """Glue prolog + page-specific body + epilog."""
+    return TEMPL_PROLOG + body + TEMPL_EPILOG
 
-TEMPL_BASE = """
+
+TEMPL_PROLOG = """
 <!doctype html>
 <html lang="en">
 <title>{{title or 'po.etr.ist'}}</title>
@@ -832,7 +836,23 @@ TEMPL_BASE = """
     {% endwith %}
 """
 
-TEMPL_INDEX = TEMPL_BASE + """{% block body %}
+TEMPL_EPILOG = """
+    <footer style="padding-top:1rem;
+                   font-size:.8em;
+                   text-align:left;
+                   color:#888;">
+        <span style="border-top:1px solid #444; padding-top:1rem; display:inline-block;">
+            Built with
+            <a href="https://github.com/huangziwei/poetrist"
+            style="color:#F8B500; text-decoration:none;">
+            poetrist
+            </a>
+        </span>
+    </footer>
+</div> <!-- container -->
+"""
+
+TEMPL_INDEX = wrap("""{% block body %}
     {% if session.get('logged_in') %}
     <form method=post>
         <textarea name=body rows=3 style="width:100%;margin-bottom:0rem;" placeholder="What's on your mind?"></textarea>
@@ -841,7 +861,7 @@ TEMPL_INDEX = TEMPL_BASE + """{% block body %}
     {% endif %}
     <hr>
     {% for e in entries %}
-    <article style="padding-bottom:1rem; ;border-bottom:1px solid #444;">
+    <article style="padding-bottom:1.5rem; {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
         {% if e['kind']=='pin' %}
             <h2>
                 <a href="{{ e['link'] }}" target="_blank" rel="noopener">
@@ -893,12 +913,10 @@ TEMPL_INDEX = TEMPL_BASE + """{% block body %}
         {% endfor %}
     </nav>
     {% endif %}
+{% endblock %}
+""")
 
-    {% endblock %}
-</div>
-"""
-
-TEMPL_LOGIN = TEMPL_BASE + """
+TEMPL_LOGIN = wrap("""
     {% block body %}
     <form method=post>
     <div style="position:relative;">
@@ -921,11 +939,10 @@ TEMPL_LOGIN = TEMPL_BASE + """
     <button>Log&nbsp;in</button>
     </form>
     {% endblock %}
-</div>
-"""
+""")
 
 
-TEMPL_LIST = TEMPL_BASE + """
+TEMPL_LIST = wrap("""
     {% block body %}
         {% if session.get('logged_in') %}
             <form method="post">
@@ -943,7 +960,7 @@ TEMPL_LIST = TEMPL_BASE + """
         {% endif %}
         <hr>
         {% for e in rows %}
-        <article style="padding-bottom:1rem; border-bottom:1px solid #444;">
+        <article style="padding-bottom:1.5rem; {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
             {% if e['kind'] == 'pin' %}
                 <h3>
                     <a href="{{ e['link'] }}" target="_blank" rel="noopener">
@@ -987,10 +1004,9 @@ TEMPL_LIST = TEMPL_BASE + """
             </nav>
         {% endif %}
     {% endblock %}
-</div>
-"""
+""")
 
-TEMPL_SETTINGS = TEMPL_BASE + """
+TEMPL_SETTINGS = wrap("""
     {% block body %}
     <hr>
     <form method="post" style="max-width:36rem">
@@ -1067,10 +1083,9 @@ TEMPL_SETTINGS = TEMPL_BASE + """
     </div>
     
     {% endblock %}
-</div>
-"""
+""")
 
-TEMPL_DETAIL = TEMPL_BASE + """
+TEMPL_DETAIL = wrap("""
     {% block body %}
         <hr>
         <article>
@@ -1108,10 +1123,9 @@ TEMPL_DETAIL = TEMPL_BASE + """
             </small>
         </article>
     {% endblock %}
-</div>
-"""
+""")
 
-TEMPL_EDIT = TEMPL_BASE + """
+TEMPL_EDIT = wrap("""
 {% block body %}
 <form method="post">
     {% if e['kind'] in ('post','pin', 'page') %}
@@ -1193,10 +1207,9 @@ TEMPL_EDIT = TEMPL_BASE + """
   <small>Published {{ e['created_at']|ts }}</small>
 {% endif %}
 {% endblock %}
-</div>
-"""
+""")
 
-TEMPL_DELETE = TEMPL_BASE + """
+TEMPL_DELETE = wrap("""
 {% block body %}
   <h2>Delete entry?</h2>
   <article style="border-left:3px solid #c00; padding-left:1rem;">
@@ -1210,9 +1223,9 @@ TEMPL_DELETE = TEMPL_BASE + """
   </form>
 {% endblock %}
 </div>
-"""
+""")
 
-TEMPL_TAGS = TEMPL_BASE + """
+TEMPL_TAGS = wrap("""
     {% block body %}
     <hr>
     <!-- flex row that wraps automatically -->
@@ -1230,15 +1243,14 @@ TEMPL_TAGS = TEMPL_BASE + """
         {% endfor %}
     </div>
     {% endblock %}
-</div>
-"""
+""")
 
-TEMPL_TAG_LIST = TEMPL_BASE + """
+TEMPL_TAG_LIST = wrap("""
 {% block body %}
     <hr>
     <h2>#{{ tag }}</h2>
     {% for e in entries %}
-        <article style="border-bottom:1px solid #444; padding-bottom:1rem;">
+        <article style="padding-bottom:1.5rem; {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
         {% if e['title'] %}
             <h3 style="margin:.25rem 0 .5rem 0;">{{ e['title'] }}</h3>
         {% endif %}
@@ -1273,10 +1285,9 @@ TEMPL_TAG_LIST = TEMPL_BASE + """
         <p>No entries for this tag.</p>
     {% endfor %}
     {% endblock %}
-</div>
-"""
+""")
 
-TEMPL_PAGE = TEMPL_BASE + """
+TEMPL_PAGE = wrap("""
 {% block body %}
 <hr>
 <article>
@@ -1289,8 +1300,7 @@ TEMPL_PAGE = TEMPL_BASE + """
   {% endif %}
 </article>
 {% endblock %}
-</div>
-"""
+""")
 
 ###############################################################################
 # RSS feed
