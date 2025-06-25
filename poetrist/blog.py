@@ -799,7 +799,7 @@ TEMPL_BASE = """
                 </a>
             {% endfor %}
         </div>
-        <div style="margin-left:auto; white-space:nowrap;display:flex;"">
+        <div style="margin-left:auto; white-space:nowrap;display:flex;">
             {% if session.get('logged_in') %}
                 <a href="{{ url_for('settings') }}">Settings</a>&nbsp;&nbsp;
                 <a href="{{url_for('logout')}}">Logout</a>
@@ -827,78 +827,86 @@ TEMPL_BASE = """
             content="3;url={{ request.path }}">
     {% endif %}
     {% endwith %}
-
-<!-- the closing div is in other templates -->
 """
 
-TEMPL_INDEX = TEMPL_BASE + """
-    {% block body %}
-        {% if session.get('logged_in') %}
-        <form method=post>
+TEMPL_INDEX = TEMPL_BASE + """{% block body %}
+    {% if session.get('logged_in') %}
+    <form method=post>
         <textarea name=body rows=3 style="width:100%;margin-bottom:0rem;" placeholder="What's on your mind?"></textarea>
         <button>Add Say</button>
-        </form>
+    </form>
+    {% endif %}
+    <hr>
+    {% for e in entries %}
+    <article style="padding-bottom:1rem; ;border-bottom:1px solid #444;">
+        {% if e['kind']=='pin' %}
+            <h2>
+                <a href="{{ e['link'] }}" target="_blank" rel="noopener">
+                    {{ e['title'] }}
+                </a>
+                {{ external_icon() }} 
+            </h2>
+        {% elif e['kind']=='post' and e['title'] %}
+            <h2>{{e['title']}}</h2>
         {% endif %}
-        <hr>
+        <p>{{e['body']|md}}</p>
+        <small style="color:#aaa;">
+            <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug']) }}"
+                style="text-decoration:none; color:inherit;">
+                {{ e['kind']|capitalize }} — {{ e['created_at']|ts }}
+            </a>
+            {% if session.get('logged_in') %}
+                | <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a>
+                | <a href="{{ url_for('delete_entry', entry_id=e['id']) }}">Delete</a>
+            {% endif %}
+        </small>
+    </article>
+    {% else %}
+        <p>No entries yet.</p>
+    {% endfor %}
 
-        {% for e in entries %}
-            <article style="padding-bottom:1rem; ;border-bottom:1px solid #444;"">
-                {% if e['kind']=='pin' %}
-                    <h2>
-                        <a href="{{ e['link'] }}" target="_blank" rel="noopener">
-                            {{ e['title'] }}
-                        </a>
-                        {{ external_icon() }} 
-                    </h2>
-                {% elif e['kind']=='post' and e['title'] %}
-                    <h2>{{e['title']}}</h2>
-                {% endif %}
-                <p>{{e['body']|md}}</p>
-                <small style="color:#aaa;">
-                    <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug']) }}"
-                        style="text-decoration:none; color:inherit;">
-                        {{ e['kind']|capitalize }} — {{ e['created_at']|ts }}
-                    </a>
-                    {% if session.get('logged_in') %}
-                        | <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a>
-                        | <a href="{{ url_for('delete_entry', entry_id=e['id']) }}">Delete</a>
-                    {% endif %}
-                </small>
-            </article>
-        {% else %}
-            <p>No entries yet.</p>
+    {% if pages|length > 1 %}
+    <nav style="margin-top:1rem;font-size:.75em;">
+        {% for p in pages %}
+            {% if p == page %}
+                <strong>{{ p }}</strong>
+            {% else %}
+                <a href="{{ request.path }}?page={{ p }}">{{ p }}</a>
+            {% endif %}
+            {% if not loop.last %}&nbsp;{% endif %}
         {% endfor %}
+    </nav>
+    {% endif %}
 
-        {% if pages|length > 1 %}
-        <nav style="margin-top:1rem;font-size:.75em;">
-            {% for p in pages %}
-                {% if p == page %}
-                    <strong>{{ p }}</strong>
-                {% else %}
-                    <a href="{{ request.path }}?page={{ p }}">{{ p }}</a>
-                {% endif %}
-                {% if not loop.last %}&nbsp;{% endif %}
-            {% endfor %}
-        </nav>
-        {% endif %}
-
-    {% endblock body %}
+    {% endblock %}
 </div>
 """
 
 TEMPL_LOGIN = TEMPL_BASE + """
-{% block body %}
-<form method=post>
-  <label>Token:<br>
-    <input  name="token"
+    {% block body %}
+    <form method=post>
+        <div style="position:relative;">
+            style="width:100%; padding-right:7rem;">
+        <input  name="token"
             type="password"          
             autocomplete="current-password"
-            style="width:100%">
-  </label>
-  <br>
-  <button>Log&nbsp;in</button>
-</form>
-{% endblock %}
+            style="width:100%; padding-right:7rem;">
+        <label for="token"
+                style="position:absolute;
+                        right:.5rem;
+                        top:40%;
+                        transform:translateY(-50%);
+                        pointer-events:none;
+                        font-size:.75em;
+                        color:#aaa;">
+                    token
+        </label>
+    </div>
+    <br>
+    <button>Log&nbsp;in</button>
+    </form>
+    {% endblock %}
+</div>
 """
 
 
@@ -963,8 +971,6 @@ TEMPL_LIST = TEMPL_BASE + """
                 {% endfor %}
             </nav>
         {% endif %}
-
-
     {% endblock %}
 </div>
 """
@@ -1024,44 +1030,43 @@ TEMPL_SETTINGS = TEMPL_BASE + """
 """
 
 TEMPL_DETAIL = TEMPL_BASE + """
-{% block body %}
-<hr>
-<article>
+    {% block body %}
+        <hr>
+        <article>
+            {% if e['kind']=='pin' %}
+                <h3 style="margin-top:0">
+                    <a href="{{ e['link'] }}" target="_blank" rel="noopener"
+                    style="word-break:break-all; overflow-wrap:anywhere;">
+                    {{ e['title'] }} 
+                    </a>
+                    {{ external_icon() }}
+                </h3>
+                <small>({{ e['link']|url }})</small> 
 
-  {% if e['kind']=='pin' %}
-      <h3 style="margin-top:0">
-        <a href="{{ e['link'] }}" target="_blank" rel="noopener"
-           style="word-break:break-all; overflow-wrap:anywhere;">
-           {{ e['title'] }} 
-        </a>
-        {{ external_icon() }}
-      </h3>
-      <small>({{ e['link']|url }})</small> 
+            {% elif e['title'] %}
+                <h3>{{ e['title'] }}</h3>
+            {% endif %}
 
-  {% elif e['title'] %}
-      <h3>{{ e['title'] }}</h3>
-  {% endif %}
-
-  <p>{{ e['body']|md }}</p>
-  
-  <small style="color:#aaa;">
-      <a href="{{ url_for('by_kind', slug=kind_to_slug(e['kind'])) }}"
-         style="text-decoration:none; color:inherit;">
-         {{ e['created_at']|ts }}
-      </a>
-      {% if e['updated_at'] %}
-        <span title="Updated {{ e['updated_at']|ts }}">
-            (updated)
-        </span>
-      {% endif %}
-      by {{ username }}
-      {% if session.get('logged_in') %}
-          | <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a>
-          | <a href="{{ url_for('delete_entry', entry_id=e['id']) }}">Delete</a>
-      {% endif %}
-  </small>
-</article>
-{% endblock %}
+            <p>{{ e['body']|md }}</p>
+            
+            <small style="color:#aaa;">
+                <a href="{{ url_for('by_kind', slug=kind_to_slug(e['kind'])) }}"
+                    style="text-decoration:none; color:inherit;">
+                    {{ e['created_at']|ts }}
+                </a>
+                {% if e['updated_at'] %}
+                    <span title="Updated {{ e['updated_at']|ts }}">
+                        (updated)
+                    </span>
+                {% endif %}
+                by {{ username }}
+                {% if session.get('logged_in') %}
+                    | <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a>
+                    | <a href="{{ url_for('delete_entry', entry_id=e['id']) }}">Delete</a>
+                {% endif %}
+            </small>
+        </article>
+    {% endblock %}
 </div>
 """
 
