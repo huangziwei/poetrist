@@ -935,7 +935,7 @@ def wrap(body: str) -> str:
 
 TEMPL_PROLOG = """
 <!doctype html>
-<html lang="en">
+<html lang="en" style="scroll-behavior:smooth;">
 <title>{{title or 'po.etr.ist'}}</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no"> 
 <meta charset="utf-8">
@@ -944,7 +944,25 @@ TEMPL_PROLOG = """
 <link rel="icon" href="{{ url_for('favicon') }}">
 <link rel="alternate" type="application/rss+xml"
       href="{{ url_for('global_rss') }}" title="{{ title }} – RSS">
-
+<a href="#page-bottom" aria-label="Jump to footer"
+   style="
+        position:fixed;
+        bottom:1.25rem;
+        right:1.25rem;
+        width:3rem; height:3rem;
+        display:flex; align-items:center; justify-content:center;
+        font-size:1.5rem; line-height:1;
+        text-decoration:none;
+        border-bottom:none;
+        border-radius:50%;
+        background:#aaa;
+        color:#000;
+        box-shadow:0 2px 6px rgba(0,0,0,.3);
+        z-index:1000;
+        opacity:.15;
+   ">
+    ↓
+</a>
 <div class="container" style="max-width: 60rem; margin: 3rem auto;">
     <h1 style="margin-top:0"><a href="{{ url_for('index') }}">{{title or 'po.etr.ist'}}</a></h1>
     <nav style="margin-bottom:1rem;display:flex;">
@@ -1005,13 +1023,14 @@ TEMPL_PROLOG = """
 """
 
 TEMPL_EPILOG = """
-    <footer style="margin-top:1rem;padding-top:1rem;
-                   font-size:.8em;
-                   color:#888;
-                   display:flex;              /* 🔸 flex container */
-                   align-items:center;        /* vertical centering */
-                   justify-content:space-between;  /* left ⇆ right */
-                   border-top:1px solid #444;">
+    <footer id="page-bottom" style="margin-top:1rem;
+                padding-top:1rem;
+                font-size:.8em;
+                color:#888;
+                display:flex;              
+                align-items:center;        
+                justify-content:space-between;  
+                border-top:1px solid #444;">
         <!-- left-hand side -->
         <span>
             Built with
