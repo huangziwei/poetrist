@@ -942,27 +942,22 @@ TEMPL_PROLOG = """
     <nav style="margin-bottom:1rem;display:flex;">
         <div>
             <a href="{{ url_for('by_kind', slug=kind_to_slug('say')) }}"
-                {% if kind|default('')=='say'  %}style="font-weight:bold;text-decoration:none;"{% endif %}>
-                Says
-            </a>&nbsp;&nbsp;
+                {% if kind|default('')=='say'  %}style="text-decoration:none;border-bottom:0.33rem solid #aaa;"{% endif %}>
+                Says</a>&nbsp;&nbsp;
             <a href="{{ url_for('by_kind', slug=kind_to_slug('post')) }}"
-                {% if kind|default('')=='post' %}style="font-weight:bold;text-decoration:none;"{% endif %}>
-                Posts
-            </a>&nbsp;&nbsp;
+                {% if kind|default('')=='post' %}style="text-decoration:none;border-bottom:0.33rem solid #aaa;"{% endif %}>
+                Posts</a>&nbsp;&nbsp;
             <a href="{{ url_for('by_kind', slug=kind_to_slug('pin')) }}"
-                {% if kind|default('')=='pin'  %}style="font-weight:bold;text-decoration:none;"{% endif %}>
-                Pins
-            </a>&nbsp;&nbsp;
+                {% if kind|default('')=='pin'  %}style="text-decoration:none;border-bottom:0.33rem solid #aaa;"{% endif %}>
+                Pins</a>&nbsp;&nbsp;
             <a href="{{ url_for('tags') }}"
-                {% if kind|default('')=='tags' %}style="font-weight:bold;text-decoration:none;"{% endif %}>
-                Tags
-            </a>
+                {% if kind|default('')=='tags' %}style="text-decoration:none;border-bottom:0.33rem solid #aaa;"{% endif %}>
+                Tags</a>&nbsp;&nbsp;
             {% for p in nav_pages() %}
-                &nbsp;&nbsp;
                 <a href="{{ '/' ~ p['slug'] }}"
-                {% if request.path|trim('/') == p['slug'] %}style="font-weight:bold;text-decoration:none;"{% endif %}>
-                {{ p['title'] }}
-                </a>
+                {% if request.path|trim('/') == p['slug'] %}style="text-decoration:none;border-bottom:0.33rem solid #aaa;"{% endif %}>
+                {{ p['title'] }}</a>
+                {% if not loop.last %}&nbsp;&nbsp;{% endif %}
             {% endfor %}
         </div>
         <div style="margin-left:auto; white-space:nowrap;">
@@ -970,10 +965,9 @@ TEMPL_PROLOG = """
                 &nbsp;&nbsp;
                 <a href="{{ url_for('settings') }}"
                 {% if request.endpoint == 'settings' %}
-                    style="font-weight:bold; text-decoration:none;"
+                    style="text-decoration:none;border-bottom:0.33rem solid #aaa;"
                 {% endif %}>
-                Settings
-                </a>
+                Settings</a>
             {% else %}
                 &nbsp;&nbsp;
                 <a href="{{ url_for('login') }}"
