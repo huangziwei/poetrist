@@ -529,7 +529,7 @@ def tags(tag_list: str):
                                         page=page, per_page=per, db=db)
         pages = list(range(1, total_pages + 1))
     else:
-        entries = None, []                       # nothing selected → no list
+        entries, pages = None, []                       # nothing selected → no list
 
 
     return render_template_string(
