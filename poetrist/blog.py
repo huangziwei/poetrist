@@ -141,6 +141,7 @@ def get_db():
         ensure_updated_at()
         ensure_slug()
         ensure_fts()          
+        ensure_fts_trigram()
 
     return g.db
 
@@ -293,6 +294,54 @@ def ensure_fts():
     """)
     db.commit()
 
+def ensure_fts_trigram():
+    """
+    Add entry_fts3 (trigram tokenizer) + sync triggers if missing,
+    then back-fill it.  Runs once per startup – idempotent.
+    """
+    db = get_db()
+    row = db.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='table' AND name='entry_fts3'").fetchone()
+    if row:
+        return                                    # already there
+
+    db.executescript("""
+        /* -------- 1. table -------------------------------------- */
+        CREATE VIRTUAL TABLE entry_fts3 USING fts5(
+            title,
+            body,
+            link,
+            content='entry',
+            content_rowid='id',
+            tokenize = 'trigram'
+        );
+
+        /* -------- 2. back-fill ---------------------------------- */
+        INSERT INTO entry_fts3(rowid, title, body, link)
+            SELECT id,
+                   COALESCE(title,''),
+                   body,
+                   COALESCE(link,'')
+            FROM entry;
+
+        /* -------- 3. sync triggers ------------------------------ */
+        CREATE TRIGGER entry_ai3 AFTER INSERT ON entry BEGIN
+            INSERT INTO entry_fts3(rowid, title, body, link)
+            VALUES (new.id, new.title, new.body, new.link);
+        END;
+        CREATE TRIGGER entry_au3 AFTER UPDATE ON entry BEGIN
+            UPDATE entry_fts3
+               SET title=new.title,
+                   body =new.body,
+                   link =new.link
+             WHERE rowid = new.id;
+        END;
+        CREATE TRIGGER entry_ad3 AFTER DELETE ON entry BEGIN
+            DELETE FROM entry_fts3 WHERE rowid = old.id;
+        END;
+    """)
+    db.commit()
 
 # -------------------------------------------------------------------------
 # Time helpers
@@ -1620,18 +1669,35 @@ def tags_rss(tag_list):
 # Search
 ###############################################################################
 
+def _has_quotes(q: str) -> bool:
+    return '"' in q
+
 def search_entries(query: str, *, db, limit: int = 50):
+    if not query:
+        return []
+
+    if _has_quotes(query):
+        # ── exact word / exact phrase search (unicode61 index) ─────────
+        sql = """
+            SELECT e.*, bm25(entry_fts) AS rank
+            FROM   entry_fts
+            JOIN   entry e ON e.id = entry_fts.rowid
+            WHERE  entry_fts MATCH ?
+            ORDER  BY rank
+            LIMIT  ?
+        """
+        return db.execute(sql, (query, limit)).fetchall()
+
+    # —— no quotes → free substring search on trigram index
     sql = """
-        SELECT e.*,
-               bm25(entry_fts) AS rank      
-        FROM   entry_fts
-        JOIN   entry e ON e.id = entry_fts.rowid
-        WHERE  entry_fts MATCH ?
+        SELECT e.*, bm25(entry_fts3) AS rank
+        FROM   entry_fts3
+        JOIN   entry e ON e.id = entry_fts3.rowid
+        WHERE  entry_fts3 MATCH ?
         ORDER  BY rank
         LIMIT  ?
     """
     return db.execute(sql, (query, limit)).fetchall()
-
 @app.route('/search')
 def search():
     q = request.args.get('q', '').strip()
