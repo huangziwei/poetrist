@@ -59,6 +59,9 @@ PAGE_DEFAULT = 100
 TAG_RE = re.compile(r'(?<!\w)#([\w\-]+)')
 HASH_LINK_RE = re.compile(r'(?<![A-Za-z0-9_])#([\w\-]+)')
 RFC2822_FMT = "%a, %d %b %Y %H:%M:%S %z"
+_TOKEN_CHARS = r"0-9A-Za-z\u0080-\uFFFF_"          # what unicode61 keeps
+TOKEN_RE     = re.compile(f"[{_TOKEN_CHARS}]+")
+
 
 try:
     __version__ = version("poetrist")
@@ -1573,6 +1576,12 @@ TEMPL_SEARCH = wrap("""
         </form>
     </div>
 
+    {% if removed %}
+        <p style="color:#F8B500; font-size:.8em;">
+            Note: characters <code>{{ removed }}</code> were ignored in the search.
+        </p>
+    {% endif %}
+
     {% if query and not rows %}
         <p>No results for <strong>{{ query }}</strong>.</p>
     {% endif %}
@@ -1727,70 +1736,107 @@ def tags_rss(tag_list):
 # Search
 ###############################################################################
 
+_OP_CHARS = r'-+:"*()@%<>=#'
+
+def _sanitize(q: str) -> tuple[str, set[str]]:
+    # if we have an odd number of quotes → replace them, too
+    has_unmatched_quote = q.count('"') % 2 == 1
+
+    op_chars = _OP_CHARS + ('"' if has_unmatched_quote else '')
+    escape_re = re.compile(f'([{re.escape(op_chars)}])')
+
+    removed: set[str] = set()
+    def repl(m):
+        removed.add(m.group(1))
+        return ' '
+
+    return escape_re.sub(repl, q), removed
+
+def _needs_quotes(token: str) -> bool:
+    """
+    Return True if *token* contains any char that sqlite's unicode61
+    tokenizer would drop (punctuation, symbols, etc.).
+    """
+    return TOKEN_RE.fullmatch(token) is None
+
 def _expand_fuzzy(q: str) -> str:
     """
-    Turn plain words into prefix queries (word*) unless they’re inside quotes.
-    Keeps boolean operators (AND/OR/NOT) untouched.
+    • unquoted plain words  -> prefix search  (word*)
+    • words with punctuation-> exact match   ("word%")
+    • words in "quotes"     -> left untouched
+    • Boolean ops AND/OR/NOT are preserved (case-insensitive)
     """
-    parts = re.findall(r'"[^"]*"|\S+', q)          # "foo bar" OR baz
-    out = []
+    parts = re.findall(r'"[^"]*"|\S+', q)
+    out   = []
+
     for p in parts:
-        if p.startswith('"') and p.endswith('"'):  # already quoted
+        if p.startswith('"') and p.endswith('"'):        # already quoted
             out.append(p)
-        elif p.upper() in {"AND", "OR", "NOT"}:    # boolean op → keep
+
+        elif p.upper() in {"AND", "OR", "NOT"}:          # boolean op
             out.append(p.upper())
-        else:                                      # fuzzy token
+
+        elif _needs_quotes(p):                           # has % or other symbols
+            out.append(f'"{p}"')                         # quote, no *
+
+        else:                                            # simple word → prefix
             out.append(p + '*')
+
     return ' '.join(out)
 
 def _has_quotes(q: str) -> bool:
     return '"' in q
 
 def search_entries(query: str, *, db,
-                   page: int = 1,
-                   per_page: int = PAGE_DEFAULT,
-                   sort: str = "rel"):               #  rel | new | old
-    """
-    • query inside quotes  -> exact phrase search on entry_fts
-    • plain words          -> fuzzy prefix search on entry_fts
-      (works for 1- or 2-character CJK tokens because of the * suffix)
-    • ≥3 chars, no *       -> fast trigram search on entry_fts3
-    """
+                   page: int        = 1,
+                   per_page: int    = PAGE_DEFAULT,
+                   sort: str        = "rel"):             # rel | new | old
+    """Return (rows_on_page, total_hits, removed_chars)."""
     if not query:
-        return [], 0
+        return [], 0, set()
 
-    if _has_quotes(query):
-        tbl   = "entry_fts"
-        match = query                                  # as typed
+    if _has_quotes(query):              # user wants an exact phrase
+        clean_q, removed = query, set() # keep punctuation intact
     else:
-        if len(query) >= 3 and '*' not in query:
-            # ≥3 chars, no wildcard → use the trigram index
-            tbl   = "entry_fts3"
-            match = query
+        clean_q, removed = _sanitize(query)
+        clean_q = clean_q.strip()
+        if not clean_q:
+            return [], 0, removed
+
+    if '"' in clean_q:                   # user typed quotes → exact phrase
+        tbl   = "entry_fts"
+        match = clean_q
+    else:
+        if len(clean_q) >= 3 and '*' not in clean_q:
+            tbl   = "entry_fts3"         # fast trigram if ≥3 chars, no *
+            match = clean_q
         else:
             tbl   = "entry_fts"
-            match = _expand_fuzzy(query)               # add the *
-
+            match = _expand_fuzzy(clean_q)   # add '*' for short/fuzzy search
+            if match == '*':                 # ← optional extra guard
+                return [], 0, removed
+            
     order_sql = {
         "new": "ORDER BY e.created_at DESC",
         "old": "ORDER BY e.created_at ASC",
         "rel": "ORDER BY rank"
     }.get(sort, "ORDER BY rank")
 
-    base_sql = f"""
+    BASE_SQL = f"""
         SELECT e.*, bm25({tbl}) AS rank
           FROM {tbl}
           JOIN entry e ON e.id = {tbl}.rowid
          WHERE {tbl} MATCH ?
     """
 
-    total = db.execute(f"SELECT COUNT(*) FROM ({base_sql})", (match,)).fetchone()[0]
+    total = db.execute(f"SELECT COUNT(*) FROM ({BASE_SQL})", (match,)).fetchone()[0]
     rows  = db.execute(
-              f"{base_sql} {order_sql} LIMIT ? OFFSET ?",
-              (match, per_page, (page-1)*per_page)
+                f"{BASE_SQL} {order_sql} LIMIT ? OFFSET ?",
+                (match, per_page, (page-1)*per_page)
             ).fetchall()
 
-    return rows, total
+    return rows, total, removed
+
 
 @app.route('/search')
 def search():
@@ -1799,20 +1845,24 @@ def search():
     page  = max(int(request.args.get('page',1)), 1)
     per   = page_size()
 
-    rows, total = search_entries(q, db=get_db(),
-                                 page=page, per_page=per, sort=sort)
+    rows, total, removed = search_entries(q,
+                db=get_db(),
+                page=page,
+                per_page=per,
+                sort=sort)
 
     pages = list(range(1, (total + per - 1)//per + 1))
 
     return render_template_string(
         TEMPL_SEARCH,
-        rows   = rows,
-        query  = q,
-        sort   = sort,
-        page   = page,
-        pages  = pages,
-        title  = get_setting('site_name', 'po.etr.ist'),
-        kind   = 'search',
+        rows     = rows,
+        query    = q,
+        sort     = sort,
+        page     = page,
+        pages    = pages,
+        removed  = ''.join(sorted(removed)),   # e.g. '@%-"'
+        title    = get_setting('site_name', 'po.etr.ist'),
+        kind     = 'search',
         username = current_username(),
     )
 
