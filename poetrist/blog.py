@@ -1727,39 +1727,68 @@ def tags_rss(tag_list):
 # Search
 ###############################################################################
 
+def _expand_fuzzy(q: str) -> str:
+    """
+    Turn plain words into prefix queries (word*) unless they’re inside quotes.
+    Keeps boolean operators (AND/OR/NOT) untouched.
+    """
+    parts = re.findall(r'"[^"]*"|\S+', q)          # "foo bar" OR baz
+    out = []
+    for p in parts:
+        if p.startswith('"') and p.endswith('"'):  # already quoted
+            out.append(p)
+        elif p.upper() in {"AND", "OR", "NOT"}:    # boolean op → keep
+            out.append(p.upper())
+        else:                                      # fuzzy token
+            out.append(p + '*')
+    return ' '.join(out)
+
 def _has_quotes(q: str) -> bool:
     return '"' in q
 
 def search_entries(query: str, *, db,
                    page: int = 1,
                    per_page: int = PAGE_DEFAULT,
-                   sort: str = "rel"):              #  rel | new | old
-    if not query:
-        return [], 0                               # rows, total
-
-    tbl = "entry_fts"  if _has_quotes(query) else "entry_fts3"
-
-    base_sql = f"""
-        SELECT e.*, bm25({tbl}) AS rank
-        FROM   {tbl}
-        JOIN   entry e ON e.id = {tbl}.rowid
-        WHERE  {tbl} MATCH ?
+                   sort: str = "rel"):               #  rel | new | old
     """
+    • query inside quotes  -> exact phrase search on entry_fts
+    • plain words          -> fuzzy prefix search on entry_fts
+      (works for 1- or 2-character CJK tokens because of the * suffix)
+    • ≥3 chars, no *       -> fast trigram search on entry_fts3
+    """
+    if not query:
+        return [], 0
+
+    if _has_quotes(query):
+        tbl   = "entry_fts"
+        match = query                                  # as typed
+    else:
+        if len(query) >= 3 and '*' not in query:
+            # ≥3 chars, no wildcard → use the trigram index
+            tbl   = "entry_fts3"
+            match = query
+        else:
+            tbl   = "entry_fts"
+            match = _expand_fuzzy(query)               # add the *
 
     order_sql = {
         "new": "ORDER BY e.created_at DESC",
         "old": "ORDER BY e.created_at ASC",
         "rel": "ORDER BY rank"
-    }[sort if sort in ("new", "old") else "rel"]
+    }.get(sort, "ORDER BY rank")
 
-    # ── total hits for paging UI -------------------------------------------
-    total = db.execute(f"SELECT COUNT(*) FROM ({base_sql})", (query,)).fetchone()[0]
+    base_sql = f"""
+        SELECT e.*, bm25({tbl}) AS rank
+          FROM {tbl}
+          JOIN entry e ON e.id = {tbl}.rowid
+         WHERE {tbl} MATCH ?
+    """
 
-    # ── one page ------------------------------------------------------------
-    rows = db.execute(
-        f"{base_sql} {order_sql} LIMIT ? OFFSET ?",
-        (query, per_page, (page-1)*per_page)
-    ).fetchall()
+    total = db.execute(f"SELECT COUNT(*) FROM ({base_sql})", (match,)).fetchone()[0]
+    rows  = db.execute(
+              f"{base_sql} {order_sql} LIMIT ? OFFSET ?",
+              (match, per_page, (page-1)*per_page)
+            ).fetchall()
 
     return rows, total
 
