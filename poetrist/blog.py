@@ -817,11 +817,23 @@ TEMPL_PROLOG = """
                 </a>
             {% endfor %}
         </div>
-        <div style="margin-left:auto; white-space:nowrap;display:flex;">
+        <div style="margin-left:auto; white-space:nowrap;">
             {% if session.get('logged_in') %}
-                <a href="{{ url_for('settings') }}">Settings</a>
+                &nbsp;&nbsp;
+                <a href="{{ url_for('settings') }}"
+                {% if request.endpoint == 'settings' %}
+                    style="font-weight:bold; text-decoration:none;"
+                {% endif %}>
+                Settings
+                </a>
             {% else %}
-                <a href="{{url_for('login')}}">Login</a>
+                &nbsp;&nbsp;
+                <a href="{{ url_for('login') }}"
+                {% if request.endpoint == 'login' %}
+                    style="font-weight:bold; text-decoration:none;"
+                {% endif %}>
+                Login
+                </a>
             {% endif %}
         </div>
     </nav>
@@ -858,8 +870,34 @@ TEMPL_EPILOG = """
 </div> <!-- container -->
 """
 
+TEMPL_LOGIN = wrap("""
+    {% block body %}
+    <hr>
+    <form method=post>
+    <div style="position:relative;">
+        <input  name="token"
+            type="password"          
+            autocomplete="current-password"
+            style="width:100%; padding-right:7rem;">
+        <label for="token"
+                style="position:absolute;
+                        right:.5rem;
+                        top:40%;
+                        transform:translateY(-50%);
+                        pointer-events:none;
+                        font-size:.75em;
+                        color:#aaa;">
+                    token
+        </label>
+    </div>
+    <button>Log&nbsp;in</button>
+    </form>
+    {% endblock %}
+""")
+
 TEMPL_INDEX = wrap("""{% block body %}
     {% if session.get('logged_in') %}
+    <hr>
     <form method=post>
         <textarea name=body rows=3 style="width:100%;margin-bottom:0rem;" placeholder="What's on your mind?"></textarea>
         <button>Add Say</button>
@@ -891,12 +929,15 @@ TEMPL_INDEX = wrap("""{% block body %}
                 text-transform:capitalize;
                 vertical-align:middle;
             ">
-                {{ e['kind'] }}
+                <a href="{{ url_for('by_kind', slug=kind_to_slug(e['kind'])) }}"
+                   style="text-decoration:none; color:inherit;border-bottom:none;">
+                   {{ e['kind'] }}
+                </a>
             </span>
             <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug']) }}"
                 style="text-decoration:none; color:inherit;vertical-align:middle;">
-                {{ e['created_at']|ts }}&nbsp;&nbsp;
-            </a>
+                {{ e['created_at']|ts }}
+            </a>&nbsp;&nbsp;
             {% if session.get('logged_in') %}
                 <a href="{{ url_for('edit_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
                 <a href="{{ url_for('delete_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Delete</a>
@@ -922,47 +963,24 @@ TEMPL_INDEX = wrap("""{% block body %}
 {% endblock %}
 """)
 
-TEMPL_LOGIN = wrap("""
-    {% block body %}
-    <form method=post>
-    <div style="position:relative;">
-        <input  name="token"
-            type="password"          
-            autocomplete="current-password"
-            style="width:100%; padding-right:7rem;">
-        <label for="token"
-                style="position:absolute;
-                        right:.5rem;
-                        top:40%;
-                        transform:translateY(-50%);
-                        pointer-events:none;
-                        font-size:.75em;
-                        color:#aaa;">
-                    token
-        </label>
-    </div>
-    <br>
-    <button>Log&nbsp;in</button>
-    </form>
-    {% endblock %}
-""")
 
 
 TEMPL_LIST = wrap("""
     {% block body %}
         {% if session.get('logged_in') %}
-            <form method="post">
-                {# Title field for Posts & Pins #}
-                {% if kind in ('post', 'pin') %}
-                    <input name="title" style="width:100%" placeholder="Title"><br>
-                {% endif %}
-                {# Link field only for Pins #}
-                {% if kind == 'pin' %}
-                    <input name="link" style="width:100%" placeholder="Link">
-                {% endif %}
-                <textarea name="body" rows="3" style="width:100%;margin-bottom:0rem;" placeholder="what's on your mind?"></textarea>
-                <button>Add&nbsp;{{ kind.capitalize() }}</button>
-            </form>
+        <hr>
+        <form method="post">
+            {# Title field for Posts & Pins #}
+            {% if kind in ('post', 'pin') %}
+                <input name="title" style="width:100%" placeholder="Title"><br>
+            {% endif %}
+            {# Link field only for Pins #}
+            {% if kind == 'pin' %}
+                <input name="link" style="width:100%" placeholder="Link">
+            {% endif %}
+            <textarea name="body" rows="3" style="width:100%;margin-bottom:0rem;" placeholder="What's on your mind?"></textarea>
+            <button>Add&nbsp;{{ kind.capitalize() }}</button>
+        </form>
         {% endif %}
         <hr>
         {% for e in rows %}
@@ -982,13 +1000,29 @@ TEMPL_LIST = wrap("""
                 <p>🔗 <a href="{{ e['link'] }}" target="_blank" rel="noopener">{{ e['link'] }}</a></p>
             {% endif %}
             <small style="color:#aaa;">
+                <span style="
+                    display:inline-block;
+                    padding:.1em .6em;
+                    margin-right:.4em;
+                    background:#444;
+                    color:#fff;
+                    border-radius:1em;
+                    font-size:.75em;
+                    text-transform:capitalize;
+                    vertical-align:middle;
+                ">
+                    <a href="{{ url_for('by_kind', slug=kind_to_slug(e['kind'])) }}"
+                    style="text-decoration:none; color:inherit;border-bottom:none;">
+                    {{ e['kind'] }}
+                    </a>
+                </span>
                 <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug']) }}"
-                   style="text-decoration:none; color:inherit;">
-                   {{ e['created_at']|ts }}&nbsp;&nbsp;
-                </a>
+                    style="text-decoration:none; color:inherit;vertical-align:middle;">
+                    {{ e['created_at']|ts }}
+                </a>&nbsp;&nbsp;
                 {% if session.get('logged_in') %}
-                    <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a>&nbsp;&nbsp;
-                    <a href="{{ url_for('delete_entry', entry_id=e['id']) }}">Delete</a>
+                    <a href="{{ url_for('edit_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
+                    <a href="{{ url_for('delete_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Delete</a>
                 {% endif %}
             </small>
         </article>
@@ -1094,7 +1128,7 @@ TEMPL_SETTINGS = wrap("""
 TEMPL_DETAIL = wrap("""
     {% block body %}
         <hr>
-        <article>
+        <article style="padding-bottom:1.5rem;">
             {% if e['kind']=='pin' %}
                 <h3 style="margin-top:0">
                     <a href="{{ e['link'] }}" target="_blank" rel="noopener"
@@ -1109,23 +1143,40 @@ TEMPL_DETAIL = wrap("""
                 <h3>{{ e['title'] }}</h3>
             {% endif %}
 
-            <p>{{ e['body']|md }}</p>
-            
+            <p>{{ e['body']|md }}</p>                
             <small style="color:#aaa;">
+            {# — kind pill — #}
+            <span style="
+                display:inline-block;
+                padding:.1em .6em;
+                margin-right:.4em;
+                background:#444;
+                color:#fff;
+                border-radius:1em;
+                font-size:.75em;
+                text-transform:capitalize;
+                vertical-align:middle;">
                 <a href="{{ url_for('by_kind', slug=kind_to_slug(e['kind'])) }}"
-                    style="text-decoration:none; color:inherit;">
-                    {{ e['created_at']|ts }}
+                style="text-decoration:none; color:inherit; border-bottom:none;">
+                {{ e['kind'] }}
                 </a>
-                {% if e['updated_at'] %}
-                    <span title="Updated {{ e['updated_at']|ts }}">
-                        (updated)
-                    </span>
-                {% endif %}
-                by {{ username }}
-                {% if session.get('logged_in') %}
-                    | <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a>
-                    | <a href="{{ url_for('delete_entry', entry_id=e['id']) }}">Delete</a>
-                {% endif %}
+            </span>
+            {# — timestamp — #}
+            <a href="{{ url_for('entry_detail',
+                                slug=kind_to_slug(e['kind']),
+                                ts=e['slug']) }}"
+                style="text-decoration:none; color:inherit; vertical-align:middle;">
+                {{ e['created_at']|ts }}
+            </a>
+            {# — author — #}
+            <span style="vertical-align:middle;">&nbsp;by&nbsp;{{ username }}</span>&nbsp;&nbsp;
+            {# — edit/delete (admin only) — #}
+            {% if session.get('logged_in') %}
+                <a href="{{ url_for('edit_entry', entry_id=e['id']) }}"
+                    style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
+                <a href="{{ url_for('delete_entry', entry_id=e['id']) }}"
+                    style="vertical-align:middle;">Delete</a>
+            {% endif %}
             </small>
         </article>
     {% endblock %}
@@ -1241,19 +1292,20 @@ TEMPL_TAGS = wrap("""
 <div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
 {% for t in tags %}
     <a href="{{ t.href }}"
-       style="text-decoration:none !important;
-              border-bottom:none!important;
-              display:inline-flex;  
-              align-items:center;
-              margin:.15rem 0;
-              padding:.15rem .6rem;
-              border-radius:1rem;
-              white-space:nowrap;
-              {% if t.active %}
-                  background:#F8B500; color:#000;
-              {% else %}
-                  background:#444; color:#F8B500;
-              {% endif %}">
+        style="text-decoration:none !important;
+                border-bottom:none!important;
+                display:inline-flex;  
+                align-items:center;
+                margin:.15rem 0;
+                padding:.15rem .6rem;
+                border-radius:1rem;
+                white-space:nowrap;
+                font-size:.8em;
+                {% if t.active %}
+                    background:#F8B500; color:#000;
+                {% else %}
+                    background:#444; color:#F8B500;
+                {% endif %}">
         {{ t.name }}
         <small style="color:#888;">({{ t.cnt }})</small>
     </a>
