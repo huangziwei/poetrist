@@ -632,6 +632,11 @@ def settings():
 
     db = get_db()
 
+    if request.method == 'POST' and request.form.get('action') == 'rotate_token':
+        session['one_time_token'] = _rotate_token(db)   # store once
+        return redirect(url_for('settings'), code=303)  # PRG; 303 = “See Other”
+
+
     if request.method == 'POST':
         site_name = request.form['site_name'].strip()
         username  = request.form['username'].strip()
@@ -653,12 +658,15 @@ def settings():
         flash('Settings saved.')
         return redirect(url_for('settings'))
 
-    cur_username = db.execute('SELECT username FROM user LIMIT 1').fetchone()['username']
+    new_token = session.pop('one_time_token', None)     # use-and-forget
+    cur_username = db.execute('SELECT username FROM user LIMIT 1') \
+                       .fetchone()['username']
     return render_template_string(
         TEMPL_SETTINGS,
-        title = get_setting('site_name', 'po.etr.ist'),
-        site_name = get_setting('site_name', 'po.etr.ist'),
-        username = cur_username
+        title      = get_setting('site_name', 'po.etr.ist'),
+        site_name  = get_setting('site_name', 'po.etr.ist'),
+        username   = cur_username,
+        new_token  = new_token
     )
 
 @app.route('/<slug>/<ts>')
@@ -801,8 +809,7 @@ TEMPL_BASE = """
         </div>
         <div style="margin-left:auto; white-space:nowrap;display:flex;">
             {% if session.get('logged_in') %}
-                <a href="{{ url_for('settings') }}">Settings</a>&nbsp;&nbsp;
-                <a href="{{url_for('logout')}}">Logout</a>
+                <a href="{{ url_for('settings') }}">Settings</a>
             {% else %}
                 <a href="{{url_for('login')}}">Login</a>
             {% endif %}
@@ -821,10 +828,6 @@ TEMPL_BASE = """
                     max-width:24rem; z-index:999;">
         {{ msgs|join('<br>')|safe }}
         </div>
-
-        {# --- auto-dismiss: reload current URL after 3 s ---------------------- #}
-        <meta http-equiv="refresh"
-            content="3;url={{ request.path }}">
     {% endif %}
     {% endwith %}
 """
@@ -851,13 +854,26 @@ TEMPL_INDEX = TEMPL_BASE + """{% block body %}
         {% endif %}
         <p>{{e['body']|md}}</p>
         <small style="color:#aaa;">
+            <span style="
+                display:inline-block;
+                padding:.1em .6em;
+                margin-right:.4em;
+                background:#444;
+                color:#fff;
+                border-radius:1em;
+                font-size:.75em;
+                text-transform:capitalize;
+                vertical-align:middle;
+            ">
+                {{ e['kind'] }}
+            </span>
             <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug']) }}"
-                style="text-decoration:none; color:inherit;">
-                {{ e['kind']|capitalize }} — {{ e['created_at']|ts }}
+                style="text-decoration:none; color:inherit;vertical-align:middle;">
+                {{ e['created_at']|ts }}&nbsp;&nbsp;
             </a>
             {% if session.get('logged_in') %}
-                | <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a>
-                | <a href="{{ url_for('delete_entry', entry_id=e['id']) }}">Delete</a>
+                <a href="{{ url_for('edit_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
+                <a href="{{ url_for('delete_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Delete</a>
             {% endif %}
         </small>
     </article>
@@ -885,8 +901,7 @@ TEMPL_INDEX = TEMPL_BASE + """{% block body %}
 TEMPL_LOGIN = TEMPL_BASE + """
     {% block body %}
     <form method=post>
-        <div style="position:relative;">
-            style="width:100%; padding-right:7rem;">
+    <div style="position:relative;">
         <input  name="token"
             type="password"          
             autocomplete="current-password"
@@ -946,11 +961,11 @@ TEMPL_LIST = TEMPL_BASE + """
             <small style="color:#aaa;">
                 <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug']) }}"
                    style="text-decoration:none; color:inherit;">
-                   {{ e['created_at']|ts }}
+                   {{ e['created_at']|ts }}&nbsp;&nbsp;
                 </a>
                 {% if session.get('logged_in') %}
-                    | <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a>
-                    | <a href="{{ url_for('delete_entry', entry_id=e['id']) }}">Delete</a>
+                    <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a>&nbsp;&nbsp;
+                    <a href="{{ url_for('delete_entry', entry_id=e['id']) }}">Delete</a>
                 {% endif %}
             </small>
         </article>
@@ -977,6 +992,7 @@ TEMPL_LIST = TEMPL_BASE + """
 
 TEMPL_SETTINGS = TEMPL_BASE + """
     {% block body %}
+    <hr>
     <form method="post" style="max-width:36rem">
 
         <!-- ──────────── site info ──────────── -->
@@ -1025,6 +1041,31 @@ TEMPL_SETTINGS = TEMPL_BASE + """
         </fieldset>
         <button style="margin-top:.5rem;">Save settings</button>
     </form>
+    <div style="display:flex; gap:1rem; max-width:36rem; margin-top:2rem;">
+        <!-- token button in its own tiny form -->
+        <form method="post" style="margin:0;">
+            <button name="action" value="rotate_token" style="color:#F8B500; background:#333;">
+                Get new token
+            </button>
+        </form>
+    </div>
+
+    {% if new_token %}
+        <div style="margin-top:1.5rem; padding:1rem; border:1px solid #555;
+                    background:#222; font-family:monospace; word-break:break-all;font-size:1.2rem;">
+            {{ new_token }}
+        </div>
+    {% endif %}
+
+    
+    <!-- logout link, vertically centered -->
+    <div style="display:flex; gap:1rem; max-width:36rem; margin-top:2rem;">
+        <a href="{{ url_for('logout') }}"
+            style="align-self:center; color:#F8B500; text-decoration:none;">
+        ⎋ Log&nbsp;out
+        </a>
+    </div>
+    
     {% endblock %}
 </div>
 """
@@ -1195,23 +1236,36 @@ TEMPL_TAGS = TEMPL_BASE + """
 TEMPL_TAG_LIST = TEMPL_BASE + """
 {% block body %}
     <hr>
-    <h3>#{{ tag }}</h3>
+    <h2>#{{ tag }}</h2>
     {% for e in entries %}
         <article style="border-bottom:1px solid #444; padding-bottom:1rem;">
         {% if e['title'] %}
-            <h4 style="margin:.25rem 0 .5rem 0;">{{ e['title'] }}</h4>
+            <h3 style="margin:.25rem 0 .5rem 0;">{{ e['title'] }}</h3>
         {% endif %}
 
         <p>{{ e['body']|md }}</p>
 
         <small style="color:#aaa;">
+            <span style="
+                display:inline-block;
+                padding:.1em .6em;
+                margin-right:.4em;
+                background:#444;
+                color:#fff;
+                border-radius:1em;
+                font-size:.75em;
+                text-transform:capitalize;
+                vertical-align:middle;
+            ">
+                {{ e['kind'] }}
+            </span>
             <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug']) }}"
-            style="text-decoration:none; color:inherit;">
-            {{ e['kind']|capitalize }} — {{ e['created_at']|ts }}
+                style="text-decoration:none; color:inherit;vertical-align:middle;">
+                {{ e['created_at']|ts }}&nbsp;&nbsp;
             </a>
             {% if session.get('logged_in') %}
-            | <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a>
-            | <a href="{{ url_for('delete_entry', entry_id=e['id']) }}">Delete</a>
+                <a href="{{ url_for('edit_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
+                <a href="{{ url_for('delete_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Delete</a>
             {% endif %}
         </small>
         </article>
