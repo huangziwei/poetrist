@@ -951,7 +951,7 @@ TEMPL_PROLOG = """
                 Pins
             </a>&nbsp;&nbsp;
             <a href="{{ url_for('tags') }}"
-                {% if kind|default('')=='tags' %}style="font-weight:bold;text-decoration:none"{% endif %}>
+                {% if kind|default('')=='tags' %}style="font-weight:bold;text-decoration:none;"{% endif %}>
                 Tags
             </a>
             {% for p in nav_pages() %}
@@ -1000,7 +1000,7 @@ TEMPL_PROLOG = """
 """
 
 TEMPL_EPILOG = """
-    <footer style="padding-top:1rem;
+    <footer style="margin-top:1rem;padding-top:1rem;
                    font-size:.8em;
                    color:#888;
                    display:flex;              /* 🔸 flex container */
@@ -1530,11 +1530,48 @@ TEMPL_PAGE = wrap("""
 TEMPL_SEARCH = wrap("""
 {% block body %}
     <hr>
-    <form action="{{ url_for('search') }}" method="get" style="margin-bottom:1rem;">
-        <input  name="q" value="{{ query }}" placeholder="Search the site"
-                style="width:75%;max-width:26rem;">
-        <button>Search</button>
-    </form>
+    <div style="padding:1rem 0;
+                
+                font-size:.8em;
+                color:#888;
+                display:flex;
+                align-items:center;      
+                justify-content:space-between;">
+        {# ─── sort pills ────────────────────────────────────────────── #}
+        <span style="display:inline-flex;
+                 border:1px solid #555;
+                 border-radius:4px;
+                 overflow:hidden;
+                 font-size:.8em;">
+            {% for val, label in [('rel','Relevance'),
+                                ('new','Newest'),
+                                ('old','Oldest')] %}
+            <a href="{{ url_for('search', q=query, sort=val) }}"
+            style="display:flex; align-items:center;              /* centre text */
+                    padding:.35em 1em;                             /* same height as input */
+                    text-decoration:none; border-bottom:none;
+                    {% if not loop.first %}border-left:1px solid #555;{% endif %}
+                    {% if sort==val %}background:#F8B500;color:#000;
+                    {% else %}background:#333;color:#eee;{% endif %}">
+            {{ label }}
+            </a>
+            {% endfor %}
+        </span>
+
+        {# ─── search box ────────────────────────────────────────────── #}
+        <form action="{{ url_for('search') }}" method="get"
+            style="margin:0;
+                    display:inline-flex;   /* <── collapses to input’s height */
+                    align-items:center;">
+            <input type="search" name="q" placeholder="Search"
+                value="{{ request.args.get('q','') }}"
+                style="font-size:.8em;
+                        padding:.35em .6em;
+                        border:1px solid #555;
+                        border-radius:4px;
+                        margin:0;">  
+        </form>
+    </div>
 
     {% if query and not rows %}
         <p>No results for <strong>{{ query }}</strong>.</p>
@@ -1572,6 +1609,19 @@ TEMPL_SEARCH = wrap("""
             </small>
         </article>
     {% endfor %}
+                    
+    {% if pages|length > 1 %}
+    <nav style="margin-top:1rem;font-size:.75em;">
+        {% for p in pages %}
+            {% if p == page %}
+                <strong>{{ p }}</strong>
+            {% else %}
+                <a href="{{ url_for('search', q=query, sort=sort, page=p) }}">{{ p }}</a>
+            {% endif %}
+            {% if not loop.last %}&nbsp;{% endif %}
+        {% endfor %}
+    </nav>
+    {% endif %}
 {% endblock %}
 """)
 
@@ -1680,40 +1730,58 @@ def tags_rss(tag_list):
 def _has_quotes(q: str) -> bool:
     return '"' in q
 
-def search_entries(query: str, *, db, limit: int = 50):
+def search_entries(query: str, *, db,
+                   page: int = 1,
+                   per_page: int = PAGE_DEFAULT,
+                   sort: str = "rel"):              #  rel | new | old
     if not query:
-        return []
+        return [], 0                               # rows, total
 
-    if _has_quotes(query):
-        # ── exact word / exact phrase search (unicode61 index) ─────────
-        sql = """
-            SELECT e.*, bm25(entry_fts) AS rank
-            FROM   entry_fts
-            JOIN   entry e ON e.id = entry_fts.rowid
-            WHERE  entry_fts MATCH ?
-            ORDER  BY rank
-            LIMIT  ?
-        """
-        return db.execute(sql, (query, limit)).fetchall()
+    tbl = "entry_fts"  if _has_quotes(query) else "entry_fts3"
 
-    # —— no quotes → free substring search on trigram index
-    sql = """
-        SELECT e.*, bm25(entry_fts3) AS rank
-        FROM   entry_fts3
-        JOIN   entry e ON e.id = entry_fts3.rowid
-        WHERE  entry_fts3 MATCH ?
-        ORDER  BY rank
-        LIMIT  ?
+    base_sql = f"""
+        SELECT e.*, bm25({tbl}) AS rank
+        FROM   {tbl}
+        JOIN   entry e ON e.id = {tbl}.rowid
+        WHERE  {tbl} MATCH ?
     """
-    return db.execute(sql, (query, limit)).fetchall()
+
+    order_sql = {
+        "new": "ORDER BY e.created_at DESC",
+        "old": "ORDER BY e.created_at ASC",
+        "rel": "ORDER BY rank"
+    }[sort if sort in ("new", "old") else "rel"]
+
+    # ── total hits for paging UI -------------------------------------------
+    total = db.execute(f"SELECT COUNT(*) FROM ({base_sql})", (query,)).fetchone()[0]
+
+    # ── one page ------------------------------------------------------------
+    rows = db.execute(
+        f"{base_sql} {order_sql} LIMIT ? OFFSET ?",
+        (query, per_page, (page-1)*per_page)
+    ).fetchall()
+
+    return rows, total
+
 @app.route('/search')
 def search():
-    q = request.args.get('q', '').strip()
-    rows = search_entries(q, db=get_db()) if q else []
+    q     = request.args.get('q',   '').strip()
+    sort  = request.args.get('sort','rel')
+    page  = max(int(request.args.get('page',1)), 1)
+    per   = page_size()
+
+    rows, total = search_entries(q, db=get_db(),
+                                 page=page, per_page=per, sort=sort)
+
+    pages = list(range(1, (total + per - 1)//per + 1))
+
     return render_template_string(
         TEMPL_SEARCH,
         rows   = rows,
         query  = q,
+        sort   = sort,
+        page   = page,
+        pages  = pages,
         title  = get_setting('site_name', 'po.etr.ist'),
         kind   = 'search',
         username = current_username(),
