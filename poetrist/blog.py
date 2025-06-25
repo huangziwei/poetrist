@@ -937,7 +937,7 @@ TEMPL_INDEX = wrap("""{% block body %}
             <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug']) }}"
                 style="text-decoration:none; color:inherit;vertical-align:middle;">
                 {{ e['created_at']|ts }}
-            </a>&nbsp;&nbsp;
+            </a>&nbsp;
             {% if session.get('logged_in') %}
                 <a href="{{ url_for('edit_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
                 <a href="{{ url_for('delete_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Delete</a>
@@ -968,32 +968,33 @@ TEMPL_INDEX = wrap("""{% block body %}
 TEMPL_LIST = wrap("""
     {% block body %}
         {% if session.get('logged_in') %}
-        <hr>
-        <form method="post">
+        <hr style="margin:10px 0">
+        <form method="post" 
+                  style="display:flex;flex-direction:column;gap:10px;align-items:flex-start;">
             {# Title field for Posts & Pins #}
             {% if kind in ('post', 'pin') %}
-                <input name="title" style="width:100%" placeholder="Title"><br>
+                <input name="title" style="width:100%;margin:0" placeholder="Title">
             {% endif %}
             {# Link field only for Pins #}
             {% if kind == 'pin' %}
-                <input name="link" style="width:100%" placeholder="Link">
+                <input name="link" style="width:100%;margin:0" placeholder="Link">
             {% endif %}
-            <textarea name="body" rows="3" style="width:100%;margin-bottom:0rem;" placeholder="What's on your mind?"></textarea>
-            <button>Add&nbsp;{{ kind.capitalize() }}</button>
+            <textarea name="body" rows="3" style="width:100%;margin:0" placeholder="What's on your mind?"></textarea>
+            <button style="width:">Add&nbsp;{{ kind.capitalize() }}</button>
         </form>
         {% endif %}
         <hr>
         {% for e in rows %}
         <article style="padding-bottom:1.5rem; {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
             {% if e['kind'] == 'pin' %}
-                <h3>
+                <h2>
                     <a href="{{ e['link'] }}" target="_blank" rel="noopener">
                         {{ e['title'] }}
                     </a>
                     {{ external_icon() }} 
-                </h3>            
+                </h2>            
             {% elif e['title'] %}
-                <h3>{{ e['title'] }}</h3>
+                <h2>{{ e['title'] }}</h2>
             {% endif %}
             <p>{{ e['body']|md }}</p>
             {% if e['link'] and e['kind'] != 'pin' %}
@@ -1019,7 +1020,7 @@ TEMPL_LIST = wrap("""
                 <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug']) }}"
                     style="text-decoration:none; color:inherit;vertical-align:middle;">
                     {{ e['created_at']|ts }}
-                </a>&nbsp;&nbsp;
+                </a>&nbsp;
                 {% if session.get('logged_in') %}
                     <a href="{{ url_for('edit_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
                     <a href="{{ url_for('delete_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Delete</a>
@@ -1130,17 +1131,17 @@ TEMPL_DETAIL = wrap("""
         <hr>
         <article style="padding-bottom:1.5rem;">
             {% if e['kind']=='pin' %}
-                <h3 style="margin-top:0">
-                    <a href="{{ e['link'] }}" target="_blank" rel="noopener"
+                <h2 style="margin-top:0">
+                    <a href="{{ e['link'] }}" target="_blank" rel="noopener" title="{{ e['link'] }}"
                     style="word-break:break-all; overflow-wrap:anywhere;">
                     {{ e['title'] }} 
                     </a>
                     {{ external_icon() }}
-                </h3>
-                <small>({{ e['link']|url }})</small> 
+                </h2>
+                <!--<small>({{ e['link']|url }})</small> -->
 
             {% elif e['title'] %}
-                <h3>{{ e['title'] }}</h3>
+                <h2>{{ e['title'] }}</h2>
             {% endif %}
 
             <p>{{ e['body']|md }}</p>                
@@ -1340,8 +1341,8 @@ TEMPL_TAGS = wrap("""
                 </span>
                 <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug']) }}"
                     style="text-decoration:none; color:inherit;vertical-align:middle;">
-                    {{ e['created_at']|ts }}&nbsp;&nbsp;
-                </a>
+                    {{ e['created_at']|ts }}
+                </a>&nbsp;
                 {% if session.get('logged_in') %}
                     <a href="{{ url_for('edit_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
                     <a href="{{ url_for('delete_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Delete</a>
