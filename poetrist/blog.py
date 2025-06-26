@@ -103,7 +103,7 @@ def md_filter(text: str | None) -> Markup:
     def repl(match):
         tag = match.group(1).lower()
         href = url_for("tags", tag_list=tag)
-        return f'<a href="{href}" style="text-decoration:none;color:#F8B500">#{tag}</a>'
+        return f'<a href="{href}" style="text-decoration:none;color:#A5BA93;border-bottom:0.1px dotted currentColor;">#{tag}</a>'
 
     html = HASH_LINK_RE.sub(repl, html)
     return Markup(html)
@@ -965,7 +965,7 @@ TEMPL_PROLOG = """
     ↓
 </a>
 <div class="container" style="max-width: 60rem; margin: 3rem auto;">
-    <h1 style="margin-top:0"><a href="{{ url_for('index') }}">{{title or 'po.etr.ist'}}</a></h1>
+    <h1 style="margin-top:0;"><a href="{{ url_for('index') }}">{{title or 'po.etr.ist'}}</a></h1>
     <nav style="margin-bottom:1rem;display:flex;">
         <div>
             <a href="{{ url_for('by_kind', slug=kind_to_slug('say')) }}"
@@ -1033,12 +1033,12 @@ TEMPL_EPILOG = """
                 justify-content:space-between;  
                 border-top:1px solid #444;">
         <!-- left-hand side -->
-        <span>
+        <span style="font-weight:normal;color:#aaa">
             Built with
             <a href="https://github.com/huangziwei/poetrist"
-               style="color:#F8B500; text-decoration:none;">
-               poetrist 
-            </a><span style="font-weight:normal;">v{{ version }}</span>
+               style="color:#A5BA93;text-decoration:none;border-bottom:0.1px dotted currentColor;">
+               poetrist</a>
+               <span style="font-weight:normal;color:#aaa">v{{ version }}</span>
         </span>
 
         <!-- right-hand side -->
@@ -1290,7 +1290,7 @@ TEMPL_SETTINGS = wrap("""
     <div style="display:flex; gap:1rem; max-width:36rem; margin-top:2rem;">
         <!-- token button in its own tiny form -->
         <form method="post" style="margin:0;">
-            <button name="action" value="rotate_token" style="color:#F8B500; background:#333;">
+            <button name="action" value="rotate_token" style="color:#A5BA93; background:#333;">
                 Get new token
             </button>
         </form>
@@ -1307,7 +1307,7 @@ TEMPL_SETTINGS = wrap("""
     <!-- logout link, vertically centered -->
     <div style="display:flex; gap:1rem; max-width:36rem; margin-top:2rem;">
         <a href="{{ url_for('logout') }}"
-            style="align-self:center; color:#F8B500; text-decoration:none;">
+            style="align-self:center; color:#A5BA93; text-decoration:none;">
         ⎋ Log&nbsp;out
         </a>
     </div>
@@ -1494,9 +1494,9 @@ TEMPL_TAGS = wrap("""
                 white-space:nowrap;
                 font-size:.8em;
                 {% if t.active %}
-                    background:#F8B500; color:#000;
+                    background:#A5BA93; color:#000;
                 {% else %}
-                    background:#444; color:#F8B500;
+                    background:#444; color:#A5BA93;
                 {% endif %}">
         {{ t.name }}
         <small style="color:#888;">({{ t.cnt }})</small>
@@ -1601,7 +1601,7 @@ TEMPL_SEARCH = wrap("""
                     padding:.35em 1em;                             /* same height as input */
                     text-decoration:none; border-bottom:none;
                     {% if not loop.first %}border-left:1px solid #555;{% endif %}
-                    {% if sort==val %}background:#F8B500;color:#000;
+                    {% if sort==val %}background:#A5BA93;color:#000;
                     {% else %}background:#333;color:#eee;{% endif %}">
             {{ label }}
             </a>
@@ -1624,7 +1624,7 @@ TEMPL_SEARCH = wrap("""
     </div>
 
     {% if removed %}
-        <p style="color:#F8B500; font-size:.8em;">
+        <p style="color:#A5BA93; font-size:.8em;">
             Note: characters <code>{{ removed }}</code> were ignored in the search.
         </p>
     {% endif %}
@@ -1950,7 +1950,7 @@ TEMPL_404 = wrap("""
   <hr>
   <h2 style="margin-top:0">Page not found</h2>
   <p>The URL you asked for doesn’t exist.
-     <a href="{{ url_for('index') }}" style="color:#F8B500;">Back to the front page</a>
+     <a href="{{ url_for('index') }}" style="color:#A5BA93;">Back to the front page</a>
      or use the search box below.</p>
 {% endblock %}
 """)
@@ -1962,7 +1962,7 @@ TEMPL_500 = wrap("""
   <p>Our fault, not yours.  
      Please try again in a minute or
      <a href="https://github.com/huangziwei/poetrist/issues/new"
-        style="color:#F8B500;">report the bug</a>.</p>
+        style="color:#A5BA93;">report the bug</a>.</p>
 {% endblock %}
 """)
 
