@@ -456,12 +456,12 @@ def logout():
     session.clear()
     return redirect(url_for('index'))
 
-@app.route("/sakura-dark.css")
+@app.route("/sakura-dark.min.css")
 def sakura_dark():
     """Serve the local Sakura stylesheet with long-term caching."""
     return send_from_directory(
         Path(__file__).parent,          # directory where blog.py lives
-        "sakura-dark.css",              # the file you downloaded
+        "sakura-dark.min.css",          # the file you downloaded
         mimetype="text/css",
         max_age=60*60*24*365            # 1-year cache header
     )
