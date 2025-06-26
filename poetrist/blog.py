@@ -1679,29 +1679,37 @@ def _rfc2822(dt_str: str) -> str:
     try:
         return datetime.fromisoformat(dt_str).astimezone().strftime(RFC2822_FMT)
     except Exception:
-        return dt_str                           # fall back unchanged
+        return dt_str
 
 def _rss(entries, *, title, feed_url, site_url):
     """
-    Build a minimal RSS 2.0 document in **one** string.
-    `entries` must be an iterable of rows from the `entry` table.
+    Build a valid RSS 2.0 document (single string).
+    `entries` is an iterable of rows from the `entry` table.
     """
     items = []
     for e in entries:
-        link = url_for('entry_detail',
-                       slug=kind_to_slug(e['kind']),
-                       ts=e['slug'],
-                       _external=True)          # absolute URL
-        # Markdown → HTML (already safe; we escape around CDATA)
-        body_html = md.reset().convert(e['body'] or "")
-        items.append(f"""
+        if e["kind"] == "page":
+            continue
+
+        link = url_for(
+            "entry_detail",
+            slug=kind_to_slug(e["kind"]),
+            ts=e["slug"],
+            _external=True,            # absolute URL
+        )
+
+        body_html = md.reset().convert(e["body"] or "")
+
+        items.append(
+            f"""
         <item>
           <title>{escape(e['title'] or (e['body'][:60] + '…'))}</title>
           <link>{link}</link>
           <guid>{link}</guid>
           <pubDate>{_rfc2822(e['created_at'])}</pubDate>
           <description><![CDATA[{body_html}]]></description>
-        </item>""")
+        </item>"""
+        )
 
     return f"""<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"
@@ -1713,7 +1721,10 @@ def _rss(entries, *, title, feed_url, site_url):
     <generator>po.etr.ist</generator>
     <docs>https://validator.w3.org/feed/docs/rss2.html</docs>
     <lastBuildDate>{format_datetime(datetime.now().astimezone())}</lastBuildDate>
-    <atom:link xmlns:atom href="{feed_url}" rel="self" type="application/rss+xml"/>
+    <atom:link href="{feed_url}"
+               rel="self"
+               type="application/rss+xml" />
+
     {''.join(items)}
   </channel>
 </rss>"""
