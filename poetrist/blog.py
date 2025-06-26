@@ -1366,6 +1366,8 @@ TEMPL_DETAIL = wrap("""
 
 TEMPL_EDIT = wrap("""
 {% block body %}
+<hr>
+<h2>Edit {{ e['kind']|capitalize }}</h2>
 <form method="post">
     {% if e['kind'] in ('post','pin', 'page') %}
         <div style="position:relative;">
@@ -1452,17 +1454,18 @@ TEMPL_EDIT = wrap("""
 
 TEMPL_DELETE = wrap("""
 {% block body %}
-  <h2>Delete entry?</h2>
-  <article style="border-left:3px solid #c00; padding-left:1rem;">
-      {% if e['title'] %}<h3>{{ e['title'] }}</h3>{% endif %}
-      <p>{{ e['body']|md }}</p>
-      <small style="color:#aaa;">{{ e['created_at']|ts }}</small>
-  </article>
-  <form method="post" style="margin-top:1rem;">
-      <button style="background:#c00; color:#fff;">Yes – delete it</button>
-      <a href="{{ url_for('index') }}" style="margin-left:1rem;">Cancel</a>
-  </form>
-{% endblock %}
+    <hr>
+    <h2>Delete entry?</h2>
+    <article style="border-left:3px solid #c00; padding-left:1rem;">
+        {% if e['title'] %}<h3>{{ e['title'] }}</h3>{% endif %}
+        <p>{{ e['body']|md }}</p>
+        <small style="color:#aaa;">{{ e['created_at']|ts }}</small>
+    </article>
+    <form method="post" style="margin-top:1rem;">
+        <button style="background:#c00; color:#fff;">Yes – delete it</button>
+        <a href="{{ url_for('index') }}" style="margin-left:1rem;">Cancel</a>
+    </form>
+    {% endblock %}
 </div>
 """)
 
