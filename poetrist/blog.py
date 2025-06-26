@@ -900,7 +900,8 @@ def edit_entry(entry_id):
     # GET → render form
     return render_template_string(TEMPL_EDIT,
                                   e=row,
-                                  title='Edit')
+                                  title=get_setting('site_name', 'po.etr.ist'),
+                                )
 
 @app.route('/delete/<int:entry_id>', methods=['GET', 'POST'])
 def delete_entry(entry_id):
@@ -922,7 +923,7 @@ def delete_entry(entry_id):
 
     return render_template_string(TEMPL_DELETE,
                                   e=row,
-                                  title='Delete',
+                                  title=get_setting('site_name', 'po.etr.ist'),
                                   )
 
 ###############################################################################
