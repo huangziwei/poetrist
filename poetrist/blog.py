@@ -1033,7 +1033,7 @@ TEMPL_EPILOG = """
                 justify-content:space-between;  
                 border-top:1px solid #444;">
         <!-- left-hand side -->
-        <span style="font-weight:normal;color:#aaa">
+        <span style="font-weight:normal;color:#aaa;">
             Built with
             <a href="https://github.com/huangziwei/poetrist"
                style="color:#A5BA93;text-decoration:none;border-bottom:0.1px dotted currentColor;">
@@ -1045,7 +1045,7 @@ TEMPL_EPILOG = """
         <form action="{{ url_for('search') }}" method="get" style="margin:0;">
             <input type="search" name="q" placeholder="Search"
                    value="{{ request.args.get('q','') }}"
-                   style="font-size:.8em; padding:.2em .6em;">
+                   style="font-size:.8em; padding:.2em .6em;margin:0;">
         </form>
     </footer>
 </div> <!-- container -->
