@@ -1079,11 +1079,18 @@ TEMPL_LOGIN = wrap("""
 
 TEMPL_INDEX = wrap("""{% block body %}
     {% if session.get('logged_in') %}
-    <hr>
-    <form method=post>
-        <textarea name=body rows=3 style="width:100%;margin-bottom:0rem;" placeholder="What's on your mind?"></textarea>
-        <button>Add Say</button>
-    </form>
+        <hr style="margin:10px 0">
+        <form method="post"
+              style="display:flex;
+                     flex-direction:column;
+                     gap:10px;
+                     align-items:flex-start;">
+            <textarea name="body"
+                      rows="3"
+                      style="width:100%;margin:0"
+                      placeholder="What's on your mind?"></textarea>
+            <button>Add&nbsp;Say</button>
+        </form>
     {% endif %}
     <hr>
     {% for e in entries %}
