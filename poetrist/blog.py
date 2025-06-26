@@ -1902,6 +1902,47 @@ def search():
         username = current_username(),
     )
 
+###############################################################################
+# Error pages
+###############################################################################
+
+@app.errorhandler(404)
+def not_found(exc):
+    """Site-wide “Not Found” page."""
+    return render_template_string(TEMPL_404), 404
+
+@app.errorhandler(500)
+def internal_error(exc):
+    """
+    Generic 500 page for production.
+    • In development (`FLASK_ENV=development`) the Werkzeug debugger
+      still shows the interactive traceback, because Flask bypasses
+      this handler while debug is on.
+    """
+    # Optional: log the traceback here if you like
+    return render_template_string(TEMPL_500), 500
+
+TEMPL_404 = wrap("""
+{% block body %}
+  <hr>
+  <h2 style="margin-top:0">Page not found</h2>
+  <p>The URL you asked for doesn’t exist.
+     <a href="{{ url_for('index') }}" style="color:#F8B500;">Back to the front page</a>
+     or use the search box below.</p>
+{% endblock %}
+""")
+
+TEMPL_500 = wrap("""
+{% block body %}
+  <hr>
+  <h2 style="margin-top:0">Internal Server Error</h2>
+  <p>Our fault, not yours.  
+     Please try again in a minute or
+     <a href="https://github.com/huangziwei/poetrist/issues/new"
+        style="color:#F8B500;">report the bug</a>.</p>
+{% endblock %}
+""")
+
 
 ###############################################################################
 if __name__ == '__main__':     # Allow `python blog.py` to run the server, too
