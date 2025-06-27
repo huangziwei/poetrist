@@ -71,7 +71,6 @@ CARET_META_RE = re.compile(r'^\^(?P<key>[A-Za-z0-9_]+):"(.*?)"\s*$')
 CARET_LINK_RE = re.compile(r'\^(?P<itype>[A-Za-z0-9_]+):(?P<uuid>[A-Za-z0-9_-]{16,})')
 
 
-
 try:
     __version__ = version("poetrist")
 except PackageNotFoundError:
@@ -116,6 +115,9 @@ def md_filter(text: str | None) -> Markup:
 
     html = HASH_LINK_RE.sub(hashtag_repl, html)
 
+    def default_verb_for_type(itype: str) -> str:
+        return _TYPE_DEFAULT.get(itype, 'read')
+
     def caret_repl(m):
         itype, uuid = m.group("itype"), m.group("uuid")
         row  = get_db().execute(
@@ -123,7 +125,7 @@ def md_filter(text: str | None) -> Markup:
             ).fetchone()
         title = row["title"] if row else f"{itype.capitalize()} {uuid[:6]}"
 
-        href  = url_for("item_detail", itype=itype, slug=uuid)
+        href  = url_for("item_detail", verb=default_verb_for_type(itype), itype=itype, slug=uuid)
         return (f'<a href="{href}" '
                 'style="text-decoration:none;color:#A5BA93;'
                 'border-bottom:0.1px dotted currentColor;">'
@@ -173,10 +175,10 @@ def get_db():
         g.db.row_factory = sqlite3.Row
 
         # one-time, lazy migrations
-        ensure_updated_at()
-        ensure_slug()
-        ensure_fts()          
-        ensure_fts_trigram()
+        # ensure_updated_at()
+        # ensure_slug()
+        # ensure_fts()          
+        # ensure_fts_trigram()
         ensure_items()
         ensure_item_slug()
 
@@ -2069,6 +2071,28 @@ TEMPL_500 = wrap("""
 ###############################################################################
 # Check-ins
 ###############################################################################
+_CANON = {
+    'read'   : {'read', 'reading', 'to-read', 'reread', 'rereading'},
+    'watch'  : {'watch', 'watching', 'watched', 'to-watch',
+                'rewatch', 'rewatching'},
+    'play'   : {'play', 'playing', 'played', 'to-play',
+                'replay', 'replaying'},
+    'listen' : {'listen', 'listening', 'listened', 'to-listen',
+                'relisten', 'relistening'},
+}
+# reverse lookup  →  'reading'  → 'read'
+_TO_CANON = {v: k for k, s in _CANON.items() for v in s}
+
+_TYPE_DEFAULT = {'book': 'read', 'movie': 'watch',
+                 'game': 'play', 'album': 'listen'}
+
+def canonical_verb(v: str, *, itype: str | None = None) -> str:
+    """best-effort → 'reading' → 'read' ; fall back to type default"""
+    v = v.lower()
+    if v in _TO_CANON:
+        return _TO_CANON[v]
+    return _TYPE_DEFAULT.get(itype or '', v)      # last fallback = unchanged
+
 
 def process_checkin(body: str, *, db):
     """
@@ -2118,15 +2142,16 @@ def process_checkin(body: str, *, db):
     new_body = "\n".join(keep).strip()
     return new_body, item_id, main_match["action"]
 
-class MediaTypeConverter(BaseConverter):
-    # only these words are accepted as the *first* segment
-    regex = r'book|movie|game|album'
+@app.route('/<verb>/<itype>/<slug>')
+def item_detail(verb, itype, slug):
+    verb_c = canonical_verb(verb, itype=itype)
 
-app.url_map.converters['mt'] = MediaTypeConverter
+    # ── 301 if user hit a synonym ----------------------------------
+    if verb_c != verb:
+        return redirect(url_for('item_detail',
+                                verb=verb_c, itype=itype, slug=slug), code=301)
 
-@app.route('/<mt:itype>/<slug>')
-def item_detail(itype, slug):
-    db   = get_db()
+    db = get_db()
     item = db.execute(
         "SELECT * FROM item WHERE type=? AND (slug=? OR uuid=?)",
         (itype, slug, slug)
@@ -2134,9 +2159,9 @@ def item_detail(itype, slug):
     if not item:
         abort(404)
 
-    meta   = db.execute(
-               "SELECT key,value FROM item_meta WHERE item_id=?", (item["id"],)
-             ).fetchall()
+    meta = db.execute(
+        "SELECT key,value FROM item_meta WHERE item_id=?", (item["id"],)
+    ).fetchall()
     checks = db.execute("""
             SELECT e.*, c.action
               FROM checkin  c
@@ -2147,16 +2172,20 @@ def item_detail(itype, slug):
     return render_template_string(
         TEMPL_ITEM,
         item=item, meta=meta, checks=checks,
-        title=f'{item["title"]} – {get_setting("site_name","po.etr.ist")}',
-        username=current_username(), kind="item"
+        title=get_setting('site_name','po.etr.ist'),
+        username=current_username(), kind="item",
+        verb=verb_c                         
     )
 
-@app.route('/edit-item/<int:item_id>', methods=['GET', 'POST'])
-def edit_item(item_id):
+@app.route('/<verb>/<itype>/<slug>/edit',   methods=['GET', 'POST'])
+def edit_item(verb, itype, slug):
     login_required()
-
-    db   = get_db()
-    item = db.execute("SELECT * FROM item WHERE id=?", (item_id,)).fetchone()
+    verb_c = canonical_verb(verb, itype=itype)
+    db     = get_db()
+    item   = db.execute(
+                "SELECT * FROM item WHERE type=? AND (slug=? OR uuid=?)",
+                (itype, slug, slug)
+             ).fetchone()
     if not item:
         abort(404)
 
@@ -2166,16 +2195,16 @@ def edit_item(item_id):
 
         if not title:
             flash('Title is required.')
-            return redirect(url_for('edit_item', item_id=item_id))
+            return redirect(url_for('edit_item', verb=verb_c, itype=itype, slug=slug))
 
         # save
         db.execute("UPDATE item SET title=?, slug=? WHERE id=?",
-                   (title, slug, item_id))
+                   (title, slug, item['id']))
         db.commit()
 
         # go back to the detail page (prefer pretty slug, fall back to uuid)
         dest = slug or item['uuid']
-        return redirect(url_for('item_detail', itype=item['type'], slug=dest))
+        return redirect(url_for('item_detail', verb=verb_c, itype=item['type'], slug=dest))
 
     # GET → render form
     return render_template_string(
@@ -2185,6 +2214,29 @@ def edit_item(item_id):
         username = current_username(),
         kind  = 'item'
     )
+
+
+@app.route('/<verb>/<itype>/<slug>/delete', methods=['GET', 'POST'])
+def delete_item(verb, itype, slug):
+    login_required()
+    verb_c = canonical_verb(verb, itype=itype)
+    db     = get_db()
+    item   = db.execute(
+                "SELECT * FROM item WHERE type=? AND (slug=? OR uuid=?)",
+                (itype, slug, slug)
+             ).fetchone()
+    if not item:
+        abort(404)
+
+    if request.method == 'POST':
+        db.execute("DELETE FROM item WHERE id=?", (item['id'],))
+        db.commit()
+        return redirect(url_for('index'))
+
+    return render_template_string(TEMPL_DELETE_ITEM,
+                                  item=item,
+                                  title=get_setting('site_name','po.etr.ist'),
+                                  verb=verb_c)
 
 TEMPL_ITEM = wrap("""
 {% block body %}
@@ -2207,7 +2259,7 @@ TEMPL_ITEM = wrap("""
 
     {% if session.get('logged_in') %}
         <p style="font-size:.8em;">
-            <a href="{{ url_for('edit_item', item_id=item['id']) }}">Edit item</a>
+            <a href="{{ url_for('edit_item', verb=verb, itype=item['type'], slug=item['slug'] or item['uuid']) }}">Edit item</a>
         </p>
     {% endif %}
 
@@ -2220,15 +2272,11 @@ TEMPL_ITEM = wrap("""
                 <small style="color:#aaa;">
                     {{ c['action'] }} – 
                     <a href="{{ url_for('entry_detail',
-                                        slug=kind_to_slug(c['kind']),
-                                        ts=c['slug']) }}"
+                                        kind_slug=kind_to_slug(c['kind']),
+                                        entry_slug=c['slug']) }}"
                        style="text-decoration:none; color:inherit;">
                         {{ c['created_at']|ts }}
                     </a>
-                    {% if session.get('logged_in') %}
-                        &nbsp;·&nbsp;
-                        <a href="{{ url_for('edit_entry', entry_id=c['id']) }}">Edit</a>
-                    {% endif %}
                 </small>
             </article>
         {% endfor %}
@@ -2249,12 +2297,13 @@ TEMPL_EDIT_ITEM = wrap("""
         </label>
 
         <label style="display:block;margin:.5rem 0;">
-            <span style="font-size:.8em;color:#aaa;">Slug (optional)</span><br>
+            <span style="font-size:.8em;color:#aaa;">Slug&nbsp;(optional)</span><br>
             <input name="slug" value="{{ item['slug'] or '' }}" style="width:100%;">
         </label>
 
         <button>Save</button>
         <a href="{{ url_for('item_detail',
+                            verb=verb,
                             itype=item['type'],
                             slug=item['slug'] or item['uuid']) }}"
            style="margin-left:1rem;">Cancel</a>
@@ -2262,6 +2311,29 @@ TEMPL_EDIT_ITEM = wrap("""
 {% endblock %}
 """)
 
+
+TEMPL_DELETE_ITEM = wrap("""
+{% block body %}
+    <hr>
+    <h2>Delete item?</h2>
+
+    <article style="border-left:3px solid #c00; padding-left:1rem;">
+        <h3>{{ item['title'] }}</h3>
+        <small style="color:#aaa;">
+            {{ item['created_at']|ts }}
+        </small>
+    </article>
+
+    <form method="post" style="margin-top:1rem;">
+        <button style="background:#c00; color:#fff;">Yes – delete it</button>
+        <a href="{{ url_for('item_detail',
+                            verb=verb,
+                            itype=item['type'],
+                            slug=item['slug'] or item['uuid']) }}"
+           style="margin-left:1rem;">Cancel</a>
+    </form>
+{% endblock %}
+""")
 
 
 ###############################################################################
