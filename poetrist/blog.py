@@ -1590,27 +1590,26 @@ TEMPL_SEARCH = wrap("""
         {# ─── sort pills ────────────────────────────────────────────── #}
         <details style="display:inline-block;           
                         position:relative;              
-                        font-size:.8em;">
+                        font-size:.8em;">            
             <summary style="display:flex; align-items:center; cursor:pointer; list-style:none; 
                             padding:.35em 1em;
                             border:1px solid #555; border-radius:4px;
                             background:{% if sort %}#aaa{% else %}#333{% endif %};
                             color:{% if sort %}#000{% else %}#eee{% endif %};">
                 {{ {'rel':'Relevance','new':'Newest','old':'Oldest'}[sort] }}
-                <span style="font-size:0.85rem;margin-left:.4em;line-height:1;">▼</span>        
             </summary>
             <div style="position:absolute; left:0; top:calc(100% + .25em);
                         background:#333; border:1px solid #555; border-radius:4px;
                         z-index:10; min-width:100%; white-space:nowrap;">
                 {% for val, label in [('rel','Relevance'),('new','Newest'),('old','Oldest')] %}
-                    {% if val != sort %}
                     <a href="{{ url_for('search', q=query, sort=val) }}"
                     style="display:block; padding:.35em 1em;
-                            color:#eee; text-decoration:none;
-                            border-bottom:1px solid #555;">
+                            color:{% if sort == val %}#000{% else %}#eee{% endif %}; text-decoration:none;
+                            border-bottom:1px solid #555;
+                            background:{% if sort == val %}#aaa{% else %}#333{% endif %};
+                            ">
                         {{ label }}
                     </a>
-                    {% endif %}
                 {% endfor %}
             </div>
         </details>
