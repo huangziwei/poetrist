@@ -40,7 +40,6 @@ from flask import (
     url_for,
 )
 from markupsafe import Markup
-from werkzeug.routing import BaseConverter
 from werkzeug.security import check_password_hash, generate_password_hash
 
 ################################################################################
@@ -62,14 +61,6 @@ HASH_LINK_RE = re.compile(r'(?<![A-Za-z0-9_])#([\w\-]+)')
 RFC2822_FMT = "%a, %d %b %Y %H:%M:%S %z"
 _TOKEN_CHARS = r"0-9A-Za-z\u0080-\uFFFF_"          # what unicode61 keeps
 TOKEN_RE     = re.compile(f"[{_TOKEN_CHARS}]+")
-CARET_MAIN_RE = re.compile(
-    r'^\^(?P<action>[A-Za-z0-9_]+):'
-    r'(?P<itype>[A-Za-z0-9_]+):'
-    r'"(?P<title>[^"]+)"\s*$'
-)
-CARET_META_RE = re.compile(r'^\^(?P<key>[A-Za-z0-9_]+):"(.*?)"\s*$')
-CARET_LINK_RE = re.compile(r'\^(?P<itype>[A-Za-z0-9_]+):(?P<uuid>[A-Za-z0-9_-]{16,})')
-
 
 try:
     __version__ = version("poetrist")
@@ -114,24 +105,6 @@ def md_filter(text: str | None) -> Markup:
         return f'<a href="{href}" style="text-decoration:none;color:#A5BA93;border-bottom:0.1px dotted currentColor;">#{tag}</a>'
 
     html = HASH_LINK_RE.sub(hashtag_repl, html)
-
-    def default_verb_for_type(itype: str) -> str:
-        return _TYPE_DEFAULT.get(itype, 'read')
-
-    def caret_repl(m):
-        itype, uuid = m.group("itype"), m.group("uuid")
-        row  = get_db().execute(
-                "SELECT title FROM item WHERE type=? AND uuid=?", (itype, uuid)
-            ).fetchone()
-        title = row["title"] if row else f"{itype.capitalize()} {uuid[:6]}"
-
-        href  = url_for("item_detail", verb=default_verb_for_type(itype), itype=itype, slug=uuid)
-        return (f'<a href="{href}" '
-                'style="text-decoration:none;color:#A5BA93;'
-                'border-bottom:0.1px dotted currentColor;">'
-                f'{escape(title)}</a>')
-    
-    html = CARET_LINK_RE.sub(caret_repl, html)
 
     return Markup(html)
 
@@ -775,18 +748,10 @@ def index():
             now = now_dt.isoformat(timespec='seconds')
             slug = now_dt.strftime("%Y%m%d%H%M%S")
 
-            body, item_id, action = process_checkin(body, db=db)
-
             db.execute("""INSERT INTO entry (body, created_at, slug, kind)
                           VALUES (?,?,?,?)""",
                        (body, now, slug, kind))
             entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-
-            if item_id:
-                db.execute("""INSERT OR IGNORE INTO checkin
-                            (entry_id, item_id, action, created_at)
-                            VALUES (?,?,?,?)""",
-                        (entry_id, item_id, action, now))
 
             sync_tags(entry_id, extract_tags(body), db=db)
             db.commit()
@@ -798,6 +763,7 @@ def index():
     ps   = page_size()
 
     BASE_SQL = "SELECT * FROM entry WHERE kind!='page' ORDER BY created_at DESC"
+
     entries, total_pages = paginate(BASE_SQL, (), page=page, per_page=ps, db=db)
 
     pages = list(range(1, total_pages+1))
@@ -2067,274 +2033,6 @@ TEMPL_500 = wrap("""
         style="color:#A5BA93;">report the bug</a>.</p>
 {% endblock %}
 """)
-
-###############################################################################
-# Check-ins
-###############################################################################
-_CANON = {
-    'read'   : {'read', 'reading', 'to-read', 'reread', 'rereading'},
-    'watch'  : {'watch', 'watching', 'watched', 'to-watch',
-                'rewatch', 'rewatching'},
-    'play'   : {'play', 'playing', 'played', 'to-play',
-                'replay', 'replaying'},
-    'listen' : {'listen', 'listening', 'listened', 'to-listen',
-                'relisten', 'relistening'},
-}
-# reverse lookup  →  'reading'  → 'read'
-_TO_CANON = {v: k for k, s in _CANON.items() for v in s}
-
-_TYPE_DEFAULT = {'book': 'read', 'movie': 'watch',
-                 'game': 'play', 'album': 'listen'}
-
-def canonical_verb(v: str, *, itype: str | None = None) -> str:
-    """best-effort → 'reading' → 'read' ; fall back to type default"""
-    v = v.lower()
-    if v in _TO_CANON:
-        return _TO_CANON[v]
-    return _TYPE_DEFAULT.get(itype or '', v)      # last fallback = unchanged
-
-
-def process_checkin(body: str, *, db):
-    """
-    Detect a caret block, create/fetch the item + checkin rows and
-    return the body with the block stripped / rewritten.
-    """
-    lines      = body.splitlines()
-    main_idx   = None
-    main_match = None
-    meta       = {}
-
-    for i, ln in enumerate(lines):
-        if main_idx is None and (m := CARET_MAIN_RE.match(ln)):
-            main_idx, main_match = i, m
-        elif CARET_META_RE.match(ln):
-            k, v = CARET_META_RE.match(ln).groups()
-            meta[k.lower()] = v
-
-    if main_match is None:
-        return body, None, None        # not a check-in
-
-    # 1. Create / fetch item
-    itype, title = main_match["itype"], main_match["title"]
-    row = db.execute("SELECT id, uuid FROM item WHERE type=? AND title=?",
-                     (itype, title)).fetchone()
-    if row:
-        item_id, uuid = row["id"], row["uuid"]
-    else:
-        uuid    = secrets.token_urlsafe(12)
-        now_iso = local_now().isoformat(timespec='seconds')
-        db.execute("INSERT INTO item(uuid,type,title,created_at) VALUES(?,?,?,?)",
-                   (uuid, itype, title, now_iso))
-        item_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-        for k, v in meta.items():
-            db.execute("INSERT INTO item_meta VALUES(?,?,?)", (item_id, k, v))
-        db.commit()
-
-    # 2. Replace caret block in the Say
-    keep = []
-    for i, ln in enumerate(lines):
-        if i == main_idx:
-            keep.append(f"^{itype}:{uuid}")          # compact reference
-        elif i > main_idx and ln.startswith('^'):
-            continue                                 # drop meta lines
-        else:
-            keep.append(ln)
-    new_body = "\n".join(keep).strip()
-    return new_body, item_id, main_match["action"]
-
-@app.route('/<verb>/<itype>/<slug>')
-def item_detail(verb, itype, slug):
-    verb_c = canonical_verb(verb, itype=itype)
-
-    # ── 301 if user hit a synonym ----------------------------------
-    if verb_c != verb:
-        return redirect(url_for('item_detail',
-                                verb=verb_c, itype=itype, slug=slug), code=301)
-
-    db = get_db()
-    item = db.execute(
-        "SELECT * FROM item WHERE type=? AND (slug=? OR uuid=?)",
-        (itype, slug, slug)
-    ).fetchone()
-    if not item:
-        abort(404)
-
-    meta = db.execute(
-        "SELECT key,value FROM item_meta WHERE item_id=?", (item["id"],)
-    ).fetchall()
-    checks = db.execute("""
-            SELECT e.*, c.action
-              FROM checkin  c
-              JOIN entry    e ON e.id = c.entry_id
-             WHERE c.item_id=?
-             ORDER BY e.created_at DESC""", (item["id"],)).fetchall()
-
-    return render_template_string(
-        TEMPL_ITEM,
-        item=item, meta=meta, checks=checks,
-        title=get_setting('site_name','po.etr.ist'),
-        username=current_username(), kind="item",
-        verb=verb_c                         
-    )
-
-@app.route('/<verb>/<itype>/<slug>/edit',   methods=['GET', 'POST'])
-def edit_item(verb, itype, slug):
-    login_required()
-    verb_c = canonical_verb(verb, itype=itype)
-    db     = get_db()
-    item   = db.execute(
-                "SELECT * FROM item WHERE type=? AND (slug=? OR uuid=?)",
-                (itype, slug, slug)
-             ).fetchone()
-    if not item:
-        abort(404)
-
-    if request.method == 'POST':
-        title = request.form.get('title', '').strip()
-        slug  = request.form.get('slug',  '').strip() or None
-
-        if not title:
-            flash('Title is required.')
-            return redirect(url_for('edit_item', verb=verb_c, itype=itype, slug=slug))
-
-        # save
-        db.execute("UPDATE item SET title=?, slug=? WHERE id=?",
-                   (title, slug, item['id']))
-        db.commit()
-
-        # go back to the detail page (prefer pretty slug, fall back to uuid)
-        dest = slug or item['uuid']
-        return redirect(url_for('item_detail', verb=verb_c, itype=item['type'], slug=dest))
-
-    # GET → render form
-    return render_template_string(
-        TEMPL_EDIT_ITEM,
-        item  = item,
-        title = get_setting('site_name', 'po.etr.ist'),
-        username = current_username(),
-        kind  = 'item'
-    )
-
-
-@app.route('/<verb>/<itype>/<slug>/delete', methods=['GET', 'POST'])
-def delete_item(verb, itype, slug):
-    login_required()
-    verb_c = canonical_verb(verb, itype=itype)
-    db     = get_db()
-    item   = db.execute(
-                "SELECT * FROM item WHERE type=? AND (slug=? OR uuid=?)",
-                (itype, slug, slug)
-             ).fetchone()
-    if not item:
-        abort(404)
-
-    if request.method == 'POST':
-        db.execute("DELETE FROM item WHERE id=?", (item['id'],))
-        db.commit()
-        return redirect(url_for('index'))
-
-    return render_template_string(TEMPL_DELETE_ITEM,
-                                  item=item,
-                                  title=get_setting('site_name','po.etr.ist'),
-                                  verb=verb_c)
-
-TEMPL_ITEM = wrap("""
-{% block body %}
-    <hr>
-    <h2 style="margin-top:0;">{{ item['title'] }}</h2>
-
-    {# ───── meta data table ───── #}
-    {% if meta %}
-        <table style="font-size:.9em; margin-bottom:1rem; border-collapse:collapse;">
-        {% for row in meta %}
-            <tr>
-                <td style="padding:.2em .6em; color:#888; vertical-align:top;">
-                    {{ row['key'].capitalize() }}
-                </td>
-                <td style="padding:.2em .6em;">{{ row['value'] }}</td>
-            </tr>
-        {% endfor %}
-        </table>
-    {% endif %}
-
-    {% if session.get('logged_in') %}
-        <p style="font-size:.8em;">
-            <a href="{{ url_for('edit_item', verb=verb, itype=item['type'], slug=item['slug'] or item['uuid']) }}">Edit item</a>
-        </p>
-    {% endif %}
-
-    <h3 style="margin-top:2rem;">Check-ins</h3>
-    {% if checks %}
-        {% for c in checks %}
-            <article style="padding-bottom:1.5rem;
-                            {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
-                <p>{{ c['body']|md }}</p>
-                <small style="color:#aaa;">
-                    {{ c['action'] }} – 
-                    <a href="{{ url_for('entry_detail',
-                                        kind_slug=kind_to_slug(c['kind']),
-                                        entry_slug=c['slug']) }}"
-                       style="text-decoration:none; color:inherit;">
-                        {{ c['created_at']|ts }}
-                    </a>
-                </small>
-            </article>
-        {% endfor %}
-    {% else %}
-        <p>No check-ins yet.</p>
-    {% endif %}
-{% endblock %}
-""")
-
-TEMPL_EDIT_ITEM = wrap("""
-{% block body %}
-    <hr>
-    <h2>Edit item</h2>
-    <form method="post" style="max-width:30rem;">
-        <label style="display:block;margin:.5rem 0;">
-            <span style="font-size:.8em;color:#aaa;">Title</span><br>
-            <input name="title" value="{{ item['title'] }}" style="width:100%;">
-        </label>
-
-        <label style="display:block;margin:.5rem 0;">
-            <span style="font-size:.8em;color:#aaa;">Slug&nbsp;(optional)</span><br>
-            <input name="slug" value="{{ item['slug'] or '' }}" style="width:100%;">
-        </label>
-
-        <button>Save</button>
-        <a href="{{ url_for('item_detail',
-                            verb=verb,
-                            itype=item['type'],
-                            slug=item['slug'] or item['uuid']) }}"
-           style="margin-left:1rem;">Cancel</a>
-    </form>
-{% endblock %}
-""")
-
-
-TEMPL_DELETE_ITEM = wrap("""
-{% block body %}
-    <hr>
-    <h2>Delete item?</h2>
-
-    <article style="border-left:3px solid #c00; padding-left:1rem;">
-        <h3>{{ item['title'] }}</h3>
-        <small style="color:#aaa;">
-            {{ item['created_at']|ts }}
-        </small>
-    </article>
-
-    <form method="post" style="margin-top:1rem;">
-        <button style="background:#c00; color:#fff;">Yes – delete it</button>
-        <a href="{{ url_for('item_detail',
-                            verb=verb,
-                            itype=item['type'],
-                            slug=item['slug'] or item['uuid']) }}"
-           style="margin-left:1rem;">Cancel</a>
-    </form>
-{% endblock %}
-""")
-
 
 ###############################################################################
 if __name__ == '__main__':     
