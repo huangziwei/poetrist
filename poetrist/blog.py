@@ -40,6 +40,7 @@ from flask import (
     url_for,
 )
 from markupsafe import Markup
+from werkzeug.routing import BaseConverter
 from werkzeug.security import check_password_hash, generate_password_hash
 
 ################################################################################
@@ -61,6 +62,14 @@ HASH_LINK_RE = re.compile(r'(?<![A-Za-z0-9_])#([\w\-]+)')
 RFC2822_FMT = "%a, %d %b %Y %H:%M:%S %z"
 _TOKEN_CHARS = r"0-9A-Za-z\u0080-\uFFFF_"          # what unicode61 keeps
 TOKEN_RE     = re.compile(f"[{_TOKEN_CHARS}]+")
+CARET_MAIN_RE = re.compile(
+    r'^\^(?P<action>[A-Za-z0-9_]+):'
+    r'(?P<itype>[A-Za-z0-9_]+):'
+    r'"(?P<title>[^"]+)"\s*$'
+)
+CARET_META_RE = re.compile(r'^\^(?P<key>[A-Za-z0-9_]+):"(.*?)"\s*$')
+CARET_LINK_RE = re.compile(r'\^(?P<itype>[A-Za-z0-9_]+):(?P<uuid>[A-Za-z0-9_-]{16,})')
+
 
 
 try:
@@ -100,12 +109,28 @@ def md_filter(text: str | None) -> Markup:
     html = md.reset().convert(text or "")
 
     # post-process the generated HTML
-    def repl(match):
+    def hashtag_repl(match):
         tag = match.group(1).lower()
         href = url_for("tags", tag_list=tag)
         return f'<a href="{href}" style="text-decoration:none;color:#A5BA93;border-bottom:0.1px dotted currentColor;">#{tag}</a>'
 
-    html = HASH_LINK_RE.sub(repl, html)
+    html = HASH_LINK_RE.sub(hashtag_repl, html)
+
+    def caret_repl(m):
+        itype, uuid = m.group("itype"), m.group("uuid")
+        row  = get_db().execute(
+                "SELECT title FROM item WHERE type=? AND uuid=?", (itype, uuid)
+            ).fetchone()
+        title = row["title"] if row else f"{itype.capitalize()} {uuid[:6]}"
+
+        href  = url_for("item_detail", itype=itype, slug=uuid)
+        return (f'<a href="{href}" '
+                'style="text-decoration:none;color:#A5BA93;'
+                'border-bottom:0.1px dotted currentColor;">'
+                f'{escape(title)}</a>')
+    
+    html = CARET_LINK_RE.sub(caret_repl, html)
+
     return Markup(html)
 
 @app.template_filter("ts")
@@ -152,6 +177,8 @@ def get_db():
         ensure_slug()
         ensure_fts()          
         ensure_fts_trigram()
+        ensure_items()
+        ensure_item_slug()
 
     return g.db
 
@@ -253,6 +280,31 @@ def ensure_slug():
             db.execute("UPDATE entry SET slug=? WHERE id=?", (ts, row["id"]))
         db.commit()
 
+def ensure_item_slug():
+    db = get_db()
+
+    # 1 · column present?
+    col = db.execute("PRAGMA table_info(item);").fetchall()
+    if not any(c["name"] == "slug" for c in col):
+        db.execute("ALTER TABLE item ADD COLUMN slug TEXT;")   # no UNIQUE here
+
+    # 2 · unique index present?
+    idx = db.execute("""
+        SELECT name
+          FROM sqlite_master
+         WHERE type='index' AND name='item_slug_uq'
+    """).fetchone()
+    if not idx:
+        db.execute("""
+            /* one non-null slug per item */
+            CREATE UNIQUE INDEX item_slug_uq
+                   ON item(slug)
+                WHERE slug IS NOT NULL;
+        """)
+
+    db.commit()
+
+
 def ensure_fts():
     """
     Create the entry_fts virtual table + sync triggers if they are missing,
@@ -352,6 +404,45 @@ def ensure_fts_trigram():
         END;
     """)
     db.commit()
+
+def ensure_items():
+    """
+    Create tables that power the ^check-in syntax.
+      • item     … one row per book / movie / game / album / …
+      • item_meta… arbitrary key/value pairs (author, year, ISBN…)
+      • checkin  … link a Say/Post/… to an item with an *action*
+    """
+    db = get_db()
+    if db.execute("SELECT name FROM sqlite_master WHERE name='item'").fetchone():
+        return                     # already migrated
+
+    db.executescript("""
+        CREATE TABLE item (
+            id     INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid   TEXT UNIQUE NOT NULL,
+            type   TEXT NOT NULL,              -- book / movie / game …
+            title  TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE item_meta (
+            item_id INTEGER NOT NULL,
+            key     TEXT NOT NULL,
+            value   TEXT,
+            PRIMARY KEY(item_id, key),
+            FOREIGN KEY (item_id) REFERENCES item(id) ON DELETE CASCADE
+        );
+        CREATE TABLE checkin (
+            entry_id INTEGER NOT NULL,
+            item_id  INTEGER NOT NULL,
+            action   TEXT NOT NULL,            -- reading / rereading / play …
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(entry_id, item_id),
+            FOREIGN KEY (entry_id) REFERENCES entry(id) ON DELETE CASCADE,
+            FOREIGN KEY (item_id)  REFERENCES item(id)  ON DELETE CASCADE
+        );
+    """)
+    db.commit()
+
 
 # -------------------------------------------------------------------------
 # Time helpers
@@ -675,16 +766,26 @@ def index():
     if request.method == 'POST':
         login_required()
         body = request.form['body'].strip()
+
         if body:
             kind  = infer_kind('', '')
             now_dt  = local_now()
             now = now_dt.isoformat(timespec='seconds')
             slug = now_dt.strftime("%Y%m%d%H%M%S")
 
+            body, item_id, action = process_checkin(body, db=db)
+
             db.execute("""INSERT INTO entry (body, created_at, slug, kind)
                           VALUES (?,?,?,?)""",
                        (body, now, slug, kind))
             entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+            if item_id:
+                db.execute("""INSERT OR IGNORE INTO checkin
+                            (entry_id, item_id, action, created_at)
+                            VALUES (?,?,?,?)""",
+                        (entry_id, item_id, action, now))
+
             sync_tags(entry_id, extract_tags(body), db=db)
             db.commit()
             return redirect(url_for('index'))
@@ -831,17 +932,16 @@ def settings():
         new_token  = new_token
     )
 
-@app.route('/<slug>/<ts>')
-def entry_detail(slug, ts):
-    kind = slug_to_kind(slug)
-    if kind not in ('say', 'post', 'pin'):
+@app.route('/<kind_slug>/<entry_slug>')
+def entry_detail(kind_slug, entry_slug):
+    kind = slug_to_kind(kind_slug)
+    if kind not in KINDS[:-1]:
         abort(404)
 
     row = get_db().execute(
         "SELECT * FROM entry WHERE kind=? AND slug=?",
-        (kind, ts)
+        (kind, entry_slug)
     ).fetchone()
-
     if not row:
         abort(404)
 
@@ -853,12 +953,14 @@ def entry_detail(slug, ts):
         kind=row['kind']
     )
 
-@app.route('/edit/<int:entry_id>', methods=['GET', 'POST'])
-def edit_entry(entry_id):
+@app.route('/<kind_slug>/<entry_slug>/edit', methods=['GET', 'POST'])
+def edit_entry(kind_slug, entry_slug):
     login_required()
+    kind = slug_to_kind(kind_slug)
+    db   = get_db()
 
-    db  = get_db()
-    row = db.execute('SELECT * FROM entry WHERE id=?', (entry_id,)).fetchone()
+    row  = db.execute("SELECT * FROM entry WHERE kind=? AND slug=?",
+                      (kind, entry_slug)).fetchone()
     if not row:
         abort(404)
 
@@ -866,65 +968,53 @@ def edit_entry(entry_id):
         title = request.form.get('title','').strip() or None
         body  = request.form['body'].strip()
         link  = request.form.get('link','').strip() or None
-        new_slug = request.form.get('slug', '').strip() or row['slug']
+        new_slug = request.form.get('slug','').strip() or row['slug']
+        new_kind = ('page' if request.form.get('is_page') == '1'
+                    else infer_kind(title, link))
 
         if not body:
             flash('Body is required.')
-            return redirect(url_for('edit_entry', entry_id=entry_id))
+            return redirect(request.url)
 
-        form_flag = request.form.get('is_page')          
-
-        if form_flag is None:            
-            new_kind = row['kind']
-        elif form_flag == "1":              
-            new_kind = 'page'
-        else:                   
-            new_kind = infer_kind(title, link)
-
-        # --- update live row ---
         db.execute("""UPDATE entry
-                         SET title=?,
-                             body=?,
-                             link=?,
-                             slug=?,
-                             kind=?,
-                             updated_at=?
+                         SET title=?, body=?, link=?, slug=?, kind=?, updated_at=?
                        WHERE id=?""",
                    (title, body, link, new_slug, new_kind,
                     local_now().isoformat(timespec='seconds'),
-                    entry_id))
-        sync_tags(entry_id, extract_tags(body), db=db)
+                    row['id']))
+        sync_tags(row['id'], extract_tags(body), db=db)
         db.commit()
-        return redirect(url_for('index'))
 
-    # GET → render form
+        return redirect(url_for('entry_detail',
+                                kind_slug=kind_to_slug(new_kind),
+                                entry_slug=new_slug))
+
     return render_template_string(TEMPL_EDIT,
                                   e=row,
-                                  title=get_setting('site_name', 'po.etr.ist'),
-                                )
+                                  title=get_setting('site_name', 'po.etr.ist'))
 
-@app.route('/delete/<int:entry_id>', methods=['GET', 'POST'])
-def delete_entry(entry_id):
+@app.route('/<kind_slug>/<entry_slug>/delete', methods=['GET', 'POST'])
+def delete_entry(kind_slug, entry_slug):
     login_required()
-    db  = get_db()
+    kind = slug_to_kind(kind_slug)
+    db   = get_db()
 
-    # ── Step 2: POST → actually delete ───────────────────────────────────────
-    if request.method == 'POST':
-        db.execute('DELETE FROM entry WHERE id=?', (entry_id,))
-        db.commit()
-        db.execute("DELETE FROM tag WHERE id NOT IN (SELECT DISTINCT tag_id FROM entry_tag)")
-        db.commit()
-        return redirect(url_for('index'))
-
-    # ── Step 1: GET  → show lightweight confirm page ─────────────────────────
-    row = db.execute('SELECT * FROM entry WHERE id=?', (entry_id,)).fetchone()
+    row = db.execute("SELECT * FROM entry WHERE kind=? AND slug=?",
+                     (kind, entry_slug)).fetchone()
     if not row:
         abort(404)
 
+    if request.method == 'POST':
+        db.execute('DELETE FROM entry WHERE id=?', (row['id'],))
+        db.commit()
+        db.execute("DELETE FROM tag WHERE id NOT IN "
+                   "(SELECT DISTINCT tag_id FROM entry_tag)")
+        db.commit()
+        return redirect(url_for('index'))
+
     return render_template_string(TEMPL_DELETE,
                                   e=row,
-                                  title=get_setting('site_name', 'po.etr.ist'),
-                                  )
+                                  title=get_setting('site_name', 'po.etr.ist'))
 
 ###############################################################################
 # Embedde​d templates
@@ -1123,13 +1213,13 @@ TEMPL_INDEX = wrap("""{% block body %}
                    {{ e['kind'] }}
                 </a>
             </span>
-            <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug']) }}"
+            <a href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
                 style="text-decoration:none; color:inherit;vertical-align:middle;">
                 {{ e['created_at']|ts }}
             </a>&nbsp;
             {% if session.get('logged_in') %}
-                <a href="{{ url_for('edit_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
-                <a href="{{ url_for('delete_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Delete</a>
+                <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
+                <a href="{{ url_for('delete_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Delete</a>
             {% endif %}
         </small>
     </article>
@@ -1206,13 +1296,13 @@ TEMPL_LIST = wrap("""
                     {{ e['kind'] }}
                     </a>
                 </span>
-                <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug']) }}"
+                <a href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
                     style="text-decoration:none; color:inherit;vertical-align:middle;">
                     {{ e['created_at']|ts }}
                 </a>&nbsp;
                 {% if session.get('logged_in') %}
-                    <a href="{{ url_for('edit_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
-                    <a href="{{ url_for('delete_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Delete</a>
+                    <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
+                    <a href="{{ url_for('delete_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Delete</a>
                 {% endif %}
             </small>
         </article>
@@ -1351,9 +1441,7 @@ TEMPL_DETAIL = wrap("""
                 </a>
             </span>
             {# — timestamp — #}
-            <a href="{{ url_for('entry_detail',
-                                slug=kind_to_slug(e['kind']),
-                                ts=e['slug']) }}"
+            <a href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
                 style="text-decoration:none; color:inherit; vertical-align:middle;">
                 {{ e['created_at']|ts }}
             </a>
@@ -1361,9 +1449,9 @@ TEMPL_DETAIL = wrap("""
             <span style="vertical-align:middle;">&nbsp;by&nbsp;{{ username }}</span>&nbsp;&nbsp;
             {# — edit/delete (admin only) — #}
             {% if session.get('logged_in') %}
-                <a href="{{ url_for('edit_entry', entry_id=e['id']) }}"
+                <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
                     style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
-                <a href="{{ url_for('delete_entry', entry_id=e['id']) }}"
+                <a href="{{ url_for('delete_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
                     style="vertical-align:middle;">Delete</a>
             {% endif %}
             </small>
@@ -1530,13 +1618,13 @@ TEMPL_TAGS = wrap("""
                 ">
                     {{ e['kind'] }}
                 </span>
-                <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug']) }}"
+                <a href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
                     style="text-decoration:none; color:inherit;vertical-align:middle;">
                     {{ e['created_at']|ts }}
                 </a>&nbsp;
                 {% if session.get('logged_in') %}
-                    <a href="{{ url_for('edit_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
-                    <a href="{{ url_for('delete_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Delete</a>
+                    <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
+                    <a href="{{ url_for('delete_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Delete</a>
                 {% endif %}
             </small>
         </article>
@@ -1569,8 +1657,12 @@ TEMPL_PAGE = wrap("""
   <p>{{ e['body']|md }}</p>
   {% if session.get('logged_in') %}
       <small>
-          <a href="{{ url_for('edit_entry', entry_id=e['id']) }}">Edit</a> |
-          <a href="{{ url_for('delete_entry', entry_id=e['id']) }}">Delete</a>
+        <a href="{{ url_for('edit_entry',
+                            kind_slug=kind_to_slug(e['kind']),
+                            entry_slug=e['slug']) }}">Edit</a>
+        <a href="{{ url_for('delete_entry',
+                            kind_slug=kind_to_slug(e['kind']),
+                            entry_slug=e['slug']) }}">Delete</a>
       </small>
   {% endif %}
 </article>
@@ -1660,13 +1752,15 @@ TEMPL_SEARCH = wrap("""
                 ">
                     {{ e['kind'] }}
                 </span>
-                <a href="{{ url_for('entry_detail', slug=kind_to_slug(e['kind']), ts=e['slug']) }}"
+                <a href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
                     style="text-decoration:none; color:inherit;vertical-align:middle;">
                     {{ e['created_at']|ts }}
                 </a>&nbsp;
                 {% if session.get('logged_in') %}
-                    <a href="{{ url_for('edit_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
-                    <a href="{{ url_for('delete_entry', entry_id=e['id']) }}" style="vertical-align:middle;">Delete</a>
+                    <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" 
+                        style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
+                    <a href="{{ url_for('delete_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" 
+                        style="vertical-align:middle;">Delete</a>
                 {% endif %}
             </small>
         </article>
@@ -1710,8 +1804,8 @@ def _rss(entries, *, title, feed_url, site_url):
 
         link = url_for(
             "entry_detail",
-            slug=kind_to_slug(e["kind"]),
-            ts=e["slug"],
+            kind_slug=kind_to_slug(e["kind"]),
+            entry_slug=e["slug"],
             _external=True,            # absolute URL
         )
 
@@ -1972,12 +2066,208 @@ TEMPL_500 = wrap("""
 {% endblock %}
 """)
 
+###############################################################################
+# Check-ins
+###############################################################################
+
+def process_checkin(body: str, *, db):
+    """
+    Detect a caret block, create/fetch the item + checkin rows and
+    return the body with the block stripped / rewritten.
+    """
+    lines      = body.splitlines()
+    main_idx   = None
+    main_match = None
+    meta       = {}
+
+    for i, ln in enumerate(lines):
+        if main_idx is None and (m := CARET_MAIN_RE.match(ln)):
+            main_idx, main_match = i, m
+        elif CARET_META_RE.match(ln):
+            k, v = CARET_META_RE.match(ln).groups()
+            meta[k.lower()] = v
+
+    if main_match is None:
+        return body, None, None        # not a check-in
+
+    # 1. Create / fetch item
+    itype, title = main_match["itype"], main_match["title"]
+    row = db.execute("SELECT id, uuid FROM item WHERE type=? AND title=?",
+                     (itype, title)).fetchone()
+    if row:
+        item_id, uuid = row["id"], row["uuid"]
+    else:
+        uuid    = secrets.token_urlsafe(12)
+        now_iso = local_now().isoformat(timespec='seconds')
+        db.execute("INSERT INTO item(uuid,type,title,created_at) VALUES(?,?,?,?)",
+                   (uuid, itype, title, now_iso))
+        item_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        for k, v in meta.items():
+            db.execute("INSERT INTO item_meta VALUES(?,?,?)", (item_id, k, v))
+        db.commit()
+
+    # 2. Replace caret block in the Say
+    keep = []
+    for i, ln in enumerate(lines):
+        if i == main_idx:
+            keep.append(f"^{itype}:{uuid}")          # compact reference
+        elif i > main_idx and ln.startswith('^'):
+            continue                                 # drop meta lines
+        else:
+            keep.append(ln)
+    new_body = "\n".join(keep).strip()
+    return new_body, item_id, main_match["action"]
+
+class MediaTypeConverter(BaseConverter):
+    # only these words are accepted as the *first* segment
+    regex = r'book|movie|game|album'
+
+app.url_map.converters['mt'] = MediaTypeConverter
+
+@app.route('/<mt:itype>/<slug>')
+def item_detail(itype, slug):
+    db   = get_db()
+    item = db.execute(
+        "SELECT * FROM item WHERE type=? AND (slug=? OR uuid=?)",
+        (itype, slug, slug)
+    ).fetchone()
+    if not item:
+        abort(404)
+
+    meta   = db.execute(
+               "SELECT key,value FROM item_meta WHERE item_id=?", (item["id"],)
+             ).fetchall()
+    checks = db.execute("""
+            SELECT e.*, c.action
+              FROM checkin  c
+              JOIN entry    e ON e.id = c.entry_id
+             WHERE c.item_id=?
+             ORDER BY e.created_at DESC""", (item["id"],)).fetchall()
+
+    return render_template_string(
+        TEMPL_ITEM,
+        item=item, meta=meta, checks=checks,
+        title=f'{item["title"]} – {get_setting("site_name","po.etr.ist")}',
+        username=current_username(), kind="item"
+    )
+
+@app.route('/edit-item/<int:item_id>', methods=['GET', 'POST'])
+def edit_item(item_id):
+    login_required()
+
+    db   = get_db()
+    item = db.execute("SELECT * FROM item WHERE id=?", (item_id,)).fetchone()
+    if not item:
+        abort(404)
+
+    if request.method == 'POST':
+        title = request.form.get('title', '').strip()
+        slug  = request.form.get('slug',  '').strip() or None
+
+        if not title:
+            flash('Title is required.')
+            return redirect(url_for('edit_item', item_id=item_id))
+
+        # save
+        db.execute("UPDATE item SET title=?, slug=? WHERE id=?",
+                   (title, slug, item_id))
+        db.commit()
+
+        # go back to the detail page (prefer pretty slug, fall back to uuid)
+        dest = slug or item['uuid']
+        return redirect(url_for('item_detail', itype=item['type'], slug=dest))
+
+    # GET → render form
+    return render_template_string(
+        TEMPL_EDIT_ITEM,
+        item  = item,
+        title = get_setting('site_name', 'po.etr.ist'),
+        username = current_username(),
+        kind  = 'item'
+    )
+
+TEMPL_ITEM = wrap("""
+{% block body %}
+    <hr>
+    <h2 style="margin-top:0;">{{ item['title'] }}</h2>
+
+    {# ───── meta data table ───── #}
+    {% if meta %}
+        <table style="font-size:.9em; margin-bottom:1rem; border-collapse:collapse;">
+        {% for row in meta %}
+            <tr>
+                <td style="padding:.2em .6em; color:#888; vertical-align:top;">
+                    {{ row['key'].capitalize() }}
+                </td>
+                <td style="padding:.2em .6em;">{{ row['value'] }}</td>
+            </tr>
+        {% endfor %}
+        </table>
+    {% endif %}
+
+    {% if session.get('logged_in') %}
+        <p style="font-size:.8em;">
+            <a href="{{ url_for('edit_item', item_id=item['id']) }}">Edit item</a>
+        </p>
+    {% endif %}
+
+    <h3 style="margin-top:2rem;">Check-ins</h3>
+    {% if checks %}
+        {% for c in checks %}
+            <article style="padding-bottom:1.5rem;
+                            {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
+                <p>{{ c['body']|md }}</p>
+                <small style="color:#aaa;">
+                    {{ c['action'] }} – 
+                    <a href="{{ url_for('entry_detail',
+                                        slug=kind_to_slug(c['kind']),
+                                        ts=c['slug']) }}"
+                       style="text-decoration:none; color:inherit;">
+                        {{ c['created_at']|ts }}
+                    </a>
+                    {% if session.get('logged_in') %}
+                        &nbsp;·&nbsp;
+                        <a href="{{ url_for('edit_entry', entry_id=c['id']) }}">Edit</a>
+                    {% endif %}
+                </small>
+            </article>
+        {% endfor %}
+    {% else %}
+        <p>No check-ins yet.</p>
+    {% endif %}
+{% endblock %}
+""")
+
+TEMPL_EDIT_ITEM = wrap("""
+{% block body %}
+    <hr>
+    <h2>Edit item</h2>
+    <form method="post" style="max-width:30rem;">
+        <label style="display:block;margin:.5rem 0;">
+            <span style="font-size:.8em;color:#aaa;">Title</span><br>
+            <input name="title" value="{{ item['title'] }}" style="width:100%;">
+        </label>
+
+        <label style="display:block;margin:.5rem 0;">
+            <span style="font-size:.8em;color:#aaa;">Slug (optional)</span><br>
+            <input name="slug" value="{{ item['slug'] or '' }}" style="width:100%;">
+        </label>
+
+        <button>Save</button>
+        <a href="{{ url_for('item_detail',
+                            itype=item['type'],
+                            slug=item['slug'] or item['uuid']) }}"
+           style="margin-left:1rem;">Cancel</a>
+    </form>
+{% endblock %}
+""")
+
+
 
 ###############################################################################
-if __name__ == '__main__':     # Allow `python blog.py` to run the server, too
+if __name__ == '__main__':     
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == 'init':
-        # mirror `flask init` to make it easy without FLASK_APP
         with app.app_context():
             cli_init()
     else:
