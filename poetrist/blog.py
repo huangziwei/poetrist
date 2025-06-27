@@ -1588,30 +1588,37 @@ TEMPL_SEARCH = wrap("""
                 align-items:center;      
                 justify-content:space-between;">
         {# ─── sort pills ────────────────────────────────────────────── #}
-        <span style="display:inline-flex;
-                 border:1px solid #555;
-                 border-radius:4px;
-                 overflow:hidden;
-                 font-size:.8em;">
-            {% for val, label in [('rel','Relevance'),
-                                ('new','Newest'),
-                                ('old','Oldest')] %}
-            <a href="{{ url_for('search', q=query, sort=val) }}"
-            style="display:flex; align-items:center;              /* centre text */
-                    padding:.35em 1em;                             /* same height as input */
-                    text-decoration:none; border-bottom:none;
-                    {% if not loop.first %}border-left:1px solid #555;{% endif %}
-                    {% if sort==val %}background:#A5BA93;color:#000;
-                    {% else %}background:#333;color:#eee;{% endif %}">
-            {{ label }}
-            </a>
-            {% endfor %}
-        </span>
+        <details style="display:inline-block;           
+                        position:relative;              
+                        font-size:.8em;">
+            <summary style="display:flex; align-items:center; cursor:pointer; list-style:none; 
+                            padding:.35em 1em;
+                            border:1px solid #555; border-radius:4px;
+                            background:{% if sort %}#aaa{% else %}#333{% endif %};
+                            color:{% if sort %}#000{% else %}#eee{% endif %};">
+                {{ {'rel':'Relevance','new':'Newest','old':'Oldest'}[sort] }}
+                <span style="font-size:0.85rem;margin-left:.4em;line-height:1;">▼</span>        
+            </summary>
+            <div style="position:absolute; left:0; top:calc(100% + .25em);
+                        background:#333; border:1px solid #555; border-radius:4px;
+                        z-index:10; min-width:100%; white-space:nowrap;">
+                {% for val, label in [('rel','Relevance'),('new','Newest'),('old','Oldest')] %}
+                    {% if val != sort %}
+                    <a href="{{ url_for('search', q=query, sort=val) }}"
+                    style="display:block; padding:.35em 1em;
+                            color:#eee; text-decoration:none;
+                            border-bottom:1px solid #555;">
+                        {{ label }}
+                    </a>
+                    {% endif %}
+                {% endfor %}
+            </div>
+        </details>
 
         {# ─── search box ────────────────────────────────────────────── #}
         <form action="{{ url_for('search') }}" method="get"
             style="margin:0;
-                    display:inline-flex;   /* <── collapses to input’s height */
+                    display:inline-flex;   
                     align-items:center;">
             <input type="search" name="q" placeholder="Search"
                 value="{{ request.args.get('q','') }}"
