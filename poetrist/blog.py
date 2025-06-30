@@ -358,7 +358,6 @@ def init_db():
     )
     db.commit()
 
-
 # -------------------------------------------------------------------------
 # Time helpers
 # -------------------------------------------------------------------------
@@ -2437,18 +2436,29 @@ def item_detail(verb, item_type, slug):
              WHERE item_id=?
              ORDER BY ord, LOWER(k)         
         """, (itm['id'],)).fetchall()
-    rows = db.execute("""SELECT e.*, ei.action, ei.progress
-                           FROM entry      e
-                           JOIN entry_item ei ON ei.entry_id = e.id
-                          WHERE ei.item_id=? AND ei.verb=? 
-                          ORDER BY e.created_at DESC""",
-                      (itm['id'], verb)).fetchall()
+
+
+    sort = request.args.get("sort", "new")          # ➊  new | old 
+
+    if sort == "old":
+        order_sql = "e.created_at ASC"
+    else:                                           # newest (default)
+        order_sql = "e.created_at DESC"
+
+    rows = db.execute(f"""
+            SELECT e.*, ei.action, ei.progress
+              FROM entry      e
+              JOIN entry_item ei ON ei.entry_id = e.id
+             WHERE ei.item_id=? AND ei.verb=?
+             ORDER BY {order_sql}
+        """, (itm["id"], verb)).fetchall()
 
     return render_template_string(TEMPL_ITEM_DETAIL, 
                                   item   = itm,
                                   meta   = meta,
                                   entries= rows,
                                   verb   = verb,
+                                  sort   = sort,
                                   username=current_username())
 
 TEMPL_ITEM_DETAIL = wrap("""
@@ -2506,8 +2516,40 @@ TEMPL_ITEM_DETAIL = wrap("""
         placeholder="^action:reading&#10;^progress:42%"></textarea>
     <button>Add&nbsp;Check-in</button>
 </form>
-<hr>
 {% endif %}
+
+<hr>                
+<div style="padding:1rem 0;
+            
+            font-size:.8em;
+            color:#888;
+            display:flex;
+            align-items:center;      
+            justify-content:space-between;">
+    {# ─── sort pills ────────────────────────────────────────────── #}
+    <span style="display:inline-flex;
+                border:1px solid #555;
+                border-radius:4px;
+                overflow:hidden;
+                font-size:.8em;">
+        {% for val, label in [('new','Newest'),
+                            ('old','Oldest')] %}
+        <a href="{{ url_for('item_detail',
+                            verb=verb,
+                            item_type=item.item_type,
+                            slug=item.slug,
+                            sort=val) }}"
+        style="display:flex; align-items:center;
+                padding:.35em 1em;
+                text-decoration:none; border-bottom:none;
+                {% if not loop.first %}border-left:1px solid #555;{% endif %}
+                {% if sort==val %}background:{{ theme_color() }};color:#000;
+                {% else %}background:#333;color:#eee;{% endif %}">
+            {{ label }}
+        </a>
+        {% endfor %}
+    </span>
+</div>
 
 {% for e in entries %}    
 <article style="padding-bottom:1rem; {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
@@ -2956,31 +2998,25 @@ TEMPL_SEARCH_ENTRIES = wrap("""
                 align-items:center;      
                 justify-content:space-between;">
         {# ─── sort pills ────────────────────────────────────────────── #}
-        <details style="display:inline-block;           
-                        position:relative;              
-                        font-size:.8em;">            
-            <summary style="display:flex; align-items:center; cursor:pointer; list-style:none; 
-                            padding:.35em 1em;
-                            border:1px solid #555; border-radius:4px;
-                            background:{% if sort %}#aaa{% else %}#333{% endif %};
-                            color:{% if sort %}#000{% else %}#eee{% endif %};">
-                {{ {'rel':'Relevance','new':'Newest','old':'Oldest'}[sort] }}
-            </summary>
-            <div style="position:absolute; left:0; top:calc(100% + .25em);
-                        background:#333; border:1px solid #555; border-radius:4px;
-                        z-index:10; min-width:100%; white-space:nowrap;">
-                {% for val, label in [('rel','Relevance'),('new','Newest'),('old','Oldest')] %}
-                    <a href="{{ url_for('search', q=query, sort=val) }}"
-                    style="display:block; padding:.35em 1em;
-                            color:{% if sort == val %}#000{% else %}#eee{% endif %}; text-decoration:none;
-                            border-bottom:1px solid #555;
-                            background:{% if sort == val %}#aaa{% else %}#333{% endif %};
-                            ">
-                        {{ label }}
-                    </a>
-                {% endfor %}
-            </div>
-        </details>
+        <span style="display:inline-flex;
+                 border:1px solid #555;
+                 border-radius:4px;
+                 overflow:hidden;
+                 font-size:.8em;">
+            {% for val, label in [('rel','Relevance'),
+                                ('new','Newest'),
+                                ('old','Oldest')] %}
+            <a href="{{ url_for('search', q=query, sort=val) }}"
+            style="display:flex; align-items:center;              /* centre text */
+                    padding:.35em 1em;                             /* same height as input */
+                    text-decoration:none; border-bottom:none;
+                    {% if not loop.first %}border-left:1px solid #555;{% endif %}
+                    {% if sort==val %}background:#A5BA93;color:#000;
+                    {% else %}background:#333;color:#eee;{% endif %}">
+            {{ label }}
+            </a>
+            {% endfor %}
+        </span>
     </div>
 
     {% if removed %}
