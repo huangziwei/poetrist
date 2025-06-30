@@ -1555,7 +1555,16 @@ TEMPL_LIST = wrap("""
                 <input name="link" style="width:100%;margin:0" placeholder="Link">
             {% endif %}
             <textarea name="body" rows="3" style="width:100%;margin:0" placeholder="What's on your mind?"></textarea>
-            <button style="width:">Add&nbsp;{{ kind.capitalize() }}</button>
+            
+            <div style="display:flex;gap:.75rem;">
+                <button style="width:">Add&nbsp;{{ kind.capitalize() }}</button>      
+                {% if kind=='post' %}
+                <button name="is_page" value="1"
+                        style="background:#444;color:#ffffff;border:1px solid #888;">
+                    Add Page
+                </button>
+                {% endif %}  
+            </div>
         </form>
         {% endif %}
         <hr>
