@@ -1886,7 +1886,7 @@ def edit_entry(kind_slug, entry_slug):
         body, blocks = parse_trigger(body)            # ← only call once
 
         # decide the final kind
-        if request.form.get('is_page') == '1':
+        if request.form.get('is_page') == '1' or row["kind"] == "page":
             new_kind = 'page'
         else:
             new_kind = blocks[0]['verb'] if blocks else infer_kind(title, link)
