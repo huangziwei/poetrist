@@ -883,7 +883,6 @@ TEMPL_PROLOG = """
             <!-- row 2 – search box -->
             <div>
                 <form action="{{ url_for('search') }}" method="get" style="margin:0;">
-                    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
                     <input type="search" name="q" placeholder="Search"
                         value="{{ request.args.get('q','') }}"
                         style="width:13rem;font-size:.8em; padding:.2em .6em; margin:0;">
