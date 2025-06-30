@@ -841,13 +841,6 @@ TEMPL_PROLOG = """
                 <a href="{{ url_for('tags') }}"
                 {% if kind=='tags' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
                 Tags</a>&nbsp;&nbsp;
-
-                {% for p in nav_pages() %}
-                    <a href="{{ '/' ~ p['slug'] }}"
-                    {% if request.path|trim('/') == p['slug'] %}
-                        style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
-                    {{ p['title'] }}</a>{% if not loop.last %}&nbsp;&nbsp;{% endif %}
-                {% endfor %}
             </div>
 
             <!-- row 2 – verbs (shown only if at least one exists) -->
@@ -924,6 +917,18 @@ TEMPL_EPILOG = """
                poetrist</a>
                <span style="font-weight:normal;color:#aaa">v{{ version }}</span>
         </span>
+
+        <!-- right-hand side – extra pages -->
+        <nav style="display:flex; gap:.75rem;">
+            {% for p in nav_pages() %}
+                <a href="{{ '/' ~ p['slug'] }}"
+                {% if request.path|trim('/') == p['slug'] %}
+                    style="text-decoration:none;border-bottom:.33rem solid #aaa;"
+                {% endif %}>
+                    {{ p['title'] }}
+                </a>
+            {% endfor %}
+        </nav>
     </footer>
 </div> <!-- container -->
 """
@@ -1907,7 +1912,10 @@ def edit_entry(kind_slug, entry_slug):
 
         # 4️⃣  Tags
         sync_tags(row['id'], extract_tags(body), db=db)
-        db.commit()        
+        db.commit()
+
+        if new_kind == "page":
+            return redirect(url_for('by_kind', slug=new_slug))        
 
         return redirect(url_for('entry_detail',
                                 kind_slug=kind_to_slug(new_kind),
