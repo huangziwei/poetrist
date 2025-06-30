@@ -284,47 +284,38 @@ def init_db():
         );
 
         ------------------------------------------------------------
-        -- 5.  Full-text search (Unicode tokenizer + trigram mirror)
+        -- 5.  Full-text search 
         ------------------------------------------------------------
+        /* the index itself */
         CREATE VIRTUAL TABLE IF NOT EXISTS entry_fts USING fts5(
-            title, body, link,
-            content='entry',
-            content_rowid='id'
-        );
-        CREATE VIRTUAL TABLE IF NOT EXISTS entry_fts3 USING fts5(
             title, body, link,
             content='entry',
             content_rowid='id',
             tokenize = 'trigram'
         );
 
-        /* keep both mirrors in sync */
+        /* keep mirror in sync */
         CREATE TRIGGER IF NOT EXISTS entry_ai AFTER INSERT ON entry BEGIN
-            INSERT INTO entry_fts  (rowid,title,body,link)
-                VALUES (new.id, COALESCE(new.title,''), new.body, COALESCE(new.link,''));
-            INSERT INTO entry_fts3 (rowid,title,body,link)
-                VALUES (new.id, COALESCE(new.title,''), new.body, COALESCE(new.link,''));
+            INSERT INTO entry_fts(rowid,title,body,link)
+                VALUES (new.id,
+                        COALESCE(new.title,''),
+                        new.body,
+                        COALESCE(new.link,''));
         END;
 
         CREATE TRIGGER IF NOT EXISTS entry_au AFTER UPDATE ON entry BEGIN
-            /* delete the old row */
-            INSERT INTO entry_fts(entry_fts,  rowid, title, body, link)
-                VALUES('delete', old.id, old.title, old.body, old.link);
-            INSERT INTO entry_fts3(entry_fts3, rowid, title, body, link)
-                VALUES('delete', old.id, old.title, old.body, old.link);
-
-            /* insert the new version */
-            INSERT INTO entry_fts  (rowid,title,body,link)
-                VALUES (new.id, COALESCE(new.title,''), new.body, COALESCE(new.link,''));
-            INSERT INTO entry_fts3 (rowid,title,body,link)
-                VALUES (new.id, COALESCE(new.title,''), new.body, COALESCE(new.link,''));
+            INSERT INTO entry_fts(entry_fts,rowid,title,body,link)
+                VALUES('delete',old.id,old.title,old.body,old.link);
+            INSERT INTO entry_fts(rowid,title,body,link)
+                VALUES(new.id,
+                        COALESCE(new.title,''),
+                        new.body,
+                        COALESCE(new.link,''));
         END;
 
         CREATE TRIGGER IF NOT EXISTS entry_ad AFTER DELETE ON entry BEGIN
-            INSERT INTO entry_fts(entry_fts,  rowid, title, body, link)
-                VALUES('delete', old.id, old.title, old.body, old.link);
-            INSERT INTO entry_fts3(entry_fts3, rowid, title, body, link)
-                VALUES('delete', old.id, old.title, old.body, old.link);
+            INSERT INTO entry_fts(entry_fts,rowid,title,body,link)
+                VALUES('delete',old.id,old.title,old.body,old.link);
         END;
 
         ------------------------------------------------------------
@@ -2752,55 +2743,58 @@ def _expand_fuzzy(q: str) -> str:
 def _has_quotes(q: str) -> bool:
     return '"' in q
 
-def search_entries(query: str, *, db,
-                   page: int        = 1,
-                   per_page: int    = PAGE_DEFAULT,
-                   sort: str        = "rel"):             # rel | new | old
-    """Return (rows_on_page, total_hits, removed_chars)."""
-    if not query:
+# ------------------------------------------------------------------
+# Full-text / LIKE search
+# ------------------------------------------------------------------
+def search_entries(q: str,
+                   *,
+                   db,
+                   page: int = 1,
+                   per_page: int = PAGE_DEFAULT,
+                   sort: str = "rel"      #  rel | new | old
+                   ):
+    """
+    Return (rows_on_page, total_hits, removed_chars_set).
+
+    * “rel” = relevance (bm25 rank) – default
+    * “new” = newest first
+    * “old” = oldest first
+    """
+    q = q.strip()
+    if not q:
         return [], 0, set()
 
-    if _has_quotes(query):              # user wants an exact phrase
-        clean_q, removed = query, set() # keep punctuation intact
-    else:
-        clean_q, removed = _sanitize(query)
-        clean_q = clean_q.strip()
-        if not clean_q:
-            return [], 0, removed
+    # ─── 1-2 characters → simple LIKE ---------------------------------
+    if len(q) < 3:
+        like = f"%{q}%"
+        base = "SELECT * FROM entry WHERE title LIKE ? OR body LIKE ?"
+        if   sort == "new": base += " ORDER BY created_at DESC"
+        elif sort == "old": base += " ORDER BY created_at ASC"
 
-    if '"' in clean_q:                   # user typed quotes → exact phrase
-        tbl   = "entry_fts"
-        match = clean_q
-    else:
-        if len(clean_q) >= 3 and '*' not in clean_q:
-            tbl   = "entry_fts3"         # fast trigram if ≥3 chars, no *
-            match = clean_q
-        else:
-            tbl   = "entry_fts"
-            match = _expand_fuzzy(clean_q)   # add '*' for short/fuzzy search
-            if match == '*':                 # ← optional extra guard
-                return [], 0, removed
-            
-    order_sql = {
-        "new": "ORDER BY e.created_at DESC",
-        "old": "ORDER BY e.created_at ASC",
-        "rel": "ORDER BY rank"
-    }.get(sort, "ORDER BY rank")
+        total = db.execute(f"SELECT COUNT(*) FROM ({base})",
+                           (like, like)).fetchone()[0]
+        rows  = db.execute(f"{base} LIMIT ? OFFSET ?",
+                           (like, like, per_page, (page-1)*per_page)).fetchall()
+        return rows, total, set()
 
-    BASE_SQL = f"""
-        SELECT e.*, bm25({tbl}) AS rank
-          FROM {tbl}
-          JOIN entry e ON e.id = {tbl}.rowid
-         WHERE {tbl} MATCH ?
-    """
+    # ─── ≥3 chars → FTS5 trigram index --------------------------------
+    if   sort == "new": order_sql = "ORDER BY e.created_at DESC"
+    elif sort == "old": order_sql = "ORDER BY e.created_at ASC"
+    else:               order_sql = "ORDER BY rank"
 
-    total = db.execute(f"SELECT COUNT(*) FROM ({BASE_SQL})", (match,)).fetchone()[0]
-    rows  = db.execute(
-                f"{BASE_SQL} {order_sql} LIMIT ? OFFSET ?",
-                (match, per_page, (page-1)*per_page)
-            ).fetchall()
+    rows = db.execute(f"""
+            SELECT e.*, bm25(entry_fts) AS rank
+              FROM entry_fts
+              JOIN entry e ON e.id = entry_fts.rowid
+             WHERE entry_fts MATCH ?
+             {order_sql}
+             LIMIT ? OFFSET ?""",
+             (q, per_page, (page-1)*per_page)).fetchall()
 
-    return rows, total, removed
+    total = db.execute(
+                "SELECT COUNT(*) FROM entry_fts WHERE entry_fts MATCH ?",
+                (q,)).fetchone()[0]
+    return rows, total, set()
 
 
 _ITEM_Q_RE = re.compile(r"""
