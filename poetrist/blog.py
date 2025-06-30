@@ -110,7 +110,7 @@ def md_filter(text: str | None) -> Markup:
 
     # ➊ drop every line that starts with ^something:   (= caret meta)
     clean = "\n".join(
-        ln for ln in text.splitlines()
+        ln for ln in (text or "").splitlines()
         if not ln.lstrip().startswith("^")
     )
 
@@ -1437,7 +1437,7 @@ def by_kind(slug):
         if missing:
             nice = ' and '.join(missing)
             flash(f'{nice.capitalize()} {"is" if len(missing)==1 else "are"} required.')
-            return redirect(url_for('by_kind', slug=kind_to_slug(kind)))
+            return redirect(url_for('by_kind', slug=kind_to_slug(kind or "")))
 
         now_dt = utc_now()
         now = now_dt.isoformat(timespec='seconds')
@@ -1453,7 +1453,7 @@ def by_kind(slug):
         if kind == "page":
             return redirect(url_for("by_kind", slug=slug))
 
-        return redirect(url_for('by_kind', slug=kind_to_slug(kind)))
+        return redirect(url_for('by_kind', slug=kind_to_slug(kind or "")))
 
     # --- pagination -------------------------------------------------------
     page = max(int(request.args.get('page', 1)), 1)
@@ -1539,7 +1539,7 @@ def by_kind(slug):
         rows     = entries,
         pages    = pages,
         page     = page,
-        heading  = kind.capitalize()+'s',
+        heading  = (kind or '').capitalize()+'s',
         kind     = kind,
         username = current_username(),
     )
@@ -2304,7 +2304,7 @@ def kind_rss(slug):
     rows = db.execute("SELECT * FROM entry WHERE kind=? ORDER BY created_at DESC LIMIT 50",
                       (kind,)).fetchall()
     xml  = _rss(rows,
-                title = f"{kind.capitalize()}s – {get_setting('site_name','po.etr.ist')}",
+                title = f"{(kind or "").capitalize()} – {get_setting('site_name','po.etr.ist')}",
                 feed_url = request.url,                 # already correct
                 site_url = request.url_root.rstrip('/'))
     return app.response_class(xml, mimetype='application/rss+xml')
@@ -2352,8 +2352,8 @@ def item_detail(verb, item_type, slug):
         raw = request.form['meta'].rstrip()
 
         # ❶ ── split into body-lines vs. meta-lines --------------------------
-        meta       : dict[str, str] = {}
-        body_lines : list[str]      = []
+        meta_dict: dict[str, str] = {}
+        body_lines: list[str] = []
 
         for ln in raw.splitlines():
             ln = ln.strip()
@@ -2361,12 +2361,12 @@ def item_detail(verb, item_type, slug):
                 continue
             if ':' in ln:                               # looks like “key: val”
                 k, v = [p.strip() for p in ln.split(':', 1)]
-                meta[k.lower()] = v
+                meta_dict[k.lower()] = v
             else:                                       # free text → body
                 body_lines.append(ln)
 
         # ❷ ── ensure we have an *action* (may be inferred) ------------------
-        if 'action' not in meta:
+        if 'action' not in meta_dict:
             # most-recent action for the same item / verb
             r = db.execute("""SELECT ei.action
                                FROM entry_item ei
@@ -2376,9 +2376,9 @@ def item_detail(verb, item_type, slug):
                               LIMIT 1""",
                            (itm['id'], verb)).fetchone()
             if r:
-                meta['action'] = r['action']
+                meta_dict['action'] = r['action']
             else:                                   # fall-back: 2nd word in map
-                meta['action'] = VERB_MAP[verb][1] \
+                meta_dict['action'] = VERB_MAP[verb][1] \
                                    if verb in VERB_MAP and len(VERB_MAP[verb]) > 1 \
                                    else verb
 
@@ -2386,9 +2386,9 @@ def item_detail(verb, item_type, slug):
         caret_lines = [
             f'^uuid:{itm["uuid"]}',
             f'^item_type:{itm["item_type"]}',
-            f'^action:{meta.pop("action")}',
+            f'^action:{meta_dict.pop("action")}',
         ]
-        for k, v in meta.items():          # any remaining keys (progress, …)
+        for k, v in meta_dict.items():          # any remaining keys (progress, …)
             caret_lines.append(f'{k}:{v}')
 
         # put user text (if any) underneath the caret block
@@ -2580,8 +2580,7 @@ TEMPL_ITEM_DETAIL = wrap("""
                                 entry_slug=e['slug']) }}"
             style="text-decoration:none;color:inherit;vertical-align:middle;">
             {{ e['created_at']|ts }}
-        </a>
-        <span style="vertical-align:middle;">&nbsp;by&nbsp;{{ username }}</span>&nbsp;&nbsp;
+        </a>&nbsp;
 
         {# —— admin links ———————————————————————————————— #}
         {% if session.get('logged_in') %}
@@ -2832,8 +2831,10 @@ def search_entries(q: str,
     if len(q) < 3:
         like = f"%{q}%"
         base = "SELECT * FROM entry WHERE title LIKE ? OR body LIKE ?"
-        if   sort == "new": base += " ORDER BY created_at DESC"
-        elif sort == "old": base += " ORDER BY created_at ASC"
+        if   sort == "new": 
+            base += " ORDER BY created_at DESC"
+        elif sort == "old": 
+            base += " ORDER BY created_at ASC"
 
         total = db.execute(f"SELECT COUNT(*) FROM ({base})",
                            (like, like)).fetchone()[0]
@@ -2842,9 +2843,12 @@ def search_entries(q: str,
         return rows, total, set()
 
     # ─── ≥3 chars → FTS5 trigram index --------------------------------
-    if   sort == "new": order_sql = "ORDER BY e.created_at DESC"
-    elif sort == "old": order_sql = "ORDER BY e.created_at ASC"
-    else:               order_sql = "ORDER BY rank"
+    if   sort == "new": 
+        order_sql = "ORDER BY e.created_at DESC"
+    elif sort == "old": 
+        order_sql = "ORDER BY e.created_at ASC"
+    else:               
+        order_sql = "ORDER BY rank"
 
     rows = db.execute(f"""
             SELECT e.*, bm25(entry_fts) AS rank
@@ -2964,27 +2968,27 @@ def search():
                 kind   = 'search',
                 username = current_username(),
             )
-    else:
-        # ── ②  fall back to the existing entry search ───────────────────
-        sort  = request.args.get('sort','rel')
-        rows, total, removed = search_entries(q_raw,
-                    db=get_db(),
-                    page=page,
-                    per_page=page_size(),
-                    sort=sort)
-        pages = list(range(1, (total + page_size() - 1)//page_size() + 1))
+    
+    # ── ②  fall back to the existing entry search ───────────────────
+    sort  = request.args.get('sort','rel')
+    rows, total, removed = search_entries(q_raw,
+                db=get_db(),
+                page=page,
+                per_page=page_size(),
+                sort=sort)
+    pages = list(range(1, (total + page_size() - 1)//page_size() + 1))
 
-        return render_template_string(
-            TEMPL_SEARCH_ENTRIES,
-            rows     = rows,
-            query    = q_raw,
-            sort     = sort,
-            page     = page,
-            pages    = pages,
-            removed  = ''.join(sorted(removed)),
-            kind     = 'search',
-            username = current_username(),
-        )
+    return render_template_string(
+        TEMPL_SEARCH_ENTRIES,
+        rows     = rows,
+        query    = q_raw,
+        sort     = sort,
+        page     = page,
+        pages    = pages,
+        removed  = ''.join(sorted(removed)),
+        kind     = 'search',
+        username = current_username(),
+    )
 
 
 TEMPL_SEARCH_ENTRIES = wrap("""
