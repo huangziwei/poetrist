@@ -1,34 +1,26 @@
 #!/usr/bin/env python3
 """
 A single-file minimal blog.
-
-blog.py
-│
-├─ 1  Imports & constants
-├─ 2  App + Markdown filter
-├─ 3  DB helpers
-├─ 4  CLI (grouped)
-├─ 5  Auth helpers + routes
-├─ 6  Content helpers
-├─ 7  Views (/  /<kind>  /edit  /settings)
-├─ 8  Embedded templates (dict)
-└─ 9  __main__
 """
-
+import os
 import re
 import secrets
+import shlex
 import sqlite3
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
 from email.utils import format_datetime
 from html import escape
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 import click
 import markdown
 from flask import (
     Flask,
+    Response,
     abort,
     flash,
     g,
@@ -54,14 +46,21 @@ SECRET_KEY  = SECRET_FILE.read_text().strip() if SECRET_FILE.exists() \
               else secrets.token_hex(32)
 SECRET_FILE.write_text(SECRET_KEY)
 SLUG_DEFAULTS = {"say": "says", "post": "posts", "pin": "pins"}
-KINDS = ("say", "post", "pin", "page")
-PAGE_DEFAULT = 100 
+VERB_MAP = {
+    "read"   : ["to-read", "to read", "reading", "read", "rereading", "reread", "finished reading"],
+    "watch"  : ["to-watch", "to watch" , "watching", "watched", "rewatching", "rewatched"],
+    "listen" : ["to-listen", "to listen", "listening", "listened", "relistening", "relistened"],
+    "play"   : ["to-play", "to play", "playing", "played", "replaying", "replayed"],
+    "visit"  : ["to-visit", "to visit", "visiting", "visited", "revisiting", "revisited"],
+    "use": ["to-use", "to use", "using", "used", "reusing", "reused"],
+    "buy": ["to-buy", "to buy", "buying", "bought", "rebuying", "rebought"],
+}
+KINDS = ("say", "post", "pin") + tuple(VERB_MAP.keys()) + ("page",)
+PAGE_DEFAULT = 100
 TAG_RE = re.compile(r'(?<!\w)#([\w\-]+)')
-HASH_LINK_RE = re.compile(r'(?<![A-Za-z0-9_])#([\w\-]+)')
 RFC2822_FMT = "%a, %d %b %Y %H:%M:%S %z"
 _TOKEN_CHARS = r"0-9A-Za-z\u0080-\uFFFF_"          # what unicode61 keeps
 TOKEN_RE     = re.compile(f"[{_TOKEN_CHARS}]+")
-
 try:
     __version__ = version("poetrist")
 except PackageNotFoundError:
@@ -73,6 +72,16 @@ except PackageNotFoundError:
 ################################################################################
 app = Flask(__name__)
 app.config.update(SECRET_KEY=SECRET_KEY, DATABASE=str(DB_FILE))
+app.config.update(
+    SESSION_COOKIE_SAMESITE="Lax",   # blocks most CSRF on simple links
+    SESSION_COOKIE_HTTPONLY=True,    # mitigate XSS → cookie theft
+    SESSION_COOKIE_SECURE=False,      # only if you serve over HTTPS
+)
+@app.before_request
+def enforce_secure_flag():
+    if request.is_secure:             # True when running behind HTTPS
+        app.config['SESSION_COOKIE_SECURE'] = True
+
 
 md = markdown.Markdown(
     extensions=[
@@ -97,16 +106,69 @@ def md_filter(text: str | None) -> Markup:
     <a href="/tags/<tag>">#tag</a>.
     """
     html = md.reset().convert(text or "")
+    theme_col = theme_color()  # get the current theme color
+
+    # ➊ drop every line that starts with ^something:   (= caret meta)
+    clean = "\n".join(
+        ln for ln in text.splitlines()
+        if not ln.lstrip().startswith("^")
+    )
+
+    html = md.reset().convert(clean)
 
     # post-process the generated HTML
     def hashtag_repl(match):
         tag = match.group(1).lower()
         href = url_for("tags", tag_list=tag)
-        return f'<a href="{href}" style="text-decoration:none;color:#A5BA93;border-bottom:0.1px dotted currentColor;">#{tag}</a>'
+        return f'<a href="{href}" style="text-decoration:none;color:{ theme_col };border-bottom:0.1px dotted currentColor;">#{tag}</a>'
 
+    HASH_LINK_RE = re.compile(
+        r'''
+        (?<![A-Za-z0-9_="'&])   # no word char, quote, = or & right before
+        \#                      # literal hash
+        (?!x?[0-9A-Fa-f]+;)     # NOT followed by digits/hex + semicolon  → no entity
+        ([\w\-]+)               # the actual tag
+        ''', re.X
+    )
     html = HASH_LINK_RE.sub(hashtag_repl, html)
 
+    # change <mark> to have a custom style
+    html = re.sub(
+            r'(<mark)(>)',
+            rf'\1 style="background:{ theme_col };color:#000;padding:0 .15em;"\2',
+            html
+        )
+
     return Markup(html)
+
+@app.template_filter("mdinline")
+def md_inline_filter(text: str | None) -> Markup:
+    """
+    Render Markdown like `md`, but if the result is exactly one
+    <p>…</p> block, unwrap it so we get pure inline HTML.
+    """
+    html = md_filter(text)          # reuse the existing logic
+    # Markup -> str for inspection, but keep it safe afterwards
+    s = str(html)
+
+    if s.startswith("<p>") and s.endswith("</p>"):
+        s = s[3:-4].strip()         # drop the wrapper
+
+    return Markup(s)
+
+@app.template_filter("smartcap")
+def smartcap(s: str | None) -> str:
+    """
+    • If the whole token is already uppercase (discounting digits / punctuation)
+      → return it verbatim  (ISBN-13, URL, ID, …).
+
+    • Otherwise → normal str.capitalize()  (author → Author).
+    """
+    if not s:
+        return ""
+    # at least one cased char and no lowercase letters  → treat as ALL-CAPS
+    return s if any(c.isalpha() for c in s) and s.upper() == s else s.capitalize()
+
 
 @app.template_filter("ts")
 def ts_filter(iso: str | None) -> str:
@@ -122,7 +184,7 @@ def ts_filter(iso: str | None) -> str:
     except ValueError:
         return iso
 
-    return dt.astimezone().strftime("%Y.%m.%d %H:%M:%S")
+    return dt.astimezone(ZoneInfo("Europe/Berlin")).strftime("%Y.%m.%d %H:%M:%S")
 
 @app.template_filter("url")
 def url_filter(url: str | None) -> str:
@@ -147,14 +209,6 @@ def get_db():
         g.db.execute("PRAGMA foreign_keys = ON;")
         g.db.row_factory = sqlite3.Row
 
-        # one-time, lazy migrations
-        # ensure_updated_at()
-        # ensure_slug()
-        # ensure_fts()          
-        # ensure_fts_trigram()
-        ensure_items()
-        ensure_item_slug()
-
     return g.db
 
 @app.teardown_appcontext
@@ -167,272 +221,178 @@ def init_db():
     db = get_db()
     db.executescript(
         """
-            CREATE TABLE IF NOT EXISTS user (
-                id INTEGER PRIMARY KEY,
-                username TEXT UNIQUE NOT NULL,
-                pwd_hash TEXT NOT NULL,
-                token_hash TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS entry (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT,
-                body TEXT NOT NULL,
-                link TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT,
-                slug TEXT UNIQUE NOT NULL,
-                kind TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS settings (
-                key   TEXT PRIMARY KEY,
-                value TEXT
-            );
-            CREATE TABLE IF NOT EXISTS tag (
-                id   INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL
-            );
+        ------------------------------------------------------------
+        -- 1.  Accounts
+        ------------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS user (
+            id          INTEGER PRIMARY KEY,
+            username    TEXT UNIQUE NOT NULL,
+            pwd_hash    TEXT NOT NULL,
+            token_hash  TEXT NOT NULL
+        );
 
-            CREATE TABLE IF NOT EXISTS entry_tag (
-                entry_id INTEGER NOT NULL,
-                tag_id   INTEGER NOT NULL,
-                PRIMARY KEY (entry_id, tag_id),
-                FOREIGN KEY (entry_id) REFERENCES entry(id) ON DELETE CASCADE,
-                FOREIGN KEY (tag_id)   REFERENCES tag(id)   ON DELETE CASCADE
-            );
-            INSERT OR IGNORE INTO settings (key, value)
-                VALUES ('site_name', 'po.etr.ist');
-            CREATE VIRTUAL TABLE IF NOT EXISTS entry_fts USING fts5(
-                title,
-                body,
-                link,
-                content='entry', -- auto-sync = simpler triggers
-                content_rowid='id'
-            );
-
-            /* One-off back-fill for existing rows */
-            INSERT OR IGNORE INTO entry_fts(rowid, title, body, link)
-                SELECT id,
-                    COALESCE(title,''),
-                    body,
-                    COALESCE(link,'')
-                FROM entry;
-
-            /* Keep FTS mirror in sync */
-            CREATE TRIGGER IF NOT EXISTS entry_ai AFTER INSERT ON entry BEGIN
-                INSERT INTO entry_fts(rowid, title, body, link)
-                VALUES (new.id, new.title, new.body, new.link);
-            END;
-            CREATE TRIGGER IF NOT EXISTS entry_au AFTER UPDATE ON entry BEGIN
-                UPDATE entry_fts
-                SET title = new.title,
-                    body  = new.body,
-                    link  = new.link
-                WHERE rowid = new.id;
-            END;
-            CREATE TRIGGER IF NOT EXISTS entry_ad AFTER DELETE ON entry BEGIN
-                DELETE FROM entry_fts WHERE rowid = old.id;
-            END;
-            """
-    )
-    db.commit()
-
-def ensure_updated_at():
-    db = get_db()
-    col = db.execute("PRAGMA table_info(entry);").fetchall()
-    if not any(c["name"] == "updated_at" for c in col):
-        db.execute("ALTER TABLE entry ADD COLUMN updated_at TEXT;")
-        db.commit()
-
-def ensure_slug():
-    """Add slug and generate it for legacy rows once."""
-    db = get_db()
-    col = db.execute("PRAGMA table_info(entry);").fetchall()
-    if not any(c["name"] == "slug" for c in col):
-        db.execute("ALTER TABLE entry ADD COLUMN slug TEXT;")
-        # fill historic rows
-        for row in db.execute("SELECT id, created_at FROM entry WHERE slug IS NULL"):
-            ts = datetime.fromisoformat(row["created_at"]).strftime("%Y%m%d%H%M%S")
-            db.execute("UPDATE entry SET slug=? WHERE id=?", (ts, row["id"]))
-        db.commit()
-
-def ensure_item_slug():
-    db = get_db()
-
-    # 1 · column present?
-    col = db.execute("PRAGMA table_info(item);").fetchall()
-    if not any(c["name"] == "slug" for c in col):
-        db.execute("ALTER TABLE item ADD COLUMN slug TEXT;")   # no UNIQUE here
-
-    # 2 · unique index present?
-    idx = db.execute("""
-        SELECT name
-          FROM sqlite_master
-         WHERE type='index' AND name='item_slug_uq'
-    """).fetchone()
-    if not idx:
-        db.execute("""
-            /* one non-null slug per item */
-            CREATE UNIQUE INDEX item_slug_uq
-                   ON item(slug)
-                WHERE slug IS NOT NULL;
-        """)
-
-    db.commit()
+        ------------------------------------------------------------
+        -- 2.  Objects  (one row per distinct work / place / tool …)
+        ------------------------------------------------------------
+        CREATE TABLE object (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            itype       TEXT NOT NULL,               -- book, movie, …
+            title       TEXT NOT NULL,
+            slug        TEXT UNIQUE NOT NULL         -- never-let-me-go-2005
+        );
 
 
-def ensure_fts():
-    """
-    Create the entry_fts virtual table + sync triggers if they are missing,
-    then back-fill it with the current `entry` rows.
-    Run once at start-up, no effect afterwards (“idempotent”).
-    """
-    db = get_db()
+        ------------------------------------------------------------
+        -- 3. Entries
+        ------------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS entry (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            title       TEXT,
+            body        TEXT NOT NULL,
+            link        TEXT,
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT,                           -- NEW: seeded now
+            slug        TEXT UNIQUE NOT NULL,
+            kind        TEXT NOT NULL                  -- say | post | pin | page
+        );
 
-    # does the FTS table already exist?
-    row = db.execute(
-        "SELECT name FROM sqlite_master "
-        "WHERE type='table' AND name='entry_fts'").fetchone()
-    if row:                       # nothing to do
-        return
+        ------------------------------------------------------------
+        -- 3.  Site-wide key/value settings
+        ------------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        );
+        INSERT OR IGNORE INTO settings (key, value)
+            VALUES ('site_name', 'po.etr.ist'),
+                   ('theme_color','#A5BA93');
 
-    db.executescript("""
-        /* 1. Table -------------------------------------------------------- */
-        CREATE VIRTUAL TABLE entry_fts USING fts5(
-            title,
-            body,
-            link,
+        ------------------------------------------------------------
+        -- 4.  Tags
+        ------------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS tag (
+            id   INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS entry_tag (
+            entry_id INTEGER NOT NULL,
+            tag_id   INTEGER NOT NULL,
+            PRIMARY KEY (entry_id, tag_id),
+            FOREIGN KEY (entry_id) REFERENCES entry(id) ON DELETE CASCADE,
+            FOREIGN KEY (tag_id)   REFERENCES tag(id)   ON DELETE CASCADE
+        );
+
+        ------------------------------------------------------------
+        -- 5.  Full-text search (Unicode tokenizer + trigram mirror)
+        ------------------------------------------------------------
+        CREATE VIRTUAL TABLE IF NOT EXISTS entry_fts USING fts5(
+            title, body, link,
             content='entry',
             content_rowid='id'
         );
-
-        /* 2. Back-fill ---------------------------------------------------- */
-        INSERT INTO entry_fts(rowid, title, body, link)
-            SELECT id,
-                   COALESCE(title,''),
-                   body,
-                   COALESCE(link,'')
-            FROM entry;
-
-        /* 3. Triggers to stay in sync ------------------------------------ */
-        CREATE TRIGGER entry_ai AFTER INSERT ON entry BEGIN
-            INSERT INTO entry_fts(rowid, title, body, link)
-            VALUES (new.id, new.title, new.body, new.link);
-        END;
-        CREATE TRIGGER entry_au AFTER UPDATE ON entry BEGIN
-            UPDATE entry_fts
-               SET title=new.title,
-                   body =new.body,
-                   link =new.link
-             WHERE rowid = new.id;
-        END;
-        CREATE TRIGGER entry_ad AFTER DELETE ON entry BEGIN
-            DELETE FROM entry_fts WHERE rowid = old.id;
-        END;
-    """)
-    db.commit()
-
-def ensure_fts_trigram():
-    """
-    Add entry_fts3 (trigram tokenizer) + sync triggers if missing,
-    then back-fill it.  Runs once per startup – idempotent.
-    """
-    db = get_db()
-    row = db.execute(
-        "SELECT name FROM sqlite_master "
-        "WHERE type='table' AND name='entry_fts3'").fetchone()
-    if row:
-        return                                    # already there
-
-    db.executescript("""
-        /* -------- 1. table -------------------------------------- */
-        CREATE VIRTUAL TABLE entry_fts3 USING fts5(
-            title,
-            body,
-            link,
+        CREATE VIRTUAL TABLE IF NOT EXISTS entry_fts3 USING fts5(
+            title, body, link,
             content='entry',
             content_rowid='id',
             tokenize = 'trigram'
         );
 
-        /* -------- 2. back-fill ---------------------------------- */
-        INSERT INTO entry_fts3(rowid, title, body, link)
-            SELECT id,
-                   COALESCE(title,''),
-                   body,
-                   COALESCE(link,'')
-            FROM entry;
-
-        /* -------- 3. sync triggers ------------------------------ */
-        CREATE TRIGGER entry_ai3 AFTER INSERT ON entry BEGIN
-            INSERT INTO entry_fts3(rowid, title, body, link)
-            VALUES (new.id, new.title, new.body, new.link);
+        /* keep both mirrors in sync */
+        CREATE TRIGGER IF NOT EXISTS entry_ai AFTER INSERT ON entry BEGIN
+            INSERT INTO entry_fts  (rowid,title,body,link)
+                VALUES (new.id, COALESCE(new.title,''), new.body, COALESCE(new.link,''));
+            INSERT INTO entry_fts3 (rowid,title,body,link)
+                VALUES (new.id, COALESCE(new.title,''), new.body, COALESCE(new.link,''));
         END;
-        CREATE TRIGGER entry_au3 AFTER UPDATE ON entry BEGIN
-            UPDATE entry_fts3
-               SET title=new.title,
-                   body =new.body,
-                   link =new.link
-             WHERE rowid = new.id;
-        END;
-        CREATE TRIGGER entry_ad3 AFTER DELETE ON entry BEGIN
-            DELETE FROM entry_fts3 WHERE rowid = old.id;
-        END;
-    """)
-    db.commit()
 
-def ensure_items():
-    """
-    Create tables that power the ^check-in syntax.
-      • item     … one row per book / movie / game / album / …
-      • item_meta… arbitrary key/value pairs (author, year, ISBN…)
-      • checkin  … link a Say/Post/… to an item with an *action*
-    """
-    db = get_db()
-    if db.execute("SELECT name FROM sqlite_master WHERE name='item'").fetchone():
-        return                     # already migrated
+        CREATE TRIGGER IF NOT EXISTS entry_au AFTER UPDATE ON entry BEGIN
+            /* delete the old row */
+            INSERT INTO entry_fts(entry_fts,  rowid, title, body, link)
+                VALUES('delete', old.id, old.title, old.body, old.link);
+            INSERT INTO entry_fts3(entry_fts3, rowid, title, body, link)
+                VALUES('delete', old.id, old.title, old.body, old.link);
 
-    db.executescript("""
-        CREATE TABLE item (
-            id     INTEGER PRIMARY KEY AUTOINCREMENT,
-            uuid   TEXT UNIQUE NOT NULL,
-            type   TEXT NOT NULL,              -- book / movie / game …
-            title  TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            /* insert the new version */
+            INSERT INTO entry_fts  (rowid,title,body,link)
+                VALUES (new.id, COALESCE(new.title,''), new.body, COALESCE(new.link,''));
+            INSERT INTO entry_fts3 (rowid,title,body,link)
+                VALUES (new.id, COALESCE(new.title,''), new.body, COALESCE(new.link,''));
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS entry_ad AFTER DELETE ON entry BEGIN
+            INSERT INTO entry_fts(entry_fts,  rowid, title, body, link)
+                VALUES('delete', old.id, old.title, old.body, old.link);
+            INSERT INTO entry_fts3(entry_fts3, rowid, title, body, link)
+                VALUES('delete', old.id, old.title, old.body, old.link);
+        END;
+
+        ------------------------------------------------------------
+        -- 6.  Re-usable media / places / etc. (“items”)
+        ------------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS item (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid        TEXT UNIQUE NOT NULL,        -- canonical id (always)
+            slug        TEXT UNIQUE NOT NULL,        -- user-changeable
+            item_type   TEXT NOT NULL,               -- book / film / …
+            title       TEXT NOT NULL
         );
-        CREATE TABLE item_meta (
+
+        CREATE TABLE IF NOT EXISTS item_meta (       -- arbitrary key/value
             item_id INTEGER NOT NULL,
-            key     TEXT NOT NULL,
-            value   TEXT,
-            PRIMARY KEY(item_id, key),
+            k       TEXT NOT NULL,
+            v       TEXT,
+            ord     INTEGER NOT NULL,
+            PRIMARY KEY (item_id, k),
             FOREIGN KEY (item_id) REFERENCES item(id) ON DELETE CASCADE
         );
-        CREATE TABLE checkin (
+
+        CREATE INDEX IF NOT EXISTS idx_item_type      ON item(item_type);
+        CREATE INDEX IF NOT EXISTS idx_item_meta_kv   ON item_meta(k, v);
+
+        ------------------------------------------------------------
+        -- 8.  Links “which entry talks about which item”
+        ------------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS entry_item (
             entry_id INTEGER NOT NULL,
             item_id  INTEGER NOT NULL,
-            action   TEXT NOT NULL,            -- reading / rereading / play …
-            created_at TEXT NOT NULL,
-            PRIMARY KEY(entry_id, item_id),
+            verb     TEXT NOT NULL,      -- read / watch / visit / …
+            action   TEXT NOT NULL,      -- reading / reread / …
+            progress TEXT,
+            PRIMARY KEY (entry_id, item_id),
             FOREIGN KEY (entry_id) REFERENCES entry(id) ON DELETE CASCADE,
             FOREIGN KEY (item_id)  REFERENCES item(id)  ON DELETE CASCADE
         );
-    """)
+        """
+    )
     db.commit()
 
 
 # -------------------------------------------------------------------------
 # Time helpers
 # -------------------------------------------------------------------------
-def local_now() -> datetime:
-    """
-    Return an *aware* datetime that is already converted to the server’s
-    local time-zone.  (Equivalent to datetime.now().astimezone())
-    """
-    return datetime.now().astimezone()
+def utc_now() -> datetime:
+    """Return an *aware* datetime in UTC."""
+    return datetime.now(timezone.utc)
 
 
 ###############################################################################
 # CLI – create admin + token
 ###############################################################################
+def load_simple_env(path=".env"):
+    p = Path(path)
+    if not p.exists():        # ── silently ignore if the file is absent
+        return
+
+    for line in p.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        os.environ.setdefault(k, shlex.split(v)[0])   # unquote if needed
+
+load_simple_env()
+
 def _create_admin(db, *, username: str, password: str) -> str:
     """Insert admin user and return the one-time token."""
     token = secrets.token_urlsafe(TOKEN_LEN)
@@ -457,9 +417,9 @@ def _rotate_token(db) -> str:
     return token
 
 @app.cli.command("init")
-@click.option("--username", prompt=True,
+@click.option("--username", envvar="ADMIN_USERNAME", prompt=True,
               help="Admin username (will be created if DB empty)")
-@click.option("--password", prompt=True, hide_input=True,
+@click.option("--password", envvar="ADMIN_PASSWORD", prompt=True, hide_input=True,
               confirmation_prompt=True,
               help="Admin password")
 def cli_init(username: str, password: str):
@@ -484,131 +444,6 @@ def cli_token():
     click.secho("\n🔑  Fresh login token generated.\n", fg="yellow")
     click.echo(f"{token}\n")
     click.echo("Valid until first use → /login?token=<token>")
-
-###############################################################################
-# Authentication + routes
-###############################################################################
-def validate_token(token: str) -> bool:
-    db = get_db()
-    row = db.execute('SELECT token_hash FROM user LIMIT 1').fetchone()
-    return row and check_password_hash(row['token_hash'], token)
-
-
-def login_required() -> None:         
-    if not session.get("logged_in"):
-        abort(403)
-
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    # ── read token from form or query string ──────────────────────────────
-    token = (request.form['token'] if request.method == 'POST'
-             else request.args.get('token', '')).strip()
-
-    if token and validate_token(token):
-        # ── token matched → burn it right away ────────────────────────
-        db = get_db()
-        db.execute('UPDATE user SET token_hash=? WHERE id=1',
-                   (generate_password_hash(secrets.token_hex(16)),))
-        db.commit()
-
-        session.permanent = True      # keep user logged in across browser restarts
-        session['logged_in'] = True
-        return redirect(url_for('index'))
-
-    return render_template_string(TEMPL_LOGIN)
-
-@app.route('/logout')
-def logout():
-    session.clear()
-    return redirect(url_for('index'))
-
-@app.route("/sakura-dark.min.css")
-def sakura_dark():
-    """Serve the local Sakura stylesheet with long-term caching."""
-    return send_from_directory(
-        Path(__file__).parent,          # directory where blog.py lives
-        "sakura-dark.min.css",          # the file you downloaded
-        mimetype="text/css",
-        max_age=60*60*24*365            # 1-year cache header
-    )
-
-@app.route('/favicon.ico')
-def favicon():
-    return send_from_directory(
-        Path(__file__).parent,          # directory where blog.py lives
-        "favicon.ico",                  # the file you downloaded
-        mimetype='image/vnd.microsoft.icon',
-        max_age=60*60*24*365            # 1-year cache header
-    )
-
-###############################################################################
-# Tags (cloud + filter)  ─────────────────────────────────────────────────────
-###############################################################################
-@app.route('/tags',               defaults={'tag_list': ''})
-@app.route('/tags/<path:tag_list>')
-def tags(tag_list: str):
-    """
-    Show a tag cloud.  Pills can be selected / deselected; the current
-    selection is encoded in the path as  /tags/foo+bar+baz
-    """
-    db = get_db()
-
-    # ---------- tag statistics for the cloud --------------------------------
-    cur  = db.execute("""SELECT t.name, COUNT(et.entry_id) AS cnt
-                         FROM tag t
-                         LEFT JOIN entry_tag et ON t.id = et.tag_id
-                         GROUP BY t.id
-                         ORDER BY LOWER(t.name)""")
-    rows = [dict(r) for r in cur]           # make mutable dicts
-
-    # ---------- who is currently selected? ----------------------------------
-    selected = {t.lower() for t in tag_list.split('+') if t}
-
-    # ---------- scale counts → font-size (same as before) -------------------
-    counts = [r["cnt"] for r in rows]
-    lo, hi = (min(counts), max(counts)) if counts else (0, 0)
-    span   = max(1, hi - lo)
-    for r in rows:
-        weight     = (r["cnt"] - lo) / span if counts else 0
-        r["size"]  = f"{0.75 + weight * 1.2:.2f}em"
-        r["active"] = r["name"] in selected
-
-        # ── URL that would result from clicking the pill ────────────────────
-        new_sel = (selected - {r["name"]}) if r["active"] else (selected | {r["name"]})
-        r["href"] = url_for('tags', tag_list='+'.join(sorted(new_sel))) if new_sel else url_for('tags')
-
-    # ---------- fetch entries if something is selected ----------------------
-    page = max(int(request.args.get('page', 1)), 1)
-    per  = page_size()
-    if selected:
-        q_marks = ','.join('?' * len(selected))
-        base_sql = f"""SELECT e.*
-                  FROM entry  e
-                  JOIN entry_tag et ON et.entry_id = e.id
-                  JOIN tag       t  ON t.id        = et.tag_id
-                  WHERE t.name IN ({q_marks})
-                  GROUP BY e.id
-                  HAVING COUNT(DISTINCT t.name)=?
-                  ORDER BY e.created_at DESC"""
-        entries, total_pages = paginate(base_sql,
-                                        (*selected, len(selected)),
-                                        page=page, per_page=per, db=db)
-        pages = list(range(1, total_pages + 1))
-    else:
-        entries, pages = None, []                       # nothing selected → no list
-
-
-    return render_template_string(
-        TEMPL_TAGS,
-        tags     = rows,
-        entries  = entries,
-        selected = selected,
-        page     = page,
-        pages    = pages,
-        title    = get_setting('site_name', 'po.etr.ist'),
-        kind     = 'tags',
-        username = current_username(),
-    )
 
 
 ###############################################################################
@@ -639,6 +474,9 @@ def set_setting(key, value):
         (key, value))
     db.commit()
 
+def is_b64_image(k: str, v: str) -> bool:
+    return k.lower() in {"cover", "img", "poster"} and len(v) > 100
+
 # Slug helpers
 def slug_map() -> dict[str, str]:
     """Return {'say':'saying', 'post':'post', …} with fall-back defaults."""
@@ -652,7 +490,7 @@ def kind_to_slug(kind: str) -> str:
 
 def slug_to_kind(slug: str) -> str | None:
     rev = {v: k for k, v in slug_map().items()}
-    return rev.get(slug)         
+    return rev.get(slug, slug)      
 
 # Pagination helpers
 def page_size() -> int:
@@ -713,6 +551,202 @@ def nav_pages():
         "SELECT title, slug FROM entry WHERE kind='page' ORDER BY LOWER(title)"
     ).fetchall()
 
+# ── compact one-liner (verb:item:identifier[:progress]) ──────────────
+CARET_COMPACT_RE = re.compile(r'''
+    ^\^
+    (?:"([^"]+)"|([a-z0-9_-]+)) :      # ➊ action  (grp 1 if quoted, grp 2 plain)
+    (?:"([^"]+)"|([a-z0-9_-]+)) :      # ➋ item_type (grp 3 or grp 4)
+    (?:
+        "([^"]+)"                      # ➌ title — quoted         (grp 5)
+      | ([^":\s]+)                     #     title — **un-quoted** (grp 6)
+      | ([0-9a-f-]{36}|[a-z0-9_-]+)    #     slug/uuid             (grp 7)
+    )
+    (?:\s*:\s*(?:"([^"]+)"|([^":\s]+)))?  # ➍ progress (grp 8/9)
+''', re.X | re.I | re.U)
+# ── “long” meta lines ─────────────────────────
+META_RE = re.compile(
+    r'^\^([a-z0-9_-]+):"?(.*?)"?$',     # key : "value"   or   key : value
+    re.I
+)
+UUID4_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$', re.I)
+
+def parse_trigger(text: str) -> tuple[str, list[dict]]:
+    out_blocks, new_lines = [], []
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+
+        # ── try compact form first ────────────────────────────────
+        m = CARET_COMPACT_RE.match(line)
+        if m:
+            action    = m.group(1) or m.group(2)
+            item_type = m.group(3) or m.group(4)
+            title = m.group(5) or m.group(6)      # quoted OR un-quoted
+            slug  = m.group(7)                    # stays the same meaning
+            prog  = m.group(8) or m.group(9)      # quoted OR un-quoted
+
+            verb = next(
+                (vb for vb, acts in VERB_MAP.items() if action in acts),
+                action
+            )
+            blk = {
+                "verb"      : verb,
+                "action"    : action,
+                "item_type" : item_type,
+                "title"     : title,
+                "slug"      : slug,
+                "progress"  : prog,
+                "meta"      : {},
+            }
+
+            # ── NEW: hoover up following '^key:value' lines ──────────────────
+            j = i + 1
+            while j < len(lines):
+                nxt = lines[j].strip()
+                if not nxt.startswith('^') or CARET_COMPACT_RE.match(nxt):
+                    break                       # stop on blank / non-caret / new block
+                km = META_RE.match(nxt)
+                if km:
+                    k, v = km.groups()
+                    k = k.lower()
+                    if k == "progress":
+                        blk["progress"] = v
+                    elif k not in {          # core fields already set above
+                            "action", "verb", "item", "item_type",
+                            "title", "uuid", "slug"}:
+                        blk["meta"][k] = v
+                j += 1
+
+            i = j                              # skip the absorbed lines
+            out_blocks.append(blk)
+            new_lines.append(f'^{item_type}:$PENDING${len(out_blocks)-1}$')
+            continue
+
+        # ── otherwise: collect verbose caret-meta lines ───────────
+        if line.startswith('^'):
+            tmp = {"verb":None,"action":None,"item_type":None,
+                   "title":None,"slug":None,"progress":None,"meta":{}}
+            while i < len(lines) and lines[i].lstrip().startswith('^'):
+                print(i)
+                ln = lines[i].strip()
+                m2 = META_RE.match(ln)
+                if not m2:
+                    new_lines.append(lines[i])
+                    i += 1
+                    continue
+                k, v = m2.groups()
+                k = k.lower()
+                if k in ("action", "verb"):      
+                    tmp["action"]    = v
+                elif k in ("item", "item_type"): 
+                    tmp["item_type"] = v
+                elif k == "title":               
+                    tmp["title"]     = v
+                elif k in ("uuid","slug"):       
+                    tmp["slug"]      = v
+                elif k == "progress":            
+                    tmp["progress"]  = v
+                elif tmp["item_type"] is None:
+                    tmp["item_type"] = k               
+                    # decide whether the value is a slug/uuid or a title
+                    if UUID4_RE.fullmatch(v) or TOKEN_RE.fullmatch(v):
+                        tmp["slug"] = v
+                    else:
+                        tmp["title"] = v
+                else:                            
+                    tmp["meta"][k]   = v
+                i += 1
+
+            tmp["verb"] = next(
+                (vb for vb, acts in VERB_MAP.items() if tmp["action"] in acts),
+                tmp["action"]
+            )
+            out_blocks.append(tmp)
+            new_lines.append(f'^{tmp["item_type"]}:$PENDING${len(out_blocks)-1}$')
+            continue
+
+        # ── a normal, non-caret line ──────────────────────────────
+        new_lines.append(lines[i])
+        i += 1
+
+    return '\n'.join(new_lines), out_blocks
+
+def get_or_create_item(*, item_type, title, meta,
+                       slug: str | None = None,
+                       db,
+                       update_meta: bool = True):
+    # ➊ look up by slug first (if given)  --------------------------
+    if slug:
+        row = db.execute("SELECT id, slug, uuid FROM item WHERE slug=?", (slug,)).fetchone()
+        if row:
+            return row["id"], row["slug"], row["uuid"]
+        if UUID4_RE.fullmatch(slug):
+            row = db.execute("SELECT id, slug, uuid FROM item WHERE uuid=?", (slug,)).fetchone()
+            if row:
+                return row["id"], row["slug"], row["uuid"]
+
+    # ➋ no slug/uuid → **always** create a new item
+    #     (titles are allowed to repeat)
+
+    # ➌ …or create a fresh item ------------------------------------
+    if title is None:
+        raise ValueError("slug not found and no title given → cannot create item")
+    
+    uuid_ = str(uuid.uuid4())
+    slug  = slug or uuid_
+    db.execute(
+        "INSERT INTO item (uuid, slug, item_type, title) VALUES (?,?,?,?)",
+        (uuid_, slug, item_type, title)
+    )
+    item_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    if update_meta:
+        for ord, (k, v) in enumerate(meta.items(), start=1):
+            db.execute(
+                "INSERT OR REPLACE INTO item_meta (item_id,k,v,ord) VALUES (?,?,?,?)",
+                (item_id, k, v, ord)
+            )
+    return item_id, slug, uuid_
+
+def has_kind(kind: str) -> bool:
+    """True if at least one entry of this kind exists."""
+    row = get_db().execute(
+        "SELECT 1 FROM entry WHERE kind=? LIMIT 1", (kind,)
+    ).fetchone()
+    return bool(row)
+
+VERB_KINDS = tuple(VERB_MAP.keys())
+def active_verbs() -> list[str]:
+    """All verbs that actually occur in the DB, in the declared order."""
+    rows = get_db().execute(
+        f"SELECT DISTINCT kind FROM entry "
+        f"WHERE kind IN ({','.join('?'*len(VERB_KINDS))})",
+        VERB_KINDS
+    ).fetchall()
+    present = {r['kind'] for r in rows}
+    return [v for v in VERB_KINDS if v in present]
+
+def _verbose_block(blk, uuid_):
+    """Return the 5-line caret block​ string for one check-in."""
+    def q(s):
+        return f'"{s}"' if ' ' in s else s      # quote if it contains spaces
+    parts = [
+        f'^uuid:{uuid_}',
+        f'^item_type:{blk["item_type"]}',
+        f'^title:{q(blk["title"])}'   if blk["title"] else '',
+        f'^action:{blk["action"]}',
+        f'^progress:{q(blk["progress"])}' if blk["progress"] else ''
+    ]
+    return '\n'.join(p for p in parts if p)
+
+
+def _csrf_token() -> str:
+    """One token per session (rotates when the cookie does)."""
+    if "csrf" not in session:
+        session["csrf"] = secrets.token_hex(16)
+    return session["csrf"]
+
 # Expose helpers to templates
 app.jinja_env.globals.update(kind_to_slug=kind_to_slug, get_setting=get_setting)
 app.jinja_env.globals['external_icon'] = lambda: Markup("""
@@ -729,264 +763,31 @@ app.jinja_env.globals['PAGE_DEFAULT'] = PAGE_DEFAULT
 app.jinja_env.globals['entry_tags'] = lambda eid: entry_tags(eid, db=get_db())
 app.jinja_env.globals['nav_pages'] = nav_pages
 app.jinja_env.globals['version'] = __version__
+app.jinja_env.globals.update(has_kind=has_kind,
+                             active_verbs=active_verbs,
+                             verb_kinds=VERB_KINDS)
+app.jinja_env.globals["csrf_token"] = _csrf_token
+app.jinja_env.globals['is_b64_image'] = is_b64_image
+
+def theme_color() -> str:
+    """Current theme colour (hex), falling back to the original green."""
+    return get_setting('theme_color', '#A5BA93')
+app.jinja_env.globals["theme_color"] = theme_color
+
+THEME_PRESETS = {
+    "Fern"   : "#A5BA93", 
+    "Ocean"  : "#70C0E8",
+    "Sunset" : "#F28C6B",
+    "Lavender": "#BC9CFF",
+    "Cherry" : "#EF476F",
+    "Gold"   : "#F0A202",
+}
+app.jinja_env.globals["theme_presets"] = THEME_PRESETS
 
 ###############################################################################
-# Views
+# Templates + Views 
 ###############################################################################
-@app.route('/', methods=['GET', 'POST'])
-def index():
-    db = get_db()
 
-    # Quick-add “Say” for logged-in admin
-    if request.method == 'POST':
-        login_required()
-        body = request.form['body'].strip()
-
-        if body:
-            kind  = infer_kind('', '')
-            now_dt  = local_now()
-            now = now_dt.isoformat(timespec='seconds')
-            slug = now_dt.strftime("%Y%m%d%H%M%S")
-
-            db.execute("""INSERT INTO entry (body, created_at, slug, kind)
-                          VALUES (?,?,?,?)""",
-                       (body, now, slug, kind))
-            entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-
-            sync_tags(entry_id, extract_tags(body), db=db)
-            db.commit()
-            return redirect(url_for('index'))
-
-
-    # pagination
-    page = max(int(request.args.get('page', 1)), 1)
-    ps   = page_size()
-
-    BASE_SQL = "SELECT * FROM entry WHERE kind!='page' ORDER BY created_at DESC"
-
-    entries, total_pages = paginate(BASE_SQL, (), page=page, per_page=ps, db=db)
-
-    pages = list(range(1, total_pages+1))
-
-    return render_template_string(
-        TEMPL_INDEX,
-        entries = entries,
-        page    = page,
-        pages   = pages,          
-        title   = get_setting('site_name', 'po.etr.ist'),
-        username= current_username(),
-    )
-
-@app.route('/<slug>', methods=['GET', 'POST'])
-def by_kind(slug):
-    db = get_db()
-
-    page = db.execute("SELECT * FROM entry WHERE kind='page' AND slug=?", (slug,)).fetchone()
-    if page:
-        return render_template_string(
-            TEMPL_PAGE,
-            e        = page,
-            title    = get_setting('site_name', 'po.etr.ist'),
-            username = current_username(),
-            kind     = 'page',
-        )
-
-    kind = slug_to_kind(slug)
-    if kind not in KINDS[:-1]:
-        abort(404)
-
-    # ---------- create new entry when the admin submits the inline form ----
-    if request.method == 'POST':
-        login_required()
-
-        title = request.form.get('title', '').strip()
-        body  = request.form.get('body',  '').strip()
-        link  = request.form.get('link',  '').strip()
-
-        missing = []
-
-        if kind == 'say':
-            if not body:
-                missing.append('body')
-
-        elif kind == 'post':
-            if not title:
-                missing.append('title')
-            if not body:
-                missing.append('body')
-
-        elif kind == 'pin':                # body is OPTIONAL here
-            if not title:
-                missing.append('title')
-            if not link:
-                missing.append('link')
-
-        if missing:
-            nice = ' and '.join(missing)
-            flash(f'{nice.capitalize()} {"is" if len(missing)==1 else "are"} required.')
-            return redirect(url_for('by_kind', slug=kind_to_slug(kind)))
-
-        now_dt = local_now()
-        now = now_dt.isoformat(timespec='seconds')
-        slug = now_dt.strftime("%Y%m%d%H%M%S")
-        db.execute("""INSERT INTO entry
-                        (title, body, link, created_at, slug, kind)
-                     VALUES (?,?,?,?,?,?)""",
-                   (title or None, body, link or None, now, slug, kind))
-        entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-        sync_tags(entry_id, extract_tags(body), db=db)
-        db.commit()
-        
-        return redirect(url_for('by_kind', slug=kind_to_slug(kind)))
-
-    # --- pagination -------------------------------------------------------
-    page = max(int(request.args.get('page', 1)), 1)
-    ps   = page_size()
-
-    entries, total_pages = paginate('SELECT * FROM entry WHERE kind=? ORDER BY created_at DESC', (kind,), page=page, per_page=ps, db=db)
-    pages = list(range(1, total_pages+1))
-
-    return render_template_string(
-        TEMPL_LIST,
-        rows     = entries,
-        pages    = pages,
-        page     = page,
-        heading  = kind.capitalize()+'s',
-        kind     = kind,
-        title    = get_setting('site_name', 'po.etr.ist'),
-        username = current_username(),
-    )
-
-@app.route('/settings', methods=['GET', 'POST'])
-def settings():
-    login_required()
-
-    db = get_db()
-
-    if request.method == 'POST' and request.form.get('action') == 'rotate_token':
-        session['one_time_token'] = _rotate_token(db)   # store once
-        return redirect(url_for('settings'), code=303)  # PRG; 303 = “See Other”
-
-
-    if request.method == 'POST':
-        site_name = request.form['site_name'].strip()
-        username  = request.form['username'].strip()
-
-        if site_name:
-            set_setting('site_name', site_name)
-
-        if username:
-            db.execute('UPDATE user SET username=? WHERE id=1', (username,))
-            db.commit()
-
-        set_setting('slug_say',  request.form.get('slug_say',  '').strip() or 'say')
-        set_setting('slug_post', request.form.get('slug_post', '').strip() or 'post')
-        set_setting('slug_pin',  request.form.get('slug_pin',  '').strip() or 'pin')
-
-        size = max(1, int(raw)) if (raw := request.form.get('page_size','').strip()).isdigit() else PAGE_DEFAULT
-        set_setting('page_size', size)
-
-        flash('Settings saved.')
-        return redirect(url_for('settings'))
-
-    new_token = session.pop('one_time_token', None)     # use-and-forget
-    cur_username = db.execute('SELECT username FROM user LIMIT 1') \
-                       .fetchone()['username']
-    return render_template_string(
-        TEMPL_SETTINGS,
-        title      = get_setting('site_name', 'po.etr.ist'),
-        site_name  = get_setting('site_name', 'po.etr.ist'),
-        username   = cur_username,
-        new_token  = new_token
-    )
-
-@app.route('/<kind_slug>/<entry_slug>')
-def entry_detail(kind_slug, entry_slug):
-    kind = slug_to_kind(kind_slug)
-    if kind not in KINDS[:-1]:
-        abort(404)
-
-    row = get_db().execute(
-        "SELECT * FROM entry WHERE kind=? AND slug=?",
-        (kind, entry_slug)
-    ).fetchone()
-    if not row:
-        abort(404)
-
-    return render_template_string(
-        TEMPL_DETAIL,
-        e=row,
-        title=get_setting('site_name', 'po.etr.ist'),
-        username=current_username(),
-        kind=row['kind']
-    )
-
-@app.route('/<kind_slug>/<entry_slug>/edit', methods=['GET', 'POST'])
-def edit_entry(kind_slug, entry_slug):
-    login_required()
-    kind = slug_to_kind(kind_slug)
-    db   = get_db()
-
-    row  = db.execute("SELECT * FROM entry WHERE kind=? AND slug=?",
-                      (kind, entry_slug)).fetchone()
-    if not row:
-        abort(404)
-
-    if request.method == 'POST':
-        title = request.form.get('title','').strip() or None
-        body  = request.form['body'].strip()
-        link  = request.form.get('link','').strip() or None
-        new_slug = request.form.get('slug','').strip() or row['slug']
-        new_kind = ('page' if request.form.get('is_page') == '1'
-                    else infer_kind(title, link))
-
-        if not body:
-            flash('Body is required.')
-            return redirect(request.url)
-
-        db.execute("""UPDATE entry
-                         SET title=?, body=?, link=?, slug=?, kind=?, updated_at=?
-                       WHERE id=?""",
-                   (title, body, link, new_slug, new_kind,
-                    local_now().isoformat(timespec='seconds'),
-                    row['id']))
-        sync_tags(row['id'], extract_tags(body), db=db)
-        db.commit()
-
-        return redirect(url_for('entry_detail',
-                                kind_slug=kind_to_slug(new_kind),
-                                entry_slug=new_slug))
-
-    return render_template_string(TEMPL_EDIT,
-                                  e=row,
-                                  title=get_setting('site_name', 'po.etr.ist'))
-
-@app.route('/<kind_slug>/<entry_slug>/delete', methods=['GET', 'POST'])
-def delete_entry(kind_slug, entry_slug):
-    login_required()
-    kind = slug_to_kind(kind_slug)
-    db   = get_db()
-
-    row = db.execute("SELECT * FROM entry WHERE kind=? AND slug=?",
-                     (kind, entry_slug)).fetchone()
-    if not row:
-        abort(404)
-
-    if request.method == 'POST':
-        db.execute('DELETE FROM entry WHERE id=?', (row['id'],))
-        db.commit()
-        db.execute("DELETE FROM tag WHERE id NOT IN "
-                   "(SELECT DISTINCT tag_id FROM entry_tag)")
-        db.commit()
-        return redirect(url_for('index'))
-
-    return render_template_string(TEMPL_DELETE,
-                                  e=row,
-                                  title=get_setting('site_name', 'po.etr.ist'))
-
-###############################################################################
-# Embedde​d templates
-###############################################################################
 def wrap(body: str) -> str:
     """Glue prolog + page-specific body + epilog."""
     return TEMPL_PROLOG + body + TEMPL_EPILOG
@@ -1023,45 +824,80 @@ TEMPL_PROLOG = """
     ↓
 </a>
 <div class="container" style="max-width: 60rem; margin: 3rem auto;">
-    <h1 style="margin-top:0;"><a href="{{ url_for('index') }}">{{title or 'po.etr.ist'}}</a></h1>
-    <nav style="margin-bottom:1rem;display:flex;">
-        <div>
-            <a href="{{ url_for('by_kind', slug=kind_to_slug('say')) }}"
-                {% if kind|default('')=='say'  %}style="text-decoration:none;border-bottom:0.33rem solid #aaa;"{% endif %}>
+    <h1 style="margin-top:0;"><a href="{{ url_for('index') }}" style="color:{{ theme_color() }};">{{title or 'po.etr.ist'}}</a></h1>
+    <nav style="margin-bottom:1rem;
+                display:flex;
+                align-items:flex-end;
+                font-size:.9em;">
+
+        <!-- LEFT : two stacked rows -->
+        <div style="display:flex; flex-direction:column; gap:.25rem;">
+
+            <!-- row 1 – legacy kinds -->
+            <div>
+                <a href="{{ url_for('by_kind', slug=kind_to_slug('say')) }}"
+                {% if kind=='say' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
                 Says</a>&nbsp;&nbsp;
-            <a href="{{ url_for('by_kind', slug=kind_to_slug('post')) }}"
-                {% if kind|default('')=='post' %}style="text-decoration:none;border-bottom:0.33rem solid #aaa;"{% endif %}>
+
+                <a href="{{ url_for('by_kind', slug=kind_to_slug('post')) }}"
+                {% if kind=='post' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
                 Posts</a>&nbsp;&nbsp;
-            <a href="{{ url_for('by_kind', slug=kind_to_slug('pin')) }}"
-                {% if kind|default('')=='pin'  %}style="text-decoration:none;border-bottom:0.33rem solid #aaa;"{% endif %}>
+
+                <a href="{{ url_for('by_kind', slug=kind_to_slug('pin')) }}"
+                {% if kind=='pin' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
                 Pins</a>&nbsp;&nbsp;
-            <a href="{{ url_for('tags') }}"
-                {% if kind|default('')=='tags' %}style="text-decoration:none;border-bottom:0.33rem solid #aaa;"{% endif %}>
+
+                <a href="{{ url_for('tags') }}"
+                {% if kind=='tags' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
                 Tags</a>&nbsp;&nbsp;
-            {% for p in nav_pages() %}
-                <a href="{{ '/' ~ p['slug'] }}"
-                {% if request.path|trim('/') == p['slug'] %}style="text-decoration:none;border-bottom:0.33rem solid #aaa;"{% endif %}>
-                {{ p['title'] }}</a>
-                {% if not loop.last %}&nbsp;&nbsp;{% endif %}
-            {% endfor %}
-        </div>
-        <div style="margin-left:auto; white-space:nowrap;">
-            {% if session.get('logged_in') %}
-                &nbsp;&nbsp;
-                <a href="{{ url_for('settings') }}"
-                {% if request.endpoint == 'settings' %}
-                    style="text-decoration:none;border-bottom:0.33rem solid #aaa;"
-                {% endif %}>
-                Settings</a>
-            {% else %}
-                &nbsp;&nbsp;
-                <a href="{{ url_for('login') }}"
-                {% if request.endpoint == 'login' %}
-                    style="font-weight:bold; text-decoration:none;"
-                {% endif %}>
-                Login
-                </a>
+
+                {% for p in nav_pages() %}
+                    <a href="{{ '/' ~ p['slug'] }}"
+                    {% if request.path|trim('/') == p['slug'] %}
+                        style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
+                    {{ p['title'] }}</a>{% if not loop.last %}&nbsp;&nbsp;{% endif %}
+                {% endfor %}
+            </div>
+
+            <!-- row 2 – verbs (shown only if at least one exists) -->
+            {% if active_verbs() %}
+            <div>
+                {% for v in active_verbs() %}
+                    {% set label = {'read':'Read','watch':'Watch',
+                                    'listen':'Listen','play':'Play','visit':'Visit', "use": "Use"}[v] %}
+                    <a href="{{ url_for('by_kind', slug=kind_to_slug(v)) }}"
+                    {% if verb==v %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
+                    {{ label }}</a>{% if not loop.last %}&nbsp;&nbsp;{% endif %}
+                {% endfor %}
+            </div>
             {% endif %}
+        </div>
+
+        <!-- RIGHT : two stacked rows (auth button, search) -->
+        <div style="margin-left:auto; display:flex; flex-direction:column; gap:.25rem;align-items:flex-end;">
+
+            <!-- row 1 – Settings OR Login -->
+            <div style="white-space:nowrap;">
+                {% if session.get('logged_in') %}
+                    <a href="{{ url_for('settings') }}"
+                    {% if request.endpoint=='settings' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
+                    Settings</a>
+                {% else %}
+                    <a href="{{ url_for('login') }}"
+                    {% if request.endpoint=='login' %}style="font-weight:bold;text-decoration:none;"{% endif %}>
+                    Login</a>
+                {% endif %}
+            </div>
+
+            <!-- row 2 – search box -->
+            <div>
+                <form action="{{ url_for('search') }}" method="get" style="margin:0;">
+                    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+                    <input type="search" name="q" placeholder="Search"
+                        value="{{ request.args.get('q','') }}"
+                        style="width:13rem;font-size:.8em; padding:.2em .6em; margin:0;">
+                </form>
+            </div>
         </div>
     </nav>
     {% with msgs = get_flashed_messages() %}
@@ -1094,46 +930,365 @@ TEMPL_EPILOG = """
         <span style="font-weight:normal;color:#aaa;">
             Built with
             <a href="https://github.com/huangziwei/poetrist"
-               style="color:#A5BA93;text-decoration:none;border-bottom:0.1px dotted currentColor;">
+               style="color:{{ theme_color() }};text-decoration:none;border-bottom:0.1px dotted currentColor;">
                poetrist</a>
                <span style="font-weight:normal;color:#aaa">v{{ version }}</span>
         </span>
-
-        <!-- right-hand side -->
-        <form action="{{ url_for('search') }}" method="get" style="margin:0;">
-            <input type="search" name="q" placeholder="Search"
-                   value="{{ request.args.get('q','') }}"
-                   style="font-size:.8em; padding:.2em .6em;margin:0;">
-        </form>
     </footer>
 </div> <!-- container -->
 """
+
+###############################################################################
+# Authentication
+###############################################################################
+def validate_token(token: str) -> bool:
+    db = get_db()
+    row = db.execute('SELECT token_hash FROM user LIMIT 1').fetchone()
+    return row and check_password_hash(row['token_hash'], token)
+
+def login_required() -> None:         
+    if not session.get("logged_in"):
+        abort(403)
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    # ── read token from form or query string ──────────────────────────────
+    token = (request.form['token'] if request.method == 'POST'
+             else request.args.get('token', '')).strip()
+
+    if token and validate_token(token):
+        # ── token matched → burn it right away ────────────────────────
+        db = get_db()
+        db.execute('UPDATE user SET token_hash=? WHERE id=1',
+                   (generate_password_hash(secrets.token_hex(16)),))
+        db.commit()
+
+        session.permanent = True      # keep user logged in across browser restarts
+        session['logged_in'] = True
+        return redirect(url_for('index'))
+
+    return render_template_string(TEMPL_LOGIN)
 
 
 TEMPL_LOGIN = wrap("""
     {% block body %}
     <hr>
     <form method=post>
-    <div style="position:relative;">
-        <input  name="token"
-            type="password"          
-            autocomplete="current-password"
-            style="width:100%; padding-right:7rem;">
-        <label for="token"
-                style="position:absolute;
-                        right:.5rem;
-                        top:40%;
-                        transform:translateY(-50%);
-                        pointer-events:none;
-                        font-size:.75em;
-                        color:#aaa;">
-                    token
-        </label>
-    </div>
-    <button>Log&nbsp;in</button>
+        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+        <div style="position:relative;">
+            <input  name="token"
+                type="password"          
+                autocomplete="current-password"
+                style="width:100%; padding-right:7rem;">
+            <label for="token"
+                    style="position:absolute;
+                            right:.5rem;
+                            top:40%;
+                            transform:translateY(-50%);
+                            pointer-events:none;
+                            font-size:.75em;
+                            color:#aaa;">
+                        token
+            </label>
+        </div>
+        <button>Log&nbsp;in</button>
     </form>
     {% endblock %}
 """)
+
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('index'))
+
+###############################################################################
+# Resources
+###############################################################################
+@app.route("/sakura-dark.min.css")
+def sakura_dark():
+    """Serve the local Sakura stylesheet with long-term caching."""
+    return send_from_directory(
+        Path(__file__).parent,          # directory where blog.py lives
+        "sakura-dark.min.css",          # the file you downloaded
+        mimetype="text/css",
+        max_age=60*60*24*365            # 1-year cache header
+    )
+
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory(
+        Path(__file__).parent,          # directory where blog.py lives
+        "favicon.ico",                  # the file you downloaded
+        mimetype='image/x-icon',
+        max_age=60*60*24*365            # 1-year cache header
+    )
+
+@app.route('/robots.txt')
+def robots():
+    """
+    Block every crawler – search engines, AI spiders, everything.
+    """
+    rules = (
+        "User-agent: *\n"
+        "Disallow: /\n"
+    )
+    # Cache it for a year – the file never changes
+    return Response(rules, mimetype='text/plain', direct_passthrough=True), 200, {
+        "Cache-Control": "public, max-age=31536000"
+    }
+
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
+@app.before_request
+def csrf_protect():
+    if request.method in SAFE_METHODS:
+        return                       # read-only → no check
+
+    token = session.get("csrf", "")
+    # prefer form field, fall back to custom header for fetch/axios
+    sent  = request.form.get("csrf") or request.headers.get("X-CSRFToken", "")
+    if not token or not secrets.compare_digest(token, sent):
+        abort(403)
+
+###############################################################################
+# Settings
+###############################################################################
+@app.route('/settings', methods=['GET', 'POST'])
+def settings():
+    login_required()
+
+    db = get_db()
+
+    if request.method == 'POST' and request.form.get('action') == 'rotate_token':
+        session['one_time_token'] = _rotate_token(db)   # store once
+        return redirect(url_for('settings'), code=303)  # PRG; 303 = “See Other”
+
+
+    if request.method == 'POST':
+        site_name = request.form['site_name'].strip()
+        username  = request.form['username'].strip()
+        col = request.form['theme_color'].strip()
+
+        if site_name:
+            set_setting('site_name', site_name)
+
+        if username:
+            db.execute('UPDATE user SET username=? WHERE id=1', (username,))
+            db.commit()
+
+        if col:
+            if re.fullmatch(r'#?[0-9A-Fa-f]{6}', col):
+                if not col.startswith('#'):
+                    col = '#' + col
+                set_setting('theme_color', col)
+            else:
+                flash('Invalid colour – please use 6-digit hex.')
+
+        set_setting('slug_say',  request.form.get('slug_say',  '').strip() or 'say')
+        set_setting('slug_post', request.form.get('slug_post', '').strip() or 'post')
+        set_setting('slug_pin',  request.form.get('slug_pin',  '').strip() or 'pin')
+
+        size = max(1, int(raw)) if (raw := request.form.get('page_size','').strip()).isdigit() else PAGE_DEFAULT
+        set_setting('page_size', size)
+
+        flash('Settings saved.')
+        return redirect(url_for('settings'))
+
+    new_token = session.pop('one_time_token', None)     # use-and-forget
+    cur_username = db.execute('SELECT username FROM user LIMIT 1') \
+                       .fetchone()['username']
+    return render_template_string(
+        TEMPL_SETTINGS,
+        site_name  = get_setting('site_name', 'po.etr.ist'),
+        username   = cur_username,
+        new_token  = new_token
+    )
+
+TEMPL_SETTINGS = wrap("""
+    {% block body %}
+    <hr>
+    <form method="post" style="max-width:36rem">
+        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+        <!-- ──────────── site info ──────────── -->
+        <fieldset style="margin:0 0 1.5rem 0; border:0; padding:0">
+            <legend style="font-weight:bold; margin-bottom:.5rem;">Site</legend>
+
+            <label style="display:block; margin:.5rem 0">
+                <span style="font-size:.8em; color:#aaa">Site name</span><br>
+                <input name="site_name" value="{{ site_name }}" style="width:100%">
+            </label>
+
+            <label style="display:block; margin:.5rem 0">
+                <span style="font-size:.8em; color:#aaa">Username</span><br>
+                <input name="username" value="{{ username }}" style="width:100%">
+            </label>
+                      
+            <label style="display:block; margin:.5rem 0">
+                <span style="font-size:.8em; color:#aaa">Theme colour</span><br>
+                <input name="theme_color"
+                    value="{{ get_setting('theme_color', '#A5BA93') }}"
+                    placeholder="#A5BA93"
+                    style="width:8rem">
+            </label>
+        </fieldset>
+
+        <!-- ──────────── slugs ──────────── -->
+        <fieldset style="margin:0 0 1.5rem 0; border:0; padding:0">
+            <legend style="font-weight:bold; margin-bottom:.5rem;">URL slugs</legend>
+                <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(10rem,1fr)); gap:.75rem;">
+                    <label>
+                        <span style="font-size:.8em; color:#aaa">Says</span><br>
+                        <input name="slug_say"  value="{{ get_setting('slug_say',  'say')  }}" style="width:100%">
+                    </label>
+                    <label>
+                        <span style="font-size:.8em; color:#aaa">Posts</span><br>
+                        <input name="slug_post" value="{{ get_setting('slug_post', 'post') }}" style="width:100%">
+                    </label>
+                    <label>
+                        <span style="font-size:.8em; color:#aaa">Pins</span><br>
+                        <input name="slug_pin" value="{{ get_setting('slug_pin',  'pin')  }}" style="width:100%">
+                    </label>
+            </div>
+        </fieldset>
+
+        <!-- ──────────── display ──────────── -->
+        <fieldset style="margin:0 0 1.5rem 0; border:0; padding:0">
+            <legend style="font-weight:bold; margin-bottom:.5rem;">Display</legend>
+            <label style="display:block; margin:.5rem 0">
+                <span style="font-size:.8em; color:#aaa">Entries per page</span><br>
+                <input name="page_size"
+                    value="{{ get_setting('page_size', PAGE_DEFAULT) }}"
+                    style="width:8rem">
+            </label>
+        </fieldset>
+        <button style="margin-top:.5rem;">Save settings</button>
+    </form>
+    <div style="display:flex; gap:1rem; max-width:36rem; margin-top:2rem;">
+        <!-- token button in its own tiny form -->
+        <form method="post" style="margin:0;">
+            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+            <button name="action" value="rotate_token" style="color:{{ theme_color() }}; background:#333;">
+                Get new token
+            </button>
+        </form>
+    </div>
+
+    {% if new_token %}
+        <div style="margin-top:1.5rem; padding:1rem; border:1px solid #555;
+                    background:#222; font-family:monospace; word-break:break-all;font-size:1.2rem;">
+            {{ new_token }}
+        </div>
+    {% endif %}
+
+    
+    <!-- logout link, vertically centered -->
+    <div style="display:flex; gap:1rem; max-width:36rem; margin-top:2rem;">
+        <a href="{{ url_for('logout') }}"
+            style="align-self:center; color:{{ theme_color() }}; text-decoration:none;">
+        ⎋ Log&nbsp;out
+        </a>
+    </div>
+    
+    {% endblock %}
+""")
+
+###############################################################################
+# Index + Listings
+###############################################################################
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    db = get_db()
+
+    # Quick-add “Say” for logged-in admin
+    if request.method == 'POST':
+        login_required()
+        body = request.form['body'].strip()
+
+        if not body:
+            flash('Text is required.')
+            return redirect(request.url)
+
+        if body:
+            body, blocks = parse_trigger(body)
+            kind  = blocks[0]['verb'] if blocks else infer_kind('', '')
+            now_dt  = utc_now()
+            now = now_dt.isoformat(timespec='seconds')
+            slug = now_dt.strftime("%Y%m%d%H%M%S")
+
+            db.execute("""INSERT INTO entry (body, created_at, slug, kind)
+                          VALUES (?,?,?,?)""",
+                       (body, now, slug, kind))
+            entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+            sync_tags(entry_id, extract_tags(body), db=db)
+
+            for idx, blk in enumerate(blocks):
+                item_id, slug_i, uuid_i = get_or_create_item(
+                    item_type = blk['item_type'],
+                    title     = blk['title'],
+                    meta      = blk['meta'],
+                    slug      = blk['slug'],
+                    db        = db,
+                    update_meta=True        # only on creation
+                )
+
+                db.execute("""INSERT OR IGNORE INTO entry_item
+                                (entry_id, item_id, verb, action, progress)
+                            VALUES (?,?,?,?,?)""",
+                        (entry_id, item_id,
+                            blk['verb'], blk['action'], blk['progress']))
+
+                # patch placeholder in the *local* variable
+                body = body.replace(
+                    f'^{blk["item_type"]}:$PENDING${idx}$',
+                    _verbose_block(blk, uuid_i)
+                )
+
+            # 🔑  NOW write the patched body back ↓↓↓
+            db.execute("UPDATE entry SET body=? WHERE id=?", (body, entry_id))
+            db.commit()
+            return redirect(url_for('index'))
+
+
+    # pagination
+    page = max(int(request.args.get('page', 1)), 1)
+    ps   = page_size()
+    BASE_SQL = """
+        SELECT  e.*,
+
+                ei.action,
+                ei.progress,
+                i.title       AS item_title,
+                i.slug        AS item_slug,
+                i.item_type   AS item_type,
+                MIN(CASE
+                        WHEN im.k = 'date' AND LENGTH(im.v) >= 4
+                        THEN SUBSTR(im.v, 1, 4)
+                    END)      AS item_year,
+                EXISTS (SELECT 1 FROM entry_item ei2
+                        WHERE ei2.entry_id = e.id
+                    )         AS had_item
+        FROM entry e
+        LEFT JOIN entry_item ei ON ei.entry_id = e.id
+        LEFT JOIN item       i  ON i.id        = ei.item_id
+        LEFT JOIN item_meta  im ON im.item_id  = i.id 
+        WHERE e.kind!='page'
+        GROUP BY e.id
+        ORDER BY e.created_at DESC
+    """
+
+    entries, total_pages = paginate(BASE_SQL, (), page=page, per_page=ps, db=db)
+
+    pages = list(range(1, total_pages+1))
+
+    return render_template_string(
+        TEMPL_INDEX,
+        entries = entries,
+        page    = page,
+        pages   = pages,          
+        username= current_username(),
+    )
+
 
 TEMPL_INDEX = wrap("""{% block body %}
     {% if session.get('logged_in') %}
@@ -1143,6 +1298,7 @@ TEMPL_INDEX = wrap("""{% block body %}
                      flex-direction:column;
                      gap:10px;
                      align-items:flex-start;">
+            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
             <textarea name="body"
                       rows="3"
                       style="width:100%;margin:0"
@@ -1164,7 +1320,28 @@ TEMPL_INDEX = wrap("""{% block body %}
             <h2>{{e['title']}}</h2>
         {% endif %}
         <p>{{e['body']|md}}</p>
+
         <small style="color:#aaa;">
+            {% if e.item_title %} 
+                <span style="
+                    display:inline-block;padding:.1em .6em;margin-right:.4em;background:#444;
+                    color:#fff;border-radius:1em;font-size:.75em;text-transform:capitalize;
+                    vertical-align:middle;">
+                   {{ e['action'] }}
+                </span>
+                {% if e.progress %}
+                <span style="
+                    display:inline-block;padding:.1em .6em;margin-right:.4em;background:#444;
+                    color:#fff;border-radius:1em;font-size:.75em;vertical-align:middle;">
+                    {{ e.progress }}
+                </span>
+                {% endif %}
+                <a href="{{ url_for('item_detail', verb=e.kind, item_type=e.item_type, slug=e.item_slug) }}"
+                    style="text-decoration:none;margin-right:.4em;color:{{ theme_color() }};vertical-align:middle;">
+                    {{ e.item_title }}{% if e.item_year %} ({{ e.item_year }}){% endif %}
+                </a>
+                <br>
+            {% endif %}
             <span style="
                 display:inline-block;
                 padding:.1em .6em;
@@ -1212,12 +1389,168 @@ TEMPL_INDEX = wrap("""{% block body %}
 
 
 
+@app.route('/<slug>', methods=['GET', 'POST'])
+def by_kind(slug):
+    db = get_db()
+
+    page = db.execute("SELECT * FROM entry WHERE kind='page' AND slug=?", (slug,)).fetchone()
+    if page:
+        return render_template_string(
+            TEMPL_PAGE,
+            e        = page,
+            username = current_username(),
+            kind     = 'page',
+        )
+
+    kind = slug_to_kind(slug)
+    if kind == 'page':
+        abort(404)
+
+    # ---------- create new entry when the admin submits the inline form ----
+    if request.method == 'POST':
+        login_required()
+
+        title = request.form.get('title', '').strip()
+        body  = request.form.get('body',  '').strip()
+        link  = request.form.get('link',  '').strip()
+
+        body, blocks = parse_trigger(body)
+
+        # final kind:  1st verb if any caret block, otherwise the URL kind
+        kind = blocks[0]['verb'] if blocks else kind
+
+        missing = []
+
+        if kind == 'say':
+            if not body:
+                missing.append('body')
+
+        elif kind == 'post':
+            if not title:
+                missing.append('title')
+            if not body:
+                missing.append('body')
+
+        elif kind == 'pin':                # body is OPTIONAL here
+            if not title:
+                missing.append('title')
+            if not link:
+                missing.append('link')
+
+        if missing:
+            nice = ' and '.join(missing)
+            flash(f'{nice.capitalize()} {"is" if len(missing)==1 else "are"} required.')
+            return redirect(url_for('by_kind', slug=kind_to_slug(kind)))
+
+        now_dt = utc_now()
+        now = now_dt.isoformat(timespec='seconds')
+        slug = now_dt.strftime("%Y%m%d%H%M%S")
+        db.execute("""INSERT INTO entry
+                        (title, body, link, created_at, slug, kind)
+                     VALUES (?,?,?,?,?,?)""",
+                   (title or None, body, link or None, now, slug, kind))
+        entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        sync_tags(entry_id, extract_tags(body), db=db)
+        db.commit()
+        
+        return redirect(url_for('by_kind', slug=kind_to_slug(kind)))
+
+    # --- pagination -------------------------------------------------------
+    page = max(int(request.args.get('page', 1)), 1)
+    ps   = page_size()
+
+    if kind in VERB_KINDS:
+
+        # --- ➊ collect the “pills” -------------------------------------------------
+        cur = db.execute("""
+            SELECT i.item_type, COUNT(DISTINCT i.id) AS cnt
+            FROM item        i
+            JOIN entry_item  ei ON ei.item_id = i.id
+            WHERE ei.verb = ?
+            GROUP BY i.item_type
+        """, (kind,))
+        type_rows = sorted((dict(r) for r in cur),          # [{item_type, cnt}, …]
+                        key=lambda r: -r['cnt'])          # sort by cnt DESC
+
+        # --- ➋ what filter (if any) is active? ------------------------------------
+        sel_type = request.args.get('type', '').strip()      # e.g. “book”
+        selected = sel_type.lower() if sel_type else ''      # empty → “All”
+
+        def items_for_verb(verb: str, *, item_type: str | None,
+                        page: int, per: int, db):
+            base_sql = """
+                SELECT i.id, i.title, i.item_type, i.slug,
+                    MIN(CASE
+                            WHEN im.k = 'date' AND LENGTH(im.v) >= 4
+                            THEN SUBSTR(im.v, 1, 4)
+                        END)                AS year,
+                    COUNT(DISTINCT e.id)    AS cnt,
+                    MAX(e.created_at)       AS last_at
+                FROM item        i
+                LEFT JOIN item_meta im ON im.item_id = i.id 
+                JOIN entry_item  ei ON ei.item_id = i.id
+                JOIN entry       e  ON e.id       = ei.entry_id
+                WHERE ei.verb = ?
+            """
+            params = [verb]
+            if item_type:
+                base_sql += " AND i.item_type = ?"
+                params.append(item_type)
+
+            base_sql += """
+                GROUP BY i.id
+                ORDER BY last_at DESC
+            """
+            return paginate(base_sql, tuple(params),
+                            page=page, per_page=per, db=db)
+
+        rows, total_pages = items_for_verb(kind,
+                                        item_type=selected or None,
+                                        page=page, per=ps, db=db)
+        pages = list(range(1, total_pages + 1))
+        total_cnt = sum(r['cnt'] for r in type_rows)
+
+        return render_template_string(
+            TEMPL_ITEM_LIST,
+            rows     = rows,
+            pages    = pages,
+            page     = page,
+            verb     = kind,
+            types    = type_rows,        
+            selected = selected,  
+            total_cnt= total_cnt,
+            username = current_username(),
+        )
+
+
+    BASE_SQL = """
+        SELECT e.*, ei.action
+          FROM entry e
+          LEFT JOIN entry_item ei ON ei.entry_id = e.id
+         WHERE e.kind = ?
+         ORDER BY e.created_at DESC
+    """
+
+    entries, total_pages = paginate(BASE_SQL, (kind,), page=page, per_page=ps, db=db)
+    pages = list(range(1, total_pages+1))
+
+    return render_template_string(
+        TEMPL_LIST,
+        rows     = entries,
+        pages    = pages,
+        page     = page,
+        heading  = kind.capitalize()+'s',
+        kind     = kind,
+        username = current_username(),
+    )
+
 TEMPL_LIST = wrap("""
     {% block body %}
         {% if session.get('logged_in') %}
         <hr style="margin:10px 0">
         <form method="post" 
                   style="display:flex;flex-direction:column;gap:10px;align-items:flex-start;">
+            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
             {# Title field for Posts & Pins #}
             {% if kind in ('post', 'pin') %}
                 <input name="title" style="width:100%;margin:0" placeholder="Title">
@@ -1260,8 +1593,8 @@ TEMPL_LIST = wrap("""
                     vertical-align:middle;
                 ">
                     <a href="{{ url_for('by_kind', slug=kind_to_slug(e['kind'])) }}"
-                    style="text-decoration:none; color:inherit;border-bottom:none;">
-                    {{ e['kind'] }}
+                        style="text-decoration:none; color:inherit;border-bottom:none;">
+                        {{ e['action'] or e['kind'] }}
                     </a>
                 </span>
                 <a href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
@@ -1294,86 +1627,152 @@ TEMPL_LIST = wrap("""
     {% endblock %}
 """)
 
-TEMPL_SETTINGS = wrap("""
-    {% block body %}
-    <hr>
-    <form method="post" style="max-width:36rem">
 
-        <!-- ──────────── site info ──────────── -->
-        <fieldset style="margin:0 0 1.5rem 0; border:0; padding:0">
-            <legend style="font-weight:bold; margin-bottom:.5rem;">Site</legend>
-
-            <label style="display:block; margin:.5rem 0">
-                <span style="font-size:.8em; color:#aaa">Site name</span><br>
-                <input name="site_name" value="{{ site_name }}" style="width:100%">
-            </label>
-
-            <label style="display:block; margin:.5rem 0">
-                <span style="font-size:.8em; color:#aaa">Username</span><br>
-                <input name="username" value="{{ username }}" style="width:100%">
-            </label>
-        </fieldset>
-
-        <!-- ──────────── slugs ──────────── -->
-        <fieldset style="margin:0 0 1.5rem 0; border:0; padding:0">
-            <legend style="font-weight:bold; margin-bottom:.5rem;">URL slugs</legend>
-                <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(10rem,1fr)); gap:.75rem;">
-                    <label>
-                        <span style="font-size:.8em; color:#aaa">Says</span><br>
-                        <input name="slug_say"  value="{{ get_setting('slug_say',  'say')  }}" style="width:100%">
-                    </label>
-                    <label>
-                        <span style="font-size:.8em; color:#aaa">Posts</span><br>
-                        <input name="slug_post" value="{{ get_setting('slug_post', 'post') }}" style="width:100%">
-                    </label>
-                    <label>
-                        <span style="font-size:.8em; color:#aaa">Pins</span><br>
-                        <input name="slug_pin" value="{{ get_setting('slug_pin',  'pin')  }}" style="width:100%">
-                    </label>
-            </div>
-        </fieldset>
-
-        <!-- ──────────── display ──────────── -->
-        <fieldset style="margin:0 0 1.5rem 0; border:0; padding:0">
-            <legend style="font-weight:bold; margin-bottom:.5rem;">Display</legend>
-            <label style="display:block; margin:.5rem 0">
-                <span style="font-size:.8em; color:#aaa">Entries per page</span><br>
-                <input name="page_size"
-                    value="{{ get_setting('page_size', PAGE_DEFAULT) }}"
-                    style="width:8rem">
-            </label>
-        </fieldset>
-        <button style="margin-top:.5rem;">Save settings</button>
-    </form>
-    <div style="display:flex; gap:1rem; max-width:36rem; margin-top:2rem;">
-        <!-- token button in its own tiny form -->
-        <form method="post" style="margin:0;">
-            <button name="action" value="rotate_token" style="color:#A5BA93; background:#333;">
-                Get new token
-            </button>
-        </form>
-    </div>
-
-    {% if new_token %}
-        <div style="margin-top:1.5rem; padding:1rem; border:1px solid #555;
-                    background:#222; font-family:monospace; word-break:break-all;font-size:1.2rem;">
-            {{ new_token }}
-        </div>
-    {% endif %}
-
-    
-    <!-- logout link, vertically centered -->
-    <div style="display:flex; gap:1rem; max-width:36rem; margin-top:2rem;">
-        <a href="{{ url_for('logout') }}"
-            style="align-self:center; color:#A5BA93; text-decoration:none;">
-        ⎋ Log&nbsp;out
-        </a>
-    </div>
-    
-    {% endblock %}
+TEMPL_PAGE = wrap("""
+{% block body %}
+<hr>
+<article>
+  <p>{{ e['body']|md }}</p>
+  {% if session.get('logged_in') %}
+      <small>
+        <a href="{{ url_for('edit_entry',
+                            kind_slug=kind_to_slug(e['kind']),
+                            entry_slug=e['slug']) }}">Edit</a>
+        <a href="{{ url_for('delete_entry',
+                            kind_slug=kind_to_slug(e['kind']),
+                            entry_slug=e['slug']) }}">Delete</a>
+      </small>
+  {% endif %}
+</article>
+{% endblock %}
 """)
 
-TEMPL_DETAIL = wrap("""
+
+TEMPL_ITEM_LIST = wrap("""
+{% block body %}
+<hr>
+
+<!-- —— Type-cloud as selectable pills ——————————————— -->
+<div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
+
+    <!-- “All” pill -->
+    <a href="{{ url_for('by_kind', slug=kind_to_slug(verb)) }}"
+       style="text-decoration:none !important;
+              border-bottom:none!important;
+              display:inline-flex;
+              margin:.15rem 0;
+              padding:.15rem .6rem;
+              border-radius:1rem;
+              white-space:nowrap;
+              font-size:.8em;
+              {% if not selected %}
+                  background:{{ theme_color() }}; color:#000;
+              {% else %}
+                  background:#444;   color:{{ theme_color() }};
+              {% endif %}">
+        All
+        <sup style="font-size:.5em;">{{ total_cnt }}</sup>
+    </a>
+
+    <!-- one pill per item_type -->
+    {% for t in types %}
+    <a href="{{ url_for('by_kind', slug=kind_to_slug(verb), type=t.item_type) }}"
+       style="text-decoration:none !important;
+              border-bottom:none!important;
+              display:inline-flex;
+              margin:.15rem 0;
+              padding:.15rem .6rem;
+              border-radius:1rem;
+              white-space:nowrap;
+              font-size:.8em;
+              {% if selected == t.item_type %}
+                  background:{{ theme_color() }}; color:#000;
+              {% else %}
+                  background:#444;   color:{{ theme_color() }};
+              {% endif %}">
+        {{ t.item_type }}
+        <sup style="font-size:.5em;">{{ t.cnt }}</sup>
+    </a>
+    {% endfor %}
+</div>
+
+<!-- —— Item list ——————————————————————————————— -->
+{% if rows %}
+    <hr>
+    <ul style="list-style:none; padding:0;">
+        {% for r in rows %}
+        <li style="display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:.35rem 1rem;margin:.75rem 0;">
+            <a href="{{ url_for('item_detail', verb=verb, item_type=r.item_type, slug=r.slug) }}"
+               style="font-weight:normal;">{{ r.title }}{% if r.year %} ({{ r.year }}){% endif %}</a>
+            <small style="color:#888;flex:0 0 auto;">
+                {{ r.item_type }} • {{ r.cnt }}× • {{ r.last_at|ts }}
+            </small>
+        </li>
+        {% endfor %}
+    </ul>
+
+    {% if pages|length > 1 %}
+    <nav style="margin-top:1rem; font-size:.75em;">
+        {% for p in pages %}
+            {% if p == page %}
+                <span style="border-bottom:.33rem solid #aaa;">{{ p }}</span>
+            {% else %}
+                <a href="{{ request.path }}?{% if selected %}type={{ selected }}&{% endif %}page={{ p }}">{{ p }}</a>
+            {% endif %}
+            {% if not loop.last %}&nbsp;{% endif %}
+        {% endfor %}
+    </nav>
+    {% endif %}
+{% else %}
+    <p>No items{% if selected %} for this type{% endif %} yet.</p>
+{% endif %}
+{% endblock %}
+""")
+
+
+###############################################################################
+# Entries (Say, Post, Pin)
+###############################################################################
+
+@app.route('/<kind_slug>/<entry_slug>')
+def entry_detail(kind_slug, entry_slug):
+    kind = slug_to_kind(kind_slug)
+    if kind == 'page':
+        abort(404)
+
+    db = get_db()
+
+    # grab one action (the first, if there are several entry_item rows)
+    row = db.execute("""
+        SELECT  e.*,
+                MIN(ei.action)                 AS action,
+                MIN(ei.progress)               AS progress,
+                MIN(i.title)                   AS item_title,
+                MIN(i.slug)                    AS item_slug,
+                MIN(i.item_type)               AS item_type,
+                MIN(CASE                     
+                    WHEN im.k = 'date'
+                        AND LENGTH(im.v) >= 4
+                    THEN SUBSTR(im.v,1,4)
+                END)                           AS item_year
+            FROM entry           e
+            LEFT JOIN entry_item ei ON ei.entry_id = e.id
+            LEFT JOIN item       i  ON i.id        = ei.item_id
+            LEFT JOIN item_meta  im ON im.item_id  = i.id
+        WHERE e.kind = ? AND e.slug = ?
+        GROUP BY e.id
+        LIMIT 1
+    """, (kind, entry_slug)).fetchone()
+
+    return render_template_string(
+        TEMPL_ENTRY_DETAIL,
+        e=row,
+        title=get_setting('site_name', 'po.etr.ist'),
+        username=current_username(),
+        kind=row['kind'],
+    )
+
+TEMPL_ENTRY_DETAIL = wrap("""
     {% block body %}
         <hr>
         <article style="padding-bottom:1.5rem;">
@@ -1392,46 +1791,149 @@ TEMPL_DETAIL = wrap("""
 
             <p>{{ e['body']|md }}</p>                
             <small style="color:#aaa;">
-            {# — kind pill — #}
+
+            {# —— item info (if any) ———————————————————————— #}
+            {% if e.item_title %}
+                <span style="
+                      display:inline-block;padding:.1em .6em;margin-right:.4em;
+                      background:#444;color:#fff;border-radius:1em;font-size:.75em;
+                      text-transform:capitalize;vertical-align:middle;">
+                    {{ e.action }}
+                </span>
+                {% if e.progress %}
+                    <span style="
+                          display:inline-block;padding:.1em .6em;margin-right:.4em;
+                          background:#444;color:#fff;border-radius:1em;font-size:.75em;
+                          vertical-align:middle;">
+                        {{ e.progress }}
+                    </span>
+                {% endif %}
+                <a href="{{ url_for('item_detail',
+                                    verb=e.kind,
+                                    item_type=e.item_type,
+                                    slug=e.item_slug) }}"
+                   style="text-decoration:none;margin-right:.4em;
+                          color:{{ theme_color() }};vertical-align:middle;">
+                   {{ e.item_title }} {% if e.item_year %} ({{ e.item_year }}) {% endif %}
+                </a><br>
+            {% endif %}
+
+            {# —— kind pill ———————————————————————————————— #}
             <span style="
-                display:inline-block;
-                padding:.1em .6em;
-                margin-right:.4em;
-                background:#444;
-                color:#fff;
-                border-radius:1em;
-                font-size:.75em;
-                text-transform:capitalize;
-                vertical-align:middle;">
+                  display:inline-block;padding:.1em .6em;margin-right:.4em;
+                  background:#444;color:#fff;border-radius:1em;font-size:.75em;
+                  text-transform:capitalize;vertical-align:middle;">
                 <a href="{{ url_for('by_kind', slug=kind_to_slug(e['kind'])) }}"
-                style="text-decoration:none; color:inherit; border-bottom:none;">
-                {{ e['kind'] }}
+                   style="text-decoration:none;color:inherit;border-bottom:none;">
+                   {{ e.kind }}
                 </a>
             </span>
-            {# — timestamp — #}
-            <a href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
-                style="text-decoration:none; color:inherit; vertical-align:middle;">
-                {{ e['created_at']|ts }}
+
+            {# —— timestamp & author ———————————————————————— #}
+            <a href="{{ url_for('entry_detail',
+                                 kind_slug=kind_to_slug(e['kind']),
+                                 entry_slug=e['slug']) }}"
+               style="text-decoration:none;color:inherit;vertical-align:middle;">
+               {{ e['created_at']|ts }}
             </a>
-            {# — author — #}
             <span style="vertical-align:middle;">&nbsp;by&nbsp;{{ username }}</span>&nbsp;&nbsp;
-            {# — edit/delete (admin only) — #}
+
+            {# —— admin links ———————————————————————————————— #}
             {% if session.get('logged_in') %}
-                <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
-                    style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
-                <a href="{{ url_for('delete_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
-                    style="vertical-align:middle;">Delete</a>
+                <a href="{{ url_for('edit_entry',
+                                    kind_slug=kind_to_slug(e['kind']),
+                                    entry_slug=e['slug']) }}"
+                   style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
+                <a href="{{ url_for('delete_entry',
+                                    kind_slug=kind_to_slug(e['kind']),
+                                    entry_slug=e['slug']) }}"
+                   style="vertical-align:middle;">Delete</a>
             {% endif %}
             </small>
         </article>
     {% endblock %}
 """)
 
-TEMPL_EDIT = wrap("""
+
+@app.route('/<kind_slug>/<entry_slug>/edit', methods=['GET', 'POST'])
+def edit_entry(kind_slug, entry_slug):
+    login_required()
+    kind = slug_to_kind(kind_slug)
+    db   = get_db()
+
+    row  = db.execute("SELECT * FROM entry WHERE kind=? AND slug=?",
+                      (kind, entry_slug)).fetchone()
+    if not row:
+        abort(404)
+
+    if request.method == 'POST':
+        title = request.form.get('title','').strip() or None
+        body  = request.form['body'].strip()
+        link  = request.form.get('link','').strip() or None
+        new_slug = request.form.get('slug','').strip() or row['slug']
+
+        # ── single pass ───────────────────────────────────────────────
+        body, blocks = parse_trigger(body)            # ← only call once
+
+        # decide the final kind
+        if request.form.get('is_page') == '1':
+            new_kind = 'page'
+        else:
+            new_kind = blocks[0]['verb'] if blocks else infer_kind(title, link)
+
+        if not body:
+            flash('Body is required.')
+            return redirect(request.url)
+
+        # 2️⃣  Synchronise entry_item & item_meta
+        db.execute("DELETE FROM entry_item WHERE entry_id=?", (row['id'],))
+        for idx, blk in enumerate(blocks):
+            item_id, slug_i, uuid_i = get_or_create_item(
+                item_type = blk['item_type'],
+                title     = blk['title'],
+                meta      = blk['meta'],
+                slug      = blk['slug'],
+                db        = db,
+                update_meta=False
+            )
+            db.execute("""INSERT OR REPLACE INTO entry_item
+                            (entry_id, item_id, verb, action, progress)
+                          VALUES (?,?,?,?,?)""",
+                       (row['id'], item_id,
+                        blk['verb'], blk['action'], blk['progress']))
+
+            body = body.replace(
+                f'^{blk["item_type"]}:$PENDING${idx}$',
+                _verbose_block(blk, uuid_i)
+            )
+
+        # 3️⃣  Store the (possibly rewritten) entry itself
+        db.execute("""UPDATE entry
+                         SET title=?, body=?, link=?, slug=?, kind=?, updated_at=?
+                       WHERE id=?""",
+                   (title, body, link, new_slug, new_kind,
+                    utc_now().isoformat(timespec='seconds'),
+                    row['id']))
+
+        # 4️⃣  Tags
+        sync_tags(row['id'], extract_tags(body), db=db)
+        db.commit()        
+
+        return redirect(url_for('entry_detail',
+                                kind_slug=kind_to_slug(new_kind),
+                                entry_slug=new_slug))
+
+    return render_template_string(TEMPL_EDIT_ENTRY,
+                                  e=row,
+                                  title=get_setting('site_name', 'po.etr.ist'))
+
+
+TEMPL_EDIT_ENTRY = wrap("""
 {% block body %}
 <hr>
 <h2>Edit {{ e['kind']|capitalize }}</h2>
 <form method="post">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
     {% if e['kind'] in ('post','pin', 'page') %}
         <div style="position:relative;">
             <input id="title"
@@ -1515,7 +2017,31 @@ TEMPL_EDIT = wrap("""
 {% endblock %}
 """)
 
-TEMPL_DELETE = wrap("""
+
+@app.route('/<kind_slug>/<entry_slug>/delete', methods=['GET', 'POST'])
+def delete_entry(kind_slug, entry_slug):
+    login_required()
+    kind = slug_to_kind(kind_slug)
+    db   = get_db()
+
+    row = db.execute("SELECT * FROM entry WHERE kind=? AND slug=?",
+                     (kind, entry_slug)).fetchone()
+    if not row:
+        abort(404)
+
+    if request.method == 'POST':
+        db.execute('DELETE FROM entry WHERE id=?', (row['id'],))
+        db.commit()
+        db.execute("DELETE FROM tag WHERE id NOT IN "
+                   "(SELECT DISTINCT tag_id FROM entry_tag)")
+        db.commit()
+        return redirect(url_for('index'))
+
+    return render_template_string(TEMPL_DELETE_ENTRY,
+                                  e=row,
+                                  title=get_setting('site_name', 'po.etr.ist'))
+
+TEMPL_DELETE_ENTRY = wrap("""
 {% block body %}
     <hr>
     <h2>Delete entry?</h2>
@@ -1525,6 +2051,7 @@ TEMPL_DELETE = wrap("""
         <small style="color:#aaa;">{{ e['created_at']|ts }}</small>
     </article>
     <form method="post" style="margin-top:1rem;">
+        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
         <button style="background:#c00; color:#fff;">Yes – delete it</button>
         <a href="{{ url_for('index') }}" style="margin-left:1rem;">Cancel</a>
     </form>
@@ -1532,10 +2059,76 @@ TEMPL_DELETE = wrap("""
 </div>
 """)
 
+###############################################################################
+# Tags
+###############################################################################
+@app.route('/tags', defaults={'tag_list': ''})
+@app.route('/tags/<path:tag_list>')
+def tags(tag_list: str):
+    """
+    Show a tag cloud.  Pills can be selected / deselected; the current
+    selection is encoded in the path as  /tags/foo+bar+baz
+    """
+    db = get_db()
+
+    # ---------- tag statistics for the cloud --------------------------------
+    cur  = db.execute("""SELECT t.name, COUNT(et.entry_id) AS cnt
+                         FROM tag t
+                         LEFT JOIN entry_tag et ON t.id = et.tag_id
+                         GROUP BY t.id
+                         ORDER BY LOWER(t.name)""")
+    rows = [dict(r) for r in cur]           # make mutable dicts
+
+    # ---------- who is currently selected? ----------------------------------
+    selected = {t.lower() for t in tag_list.split('+') if t}
+
+    # ---------- scale counts → font-size (same as before) -------------------
+    counts = [r["cnt"] for r in rows]
+    lo, hi = (min(counts), max(counts)) if counts else (0, 0)
+    span   = max(1, hi - lo)
+    for r in rows:
+        weight     = (r["cnt"] - lo) / span if counts else 0
+        r["size"]  = f"{0.75 + weight * 1.2:.2f}em"
+        r["active"] = r["name"] in selected
+
+        # ── URL that would result from clicking the pill ────────────────────
+        new_sel = (selected - {r["name"]}) if r["active"] else (selected | {r["name"]})
+        r["href"] = url_for('tags', tag_list='+'.join(sorted(new_sel))) if new_sel else url_for('tags')
+
+    # ---------- fetch entries if something is selected ----------------------
+    page = max(int(request.args.get('page', 1)), 1)
+    per  = page_size()
+    if selected:
+        q_marks = ','.join('?' * len(selected))
+        base_sql = f"""SELECT e.*
+                  FROM entry  e
+                  JOIN entry_tag et ON et.entry_id = e.id
+                  JOIN tag       t  ON t.id        = et.tag_id
+                  WHERE t.name IN ({q_marks})
+                  GROUP BY e.id
+                  HAVING COUNT(DISTINCT t.name)=?
+                  ORDER BY e.created_at DESC"""
+        entries, total_pages = paginate(base_sql,
+                                        (*selected, len(selected)),
+                                        page=page, per_page=per, db=db)
+        pages = list(range(1, total_pages + 1))
+    else:
+        entries, pages = None, []                       # nothing selected → no list
+
+    return render_template_string(
+        TEMPL_TAGS,
+        tags     = rows,
+        entries  = entries,
+        selected = selected,
+        page     = page,
+        pages    = pages,
+        kind     = 'tags',
+        username = current_username(),
+    )
+
 TEMPL_TAGS = wrap("""
 {% block body %}
 <hr>
-
 <!-- —— Tag-cloud as selectable pills ——————————————— -->
 <div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
 {% for t in tags %}
@@ -1543,19 +2136,18 @@ TEMPL_TAGS = wrap("""
         style="text-decoration:none !important;
                 border-bottom:none!important;
                 display:inline-flex;  
-                align-items:center;
                 margin:.15rem 0;
                 padding:.15rem .6rem;
                 border-radius:1rem;
                 white-space:nowrap;
                 font-size:.8em;
                 {% if t.active %}
-                    background:#A5BA93; color:#000;
+                    background:{{ theme_color() }}; color:#000;
                 {% else %}
-                    background:#444; color:#A5BA93;
+                    background:#444; color:{{ theme_color() }};
                 {% endif %}">
         {{ t.name }}
-        <small style="color:#888;">({{ t.cnt }})</small>
+        <sup style="font-size:.5em;">{{ t.cnt }}</sup>
     </a>
 {% else %}
     <span>No tags yet.</span>
@@ -1615,137 +2207,6 @@ TEMPL_TAGS = wrap("""
         </nav>
     {% endif %}
 {% endif %}
-{% endblock %}
-""")
-
-TEMPL_PAGE = wrap("""
-{% block body %}
-<hr>
-<article>
-  <p>{{ e['body']|md }}</p>
-  {% if session.get('logged_in') %}
-      <small>
-        <a href="{{ url_for('edit_entry',
-                            kind_slug=kind_to_slug(e['kind']),
-                            entry_slug=e['slug']) }}">Edit</a>
-        <a href="{{ url_for('delete_entry',
-                            kind_slug=kind_to_slug(e['kind']),
-                            entry_slug=e['slug']) }}">Delete</a>
-      </small>
-  {% endif %}
-</article>
-{% endblock %}
-""")
-
-TEMPL_SEARCH = wrap("""
-{% block body %}
-    <hr>
-    <div style="padding:1rem 0;
-                
-                font-size:.8em;
-                color:#888;
-                display:flex;
-                align-items:center;      
-                justify-content:space-between;">
-        {# ─── sort pills ────────────────────────────────────────────── #}
-        <details style="display:inline-block;           
-                        position:relative;              
-                        font-size:.8em;">            
-            <summary style="display:flex; align-items:center; cursor:pointer; list-style:none; 
-                            padding:.35em 1em;
-                            border:1px solid #555; border-radius:4px;
-                            background:{% if sort %}#aaa{% else %}#333{% endif %};
-                            color:{% if sort %}#000{% else %}#eee{% endif %};">
-                {{ {'rel':'Relevance','new':'Newest','old':'Oldest'}[sort] }}
-            </summary>
-            <div style="position:absolute; left:0; top:calc(100% + .25em);
-                        background:#333; border:1px solid #555; border-radius:4px;
-                        z-index:10; min-width:100%; white-space:nowrap;">
-                {% for val, label in [('rel','Relevance'),('new','Newest'),('old','Oldest')] %}
-                    <a href="{{ url_for('search', q=query, sort=val) }}"
-                    style="display:block; padding:.35em 1em;
-                            color:{% if sort == val %}#000{% else %}#eee{% endif %}; text-decoration:none;
-                            border-bottom:1px solid #555;
-                            background:{% if sort == val %}#aaa{% else %}#333{% endif %};
-                            ">
-                        {{ label }}
-                    </a>
-                {% endfor %}
-            </div>
-        </details>
-
-        {# ─── search box ────────────────────────────────────────────── #}
-        <form action="{{ url_for('search') }}" method="get"
-            style="margin:0;
-                    display:inline-flex;   
-                    align-items:center;">
-            <input type="search" name="q" placeholder="Search"
-                value="{{ request.args.get('q','') }}"
-                style="font-size:.8em;
-                        padding:.35em .6em;
-                        border:1px solid #555;
-                        border-radius:4px;
-                        margin:0;">  
-        </form>
-    </div>
-
-    {% if removed %}
-        <p style="color:#A5BA93; font-size:.8em;">
-            Note: characters <code>{{ removed }}</code> were ignored in the search.
-        </p>
-    {% endif %}
-
-    {% if query and not rows %}
-        <p>No results for <strong>{{ query }}</strong>.</p>
-    {% endif %}
-
-    {% for e in rows %}
-        <article style="padding-bottom:1.5rem;
-                        {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
-            {% if e['title'] %}
-                <h3 style="margin:.4rem 0;">{{ e['title'] }}</h3>
-            {% endif %}
-            <p>{{ e['body']|md }}</p>
-            <small style="color:#aaa;">
-                <span style="
-                    display:inline-block;
-                    padding:.1em .6em;
-                    margin-right:.4em;
-                    background:#444;
-                    color:#fff;
-                    border-radius:1em;
-                    font-size:.75em;
-                    text-transform:capitalize;
-                    vertical-align:middle;
-                ">
-                    {{ e['kind'] }}
-                </span>
-                <a href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
-                    style="text-decoration:none; color:inherit;vertical-align:middle;">
-                    {{ e['created_at']|ts }}
-                </a>&nbsp;
-                {% if session.get('logged_in') %}
-                    <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" 
-                        style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
-                    <a href="{{ url_for('delete_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" 
-                        style="vertical-align:middle;">Delete</a>
-                {% endif %}
-            </small>
-        </article>
-    {% endfor %}
-                    
-    {% if pages|length > 1 %}
-    <nav style="margin-top:1rem;font-size:.75em;">
-        {% for p in pages %}
-            {% if p == page %}
-                <span style="border-bottom:0.33rem solid #aaa;">{{ p }}</span>
-            {% else %}
-                <a href="{{ url_for('search', q=query, sort=sort, page=p) }}">{{ p }}</a>
-            {% endif %}
-            {% if not loop.last %}&nbsp;{% endif %}
-        {% endfor %}
-    </nav>
-    {% endif %}
 {% endblock %}
 """)
 
@@ -1825,7 +2286,7 @@ def global_rss():
 @app.route('/<slug>/rss')
 def kind_rss(slug):
     kind = slug_to_kind(slug)
-    if kind not in ('say', 'post', 'pin'):
+    if kind == 'page':  # pages don't have an RSS feed
         abort(404)
     db   = get_db()
     rows = db.execute("SELECT * FROM entry WHERE kind=? ORDER BY created_at DESC LIMIT 50",
@@ -1858,6 +2319,383 @@ def tags_rss(tag_list):
                   feed_url = request.url,               # already correct
                   site_url = request.url_root.rstrip('/'))
     return app.response_class(xml, mimetype='application/rss+xml')
+
+###############################################################################
+# Check-ins / Items
+###############################################################################
+@app.route('/<verb>/<item_type>/<slug>', methods=['GET', 'POST'])
+def item_detail(verb, item_type, slug):
+    db   = get_db()
+    itm = db.execute("SELECT id, uuid, slug, item_type, title "
+                     "FROM item WHERE slug=? AND item_type=?",
+                     (slug, item_type)).fetchone()
+    if not itm:
+        abort(404)
+
+    # ──────────────────────────────── POST: quick “check-in” ──────────────
+    if request.method == 'POST':
+        login_required()
+
+        # ❶ ── turn the user input into a {key: value} dict -----------------
+        raw = request.form['meta'].rstrip()
+
+        # ❶ ── split into body-lines vs. meta-lines --------------------------
+        meta       : dict[str, str] = {}
+        body_lines : list[str]      = []
+
+        for ln in raw.splitlines():
+            ln = ln.strip()
+            if not ln:
+                continue
+            if ':' in ln:                               # looks like “key: val”
+                k, v = [p.strip() for p in ln.split(':', 1)]
+                meta[k.lower()] = v
+            else:                                       # free text → body
+                body_lines.append(ln)
+
+        # ❷ ── ensure we have an *action* (may be inferred) ------------------
+        if 'action' not in meta:
+            # most-recent action for the same item / verb
+            r = db.execute("""SELECT ei.action
+                               FROM entry_item ei
+                               JOIN entry       e ON e.id = ei.entry_id
+                              WHERE ei.item_id=? AND ei.verb=?
+                              ORDER BY e.created_at DESC
+                              LIMIT 1""",
+                           (itm['id'], verb)).fetchone()
+            if r:
+                meta['action'] = r['action']
+            else:                                   # fall-back: 2nd word in map
+                meta['action'] = VERB_MAP[verb][1] \
+                                   if verb in VERB_MAP and len(VERB_MAP[verb]) > 1 \
+                                   else verb
+
+        # ❸ ── build the caret block ----------------------------------------
+        caret_lines = [
+            f'^uuid:{itm["uuid"]}',
+            f'^item_type:{itm["item_type"]}',
+            f'^action:{meta.pop("action")}',
+        ]
+        for k, v in meta.items():          # any remaining keys (progress, …)
+            caret_lines.append(f'{k}:{v}')
+
+        # put user text (if any) underneath the caret block
+        if body_lines:
+            caret_lines.append('')          # blank line → separates meta/body
+            caret_lines.extend(body_lines)
+
+        body_raw = '\n'.join(caret_lines)
+
+        body, blocks = parse_trigger(body_raw)        # normal pipeline
+
+        now_dt   = utc_now()
+        now_iso  = now_dt.isoformat(timespec='seconds')
+        slug_ent = now_dt.strftime('%Y%m%d%H%M%S')
+
+        # ➊  create the *entry* itself
+        db.execute("""INSERT INTO entry (body, created_at, slug, kind)
+                    VALUES (?,?,?,?)""",
+                (body, now_iso, slug_ent, verb))
+        entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+        # ➋  link entry ↔ item   (only one block here, but keep the loop)
+        for idx, blk in enumerate(blocks):
+            db.execute("""INSERT INTO entry_item
+                            (entry_id, item_id, verb, action, progress)
+                        VALUES (?,?,?,?,?)""",
+                    (entry_id, itm['id'],
+                        blk['verb'], blk['action'], blk['progress']))
+
+            # replace placeholder with the finished verbose block
+            body = body.replace(
+                f'^{blk["item_type"]}:$PENDING${idx}$',
+                _verbose_block(blk, itm['uuid'])
+            )
+
+        db.execute("UPDATE entry SET body=? WHERE id=?", (body, entry_id))
+        db.commit()
+
+        flash('Check-in added.')
+        return redirect(request.url)
+
+    meta = db.execute("""
+            SELECT k, v
+              FROM item_meta
+             WHERE item_id=?
+             ORDER BY ord, LOWER(k)         
+        """, (itm['id'],)).fetchall()
+    rows = db.execute("""SELECT e.*, ei.action, ei.progress
+                           FROM entry      e
+                           JOIN entry_item ei ON ei.entry_id = e.id
+                          WHERE ei.item_id=? AND ei.verb=? 
+                          ORDER BY e.created_at DESC""",
+                      (itm['id'], verb)).fetchall()
+
+    return render_template_string(TEMPL_ITEM_DETAIL, 
+                                  item   = itm,
+                                  meta   = meta,
+                                  entries= rows,
+                                  verb   = verb,
+                                  username=current_username())
+
+TEMPL_ITEM_DETAIL = wrap("""
+{% block body %}
+<hr>
+{% set _year = (meta | selectattr('k', 'equalto', 'date')
+                      | map(attribute='v')
+                      | list | first)[:4] if meta else '' %}
+<h2 style="margin-top:0">
+    {{ item['title'] }}{% if _year %} ({{ _year }}){% endif %}
+</h2>
+            
+{% if meta %}
+{# parent UL — add overflow:auto so it encloses the float #}
+<ul style="list-style:none;padding:0;margin:0;font-size:.9em;color:#aaa;overflow:auto;">
+{% for r in meta %}
+    {% if is_b64_image(r['k'], r['v']) %}
+    {# ───────────── Cover on the left ───────────── #}
+    <li style="float:left;margin:.25em .75rem .75rem 0;">
+        <img src="data:image/webp;base64,{{ r['v'] }}"
+            alt="{{ item['title'] }}"
+            style="width:135px;max-width:100%;border:1px solid #555;margin:0.25em 0;">
+    </li>
+    {% else %}
+    {# ───────────── Text rows ────────────────────── #}
+    <li style="margin:.25em 0;">
+        <strong>{{ r['k']|smartcap }}:</strong>
+        {{ r['v']|mdinline }}
+    </li>
+    {% endif %}
+{% endfor %}
+</ul>
+{% endif %}
+
+
+{% if session.get('logged_in') %}
+<a href="{{ url_for('edit_item',
+                verb=verb, item_type=item['item_type'], slug=item['slug']) }}">Edit</a>   
+<a href="{{ url_for('delete_item',
+                verb=verb, item_type=item['item_type'], slug=item['slug']) }}">&nbsp;&nbsp;Delete</a>   
+{% endif %}
+           
+
+{% if session.get('logged_in') %}
+<hr style="margin:1.25rem 0 .75rem 0">
+<form method="post"
+        style="display:flex;
+            flex-direction:column;
+            gap:10px;
+            align-items:flex-start;">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <textarea name="meta"
+            rows="3"
+            style="width:100%;margin:0;"
+        placeholder="^action:reading&#10;^progress:42%"></textarea>
+    <button>Add&nbsp;Check-in</button>
+</form>
+<hr>
+{% endif %}
+
+{% for e in entries %}    
+<article style="padding-bottom:1rem; {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
+    <p>{{ e['body']|md }}</p>
+    <small style="color:#aaa;">
+
+        {# —— action pill ——————————————————————————————— #}
+        <span style="
+            display:inline-block;padding:.1em .6em;margin-right:.4em;
+            background:#444;color:#fff;border-radius:1em;font-size:.75em;
+            text-transform:capitalize;vertical-align:middle;">
+            {{ e.action }}
+        </span>
+
+        {# —— progress pill (optional) ———————————————— #}
+        {% if e.progress %}
+        <span style="
+                display:inline-block;padding:.1em .6em;margin-right:.4em;
+                background:#444;color:#fff;border-radius:1em;font-size:.75em;
+                vertical-align:middle;">
+            {{ e.progress }}
+        </span>
+        {% endif %}
+
+        {# —— timestamp & author ———————————————————————— #}
+        <a href="{{ url_for('entry_detail',
+                                kind_slug=kind_to_slug(e['kind']),
+                                entry_slug=e['slug']) }}"
+            style="text-decoration:none;color:inherit;vertical-align:middle;">
+            {{ e['created_at']|ts }}
+        </a>
+        <span style="vertical-align:middle;">&nbsp;by&nbsp;{{ username }}</span>&nbsp;&nbsp;
+
+        {# —— admin links ———————————————————————————————— #}
+        {% if session.get('logged_in') %}
+        <a href="{{ url_for('edit_entry',
+                            kind_slug=kind_to_slug(e['kind']),
+                            entry_slug=e['slug']) }}"
+            style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
+        <a href="{{ url_for('delete_entry',
+                            kind_slug=kind_to_slug(e['kind']),
+                            entry_slug=e['slug']) }}"
+            style="vertical-align:middle;">Delete</a>
+        {% endif %}
+    </small>
+</article>
+{% else %}
+<p>No entries yet.</p>
+{% endfor %}
+{% endblock %}
+""")
+
+@app.route('/<verb>/<item_type>/<slug>/edit', methods=['GET', 'POST'])
+def edit_item(verb, item_type, slug):
+    login_required()
+    db   = get_db()
+    itm  = db.execute("SELECT * FROM item WHERE slug=? AND item_type=?",
+                      (slug, item_type)).fetchone()
+    if not itm:
+        abort(404)
+
+    if request.method == 'POST':
+        title      = request.form['title'].strip()
+        new_slug   = request.form['slug'].strip() or itm['slug']
+        new_type   = request.form['item_type'].strip() or itm['item_type']
+
+        # ➊ update main row ---------------------------------------------------
+        db.execute("""UPDATE item SET title=?, slug=?, item_type=? WHERE id=?""",
+                   (title, new_slug, new_type, itm['id']))
+
+        # ➋ meta – collect paired lists -------------------------------
+        keys  = request.form.getlist('meta_k')
+        vals  = request.form.getlist('meta_v')
+        orders = request.form.getlist('meta_o')
+
+        triples = [
+            (k.strip(), v.strip(), int(o) if o.strip().isdigit() else idx)
+            for idx, (k, v, o) in enumerate(zip(keys, vals, orders), 1)
+            if k.strip()
+        ]
+        db.execute("DELETE FROM item_meta WHERE item_id=?", (itm['id'],))
+        for k, v, o in triples:
+            db.execute("""INSERT INTO item_meta (item_id,k,v,ord)
+                        VALUES (?,?,?,?)""", (itm['id'], k, v, o))
+
+        db.commit()
+        flash('Item saved.')
+        return redirect(url_for('item_detail',
+                                verb=verb, item_type=new_type, slug=new_slug))
+
+    # → GET – render form -----------------------------------------------------
+    meta_rows = db.execute(
+        "SELECT k, v, ord FROM item_meta WHERE item_id=? ORDER BY ord, LOWER(k)", (itm['id'],)
+    ).fetchall()
+
+    return render_template_string(TEMPL_EDIT_ITEM,
+                                  item      = itm,
+                                  meta      = meta_rows,
+                                  verb      = verb,
+                                  username  = current_username())
+
+TEMPL_EDIT_ITEM = wrap("""
+{% block body %}
+<hr>
+<h2 style="margin-top:0">Edit item</h2>
+
+<form method="post" style="max-width:32rem;display:flex;flex-direction:column;gap:1rem;">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  {# ────────── title / slug / type ────────── #}
+  <label>
+    <span style="font-size:.8em;color:#888">Title</span><br>
+    <input name="title" value="{{ item['title'] }}" style="width:100%">
+  </label>
+
+  <label>
+    <span style="font-size:.8em;color:#888">Slug</span><br>
+    <input name="slug"  value="{{ item['slug']  }}" style="width:100%">
+  </label>
+
+  <label>
+    <span style="font-size:.8em;color:#888">Item type</span><br>
+    <input name="item_type" value="{{ item['item_type'] }}" style="width:100%">
+  </label>
+
+  {# ────────── key / value rows ────────── #}
+  <fieldset style="border:0;padding:0;">
+    <legend style="font-weight:bold;margin-bottom:.25rem;font-size:.9em;">Meta data</legend>
+
+    <div style="display:grid;
+                grid-template-columns:3rem 1fr 2fr;
+                gap:.5rem; align-items:center;">
+
+    {# header row #}
+    <span style="font-size:.75em;color:#888;">#</span>
+    <span style="font-size:.75em;color:#888;">Key</span>
+    <span style="font-size:.75em;color:#888;">Value</span>
+
+    {# existing pairs #}
+    {% for r in meta %}
+        <input name="meta_o" value="{{ r['ord'] }}" style="width:3rem;text-align:right;">
+        <input name="meta_k" value="{{ r['k'] }}"  placeholder="key">
+        <input name="meta_v" value="{{ r['v'] }}"  placeholder="value">
+    {% endfor %}
+
+    {# ten blank rows for new data #}
+    {% for _ in range(10) %}
+        <input name="meta_o" placeholder="">
+        <input name="meta_k" placeholder="key">
+        <input name="meta_v" placeholder="value">
+    {% endfor %}
+    </div>
+
+  </fieldset>
+
+  <div>
+    <button>Save</button>
+    <a href="{{ url_for('item_detail', verb=verb,
+                         item_type=item['item_type'], slug=item['slug']) }}"
+       style="margin-left:1rem;">Cancel</a>
+  </div>
+</form>
+{% endblock %}
+""")
+
+
+@app.route('/<verb>/<item_type>/<slug>/delete', methods=['GET', 'POST'])
+def delete_item(verb, item_type, slug):
+    login_required()
+    db   = get_db()
+    itm  = db.execute("SELECT * FROM item WHERE slug=? AND item_type=?",
+                      (slug, item_type)).fetchone()
+    if not itm:
+        abort(404)
+
+    if request.method == 'POST':
+        db.execute("DELETE FROM item WHERE id=?", (itm['id'],))
+        db.commit()
+        flash('Item deleted.')
+        return redirect(url_for('by_kind', slug=kind_to_slug(verb)))
+
+    return render_template_string(TEMPL_DELETE_ITEM,
+                                  item     = itm,
+                                  verb     = verb, 
+                                  username = current_username())
+
+TEMPL_DELETE_ITEM = wrap("""
+{% block body %}
+  <hr>
+  <h2 style="margin-top:0">Delete item?</h2>
+  <p><strong>{{ item['title'] }}</strong> <em>({{ item['item_type'] }})</em></p>
+  <form method="post" style="margin-top:1rem;">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <button style="background:#c00;color:#fff;">Yes – delete it</button>
+    <a href="{{ url_for('item_detail',
+                        verb=verb,
+                        item_type=item['item_type'],
+                        slug=item['slug']) }}"
+       style="margin-left:1rem;">Cancel</a>
+  </form>
+{% endblock %}
+""")
 
 ###############################################################################
 # Search
@@ -1965,33 +2803,271 @@ def search_entries(query: str, *, db,
     return rows, total, removed
 
 
+_ITEM_Q_RE = re.compile(r"""
+    ^\s*
+    (?P<type>[^\s:]+)                 # track / book / …
+    (?:\s*:\s*(?P<field>[^\s:]+))?    # 演唱 / 作者 / …
+    \s*:\s*
+    (?P<term>".+?"|[^"].*?)           # ← fixed here
+    \s*$
+""", re.X | re.I | re.U)
+
+def _parse_item_query(q: str):
+    """
+    Return dict(type, field, term) *or* None if *q* is not an item query.
+    Quotes around the term are stripped.
+    """
+    m = _ITEM_Q_RE.match(q)
+    if not m:
+        return None
+    d = m.groupdict()
+    term = d['term'].strip()
+    if term.startswith('"') and term.endswith('"'):
+        term = term[1:-1]
+    d['term'] = term
+    d['type'] = d['type'].lower()
+    d['field'] = d['field'].lower() if d['field'] else None
+    return d
+
+def search_items(q: str, *, db, page=1, per_page=PAGE_DEFAULT):
+    """
+    LIKE‑based search in item.title *and* item_meta.v.
+    Returns (rows_on_page, total_hits)
+    """
+    spec = _parse_item_query(q)
+    if not spec:
+        return [], 0                # not an item query → caller will fall back
+
+    conds, params = ["i.item_type = ?"], [spec['type']]
+    like = f"%{spec['term'].lower()}%"
+
+    if spec['field'] is None:                          # book:"Kafka"
+        conds.append("""
+            (LOWER(i.title) LIKE ? OR
+             EXISTS (SELECT 1 FROM item_meta im
+                       WHERE im.item_id=i.id AND LOWER(im.v) LIKE ?))
+        """)
+        params.extend([like, like])
+
+    elif spec['field'] == 'title':                     # book:title:kafka
+        conds.append("LOWER(i.title) LIKE ?")
+        params.append(like)
+
+    else:                                              # book:author:kafka
+        conds.append("""
+            EXISTS (SELECT 1 FROM item_meta im
+                     WHERE im.item_id=i.id
+                       AND LOWER(im.k)=?
+                       AND LOWER(im.v) LIKE ?)
+        """)
+        params.extend([spec['field'], like])
+
+    where_sql = " AND ".join(conds)
+    base_sql = f"""
+        SELECT i.*,
+               MIN(CASE
+                      WHEN im.k='date' AND LENGTH(im.v)>=4
+                      THEN SUBSTR(im.v,1,4)
+                    END) AS year,
+               COUNT(DISTINCT ei.entry_id) AS cnt,
+               MAX(e.created_at)          AS last_at
+          FROM item        i
+          LEFT JOIN item_meta  im ON im.item_id=i.id
+          LEFT JOIN entry_item ei ON ei.item_id=i.id
+          LEFT JOIN entry      e  ON e.id       = ei.entry_id
+         WHERE {where_sql}
+         GROUP BY i.id
+         ORDER BY cnt DESC, last_at DESC
+    """
+    total = db.execute(f"SELECT COUNT(*) FROM ({base_sql})", tuple(params)).fetchone()[0]
+    rows  = db.execute(f"{base_sql} LIMIT ? OFFSET ?",
+                       tuple(params) + (per_page, (page-1)*per_page)).fetchall()
+    return rows, total
+
+
 @app.route('/search')
 def search():
-    q     = request.args.get('q',   '').strip()
-    sort  = request.args.get('sort','rel')
+    q_raw = request.args.get('q','').strip()
     page  = max(int(request.args.get('page',1)), 1)
-    per   = page_size()
 
-    rows, total, removed = search_entries(q,
-                db=get_db(),
-                page=page,
-                per_page=per,
-                sort=sort)
+    # ── ①  try item‑search first ─────────────────────────────────────
+    if ':' in q_raw:                                      # quick pre‑filter
+        rows, total = search_items(q_raw, db=get_db(),
+                                   page=page, per_page=page_size())
+        if total or _parse_item_query(q_raw):             # valid pattern
+            pages = list(range(1, (total + page_size() - 1)//page_size() + 1))
+            return render_template_string(
+                TEMPL_SEARCH_ITEMS,
+                rows   = rows,
+                total  = total,
+                query  = q_raw,
+                page   = page,
+                pages  = pages,
+                kind   = 'search',
+                username = current_username(),
+            )
+    else:
+        # ── ②  fall back to the existing entry search ───────────────────
+        sort  = request.args.get('sort','rel')
+        rows, total, removed = search_entries(q_raw,
+                    db=get_db(),
+                    page=page,
+                    per_page=page_size(),
+                    sort=sort)
+        pages = list(range(1, (total + page_size() - 1)//page_size() + 1))
 
-    pages = list(range(1, (total + per - 1)//per + 1))
+        return render_template_string(
+            TEMPL_SEARCH_ENTRIES,
+            rows     = rows,
+            query    = q_raw,
+            sort     = sort,
+            page     = page,
+            pages    = pages,
+            removed  = ''.join(sorted(removed)),
+            kind     = 'search',
+            username = current_username(),
+        )
 
-    return render_template_string(
-        TEMPL_SEARCH,
-        rows     = rows,
-        query    = q,
-        sort     = sort,
-        page     = page,
-        pages    = pages,
-        removed  = ''.join(sorted(removed)),   # e.g. '@%-"'
-        title    = get_setting('site_name', 'po.etr.ist'),
-        kind     = 'search',
-        username = current_username(),
-    )
+
+TEMPL_SEARCH_ENTRIES = wrap("""
+{% block body %}
+    <hr>
+    <div style="padding:1rem 0;
+                
+                font-size:.8em;
+                color:#888;
+                display:flex;
+                align-items:center;      
+                justify-content:space-between;">
+        {# ─── sort pills ────────────────────────────────────────────── #}
+        <details style="display:inline-block;           
+                        position:relative;              
+                        font-size:.8em;">            
+            <summary style="display:flex; align-items:center; cursor:pointer; list-style:none; 
+                            padding:.35em 1em;
+                            border:1px solid #555; border-radius:4px;
+                            background:{% if sort %}#aaa{% else %}#333{% endif %};
+                            color:{% if sort %}#000{% else %}#eee{% endif %};">
+                {{ {'rel':'Relevance','new':'Newest','old':'Oldest'}[sort] }}
+            </summary>
+            <div style="position:absolute; left:0; top:calc(100% + .25em);
+                        background:#333; border:1px solid #555; border-radius:4px;
+                        z-index:10; min-width:100%; white-space:nowrap;">
+                {% for val, label in [('rel','Relevance'),('new','Newest'),('old','Oldest')] %}
+                    <a href="{{ url_for('search', q=query, sort=val) }}"
+                    style="display:block; padding:.35em 1em;
+                            color:{% if sort == val %}#000{% else %}#eee{% endif %}; text-decoration:none;
+                            border-bottom:1px solid #555;
+                            background:{% if sort == val %}#aaa{% else %}#333{% endif %};
+                            ">
+                        {{ label }}
+                    </a>
+                {% endfor %}
+            </div>
+        </details>
+    </div>
+
+    {% if removed %}
+        <p style="color:{{ theme_color() }}; font-size:.8em;">
+            Note: characters <code>{{ removed }}</code> were ignored in the search.
+        </p>
+    {% endif %}
+
+    {% if query and not rows %}
+        <p>No results for <strong>{{ query }}</strong>.</p>
+    {% endif %}
+
+    {% for e in rows %}
+        <article style="padding-bottom:1.5rem;
+                        {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
+            {% if e['title'] %}
+                <h3 style="margin:.4rem 0;">{{ e['title'] }}</h3>
+            {% endif %}
+            <p>{{ e['body']|md }}</p>
+            <small style="color:#aaa;">
+                <span style="
+                    display:inline-block;
+                    padding:.1em .6em;
+                    margin-right:.4em;
+                    background:#444;
+                    color:#fff;
+                    border-radius:1em;
+                    font-size:.75em;
+                    text-transform:capitalize;
+                    vertical-align:middle;
+                ">
+                    {{ e['kind'] }}
+                </span>
+                <a href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
+                    style="text-decoration:none; color:inherit;vertical-align:middle;">
+                    {{ e['created_at']|ts }}
+                </a>&nbsp;
+                {% if session.get('logged_in') %}
+                    <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" 
+                        style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
+                    <a href="{{ url_for('delete_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" 
+                        style="vertical-align:middle;">Delete</a>
+                {% endif %}
+            </small>
+        </article>
+    {% endfor %}
+                    
+    {% if pages|length > 1 %}
+    <nav style="margin-top:1rem;font-size:.75em;">
+        {% for p in pages %}
+            {% if p == page %}
+                <span style="border-bottom:0.33rem solid #aaa;">{{ p }}</span>
+            {% else %}
+                <a href="{{ url_for('search', q=query, sort=sort, page=p) }}">{{ p }}</a>
+            {% endif %}
+            {% if not loop.last %}&nbsp;{% endif %}
+        {% endfor %}
+    </nav>
+    {% endif %}
+{% endblock %}
+""")
+
+TEMPL_SEARCH_ITEMS = wrap("""
+{% block body %}
+  <hr>
+  <p style="font-size:.8em;color:#888;">
+    {{ total }}item{{ '' if total==1 else 's' }} for <strong>{{ query }}</strong>
+  </p>
+
+  {% if rows %}
+    <ul style="list-style:none;padding:0;">
+    {% for r in rows %}
+      <li style="margin:.6rem 0;">
+        <a href="{{ url_for('item_detail',
+                            verb='read',          
+                            item_type=r.item_type,
+                            slug=r.slug) }}">
+          {{ r.title }}
+        </a>
+        {% if r.year %}<small style="color:#888;">({{ r.year }})</small>{% endif %}
+        <br>
+        <small style="color:#888;">{{ r.item_type }} • {{ r.cnt }} check‑in{{ '' if r.cnt==1 else 's' }}</small>
+      </li>
+    {% endfor %}
+    </ul>
+
+    {% if pages|length > 1 %}
+      <nav style="margin-top:1rem;font-size:.75em;">
+        {% for p in pages %}
+          {% if p == page %}
+            <span style="border-bottom:.33rem solid #aaa;">{{ p }}</span>
+          {% else %}
+            <a href="{{ url_for('search', q=query, page=p) }}">{{ p }}</a>
+          {% endif %}
+          {% if not loop.last %}&nbsp;{% endif %}
+        {% endfor %}
+      </nav>
+    {% endif %}
+  {% else %}
+      <p>No items.</p>
+  {% endif %}
+{% endblock %}
+""")
 
 ###############################################################################
 # Error pages
@@ -2018,7 +3094,7 @@ TEMPL_404 = wrap("""
   <hr>
   <h2 style="margin-top:0">Page not found</h2>
   <p>The URL you asked for doesn’t exist.
-     <a href="{{ url_for('index') }}" style="color:#A5BA93;">Back to the front page</a>
+     <a href="{{ url_for('index') }}" style="color:{{ theme_color() }};">Back to the front page</a>
      or use the search box below.</p>
 {% endblock %}
 """)
@@ -2030,12 +3106,15 @@ TEMPL_500 = wrap("""
   <p>Our fault, not yours.  
      Please try again in a minute or
      <a href="https://github.com/huangziwei/poetrist/issues/new"
-        style="color:#A5BA93;">report the bug</a>.</p>
+        style="color:{{ theme_color() }};">report the bug</a>.</p>
 {% endblock %}
 """)
 
+
 ###############################################################################
-if __name__ == '__main__':     
+# main
+###############################################################################
+if __name__ == '__main__':
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == 'init':
         with app.app_context():

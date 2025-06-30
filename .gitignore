@@ -30,3 +30,7 @@ venv/
 .vscode/
 *.swp
 *.swo
+
+*copy.py
+*.pem
+*.old
