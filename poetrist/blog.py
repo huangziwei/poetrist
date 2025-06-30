@@ -1412,7 +1412,10 @@ def by_kind(slug):
         body, blocks = parse_trigger(body)
 
         # final kind:  1st verb if any caret block, otherwise the URL kind
-        kind = blocks[0]['verb'] if blocks else kind
+        if request.form.get("is_page") == "1":
+            kind = "page"
+        elif blocks:
+            kind = blocks[0]['verb'] if blocks else kind
 
         missing = []
 
@@ -1448,6 +1451,9 @@ def by_kind(slug):
         sync_tags(entry_id, extract_tags(body), db=db)
         db.commit()
         
+        if kind == "page":
+            return redirect(url_for("by_kind", slug=slug))
+
         return redirect(url_for('by_kind', slug=kind_to_slug(kind)))
 
     # --- pagination -------------------------------------------------------
