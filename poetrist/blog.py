@@ -1679,7 +1679,7 @@ TEMPL_ITEM_LIST = wrap("""
               {% else %}
                   background:#444;   color:{{ theme_color() }};
               {% endif %}">
-        All
+        all
         <sup style="font-size:.5em;">{{ total_cnt }}</sup>
     </a>
 
