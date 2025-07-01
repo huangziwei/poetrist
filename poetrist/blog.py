@@ -95,7 +95,7 @@ md = markdown.Markdown(
         "pymdownx.saneheaders"
     ],
     extension_configs={
-        "pymdownx.highlight": {"guess_lang": True},
+        "pymdownx.highlight": {"guess_lang": True, "noclasses": True, "pygments_style": "nord"},
     },
 )
 
@@ -124,12 +124,15 @@ def md_filter(text: str | None) -> Markup:
 
     HASH_LINK_RE = re.compile(
         r'''
-        (?<![A-Za-z0-9_="'&])   # no word char, quote, = or & right before
-        \#                      # literal hash
-        (?!x?[0-9A-Fa-f]+;)     # NOT followed by digits/hex + semicolon  → no entity
-        ([\w\-]+)               # the actual tag
-        ''', re.X
+        (?<![A-Za-z0-9_="'&])        # no word char, quote, = or & right before
+        \#                           # literal “#”
+        (?!x?[0-9A-Fa-f]+;)          # NOT an HTML entity  (e.g. &#x1F60A;)
+        (?![0-9A-Fa-f]{3,8}\b)       # ★ NEW: NOT a 3- to 8-digit hex colour
+        ([\w\-]+)                    # the actual tag
+        ''',
+        re.X
     )
+
     html = HASH_LINK_RE.sub(hashtag_repl, html)
 
     # change <mark> to have a custom style
