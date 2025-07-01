@@ -2475,24 +2475,30 @@ TEMPL_ITEM_DETAIL = wrap("""
 </h2>
             
 {% if meta %}
-{# parent UL — add overflow:auto so it encloses the float #}
-<ul style="list-style:none;padding:0;margin:0;font-size:.9em;color:#aaa;overflow:auto;">
-{% for r in meta %}
-    {% if is_b64_image(r['k'], r['v']) %}
-    {# ───────────── Cover on the left ───────────── #}
-    <li style="float:left;margin:.25em .75rem .75rem 0;">
-        <img src="data:image/webp;base64,{{ r['v'] }}"
-            alt="{{ item['title'] }}"
-            style="width:135px;max-width:100%;border:1px solid #555;margin:0.25em 0;">
+<ul  style="display:flex;align-items:flex-start;gap:1rem;         
+            list-style:none;padding:0;margin:0;font-size:.9em;color:#aaa;">
+
+    {# ─────── cover column ─────── #}
+    {% for r in meta if is_b64_image(r.k, r.v) %}
+    <li style="float:left;margin:.65em .75rem .75rem 0;">
+        <img src="data:image/webp;base64,{{ r.v }}"
+             alt="{{ item.title }}"
+             style="width:135px;max-width:100%;
+                    border:1px solid #555;margin:0;">
     </li>
-    {% else %}
-    {# ───────────── Text rows ────────────────────── #}
-    <li style="margin:.25em 0;">
-        <strong>{{ r['k']|smartcap }}:</strong>
-        {{ r['v']|mdinline }}
+    {% endfor %}
+
+    {# ─────── details column ─────── #}
+    <li style="flex:1;">                                           
+        <ul style="list-style:none;padding:0;margin:0;">
+        {% for r in meta if not is_b64_image(r.k, r.v) %}
+            <li style="margin:.2em 0;">
+                <strong>{{ r.k|smartcap }}:</strong>
+                {{ r.v|mdinline }}
+            </li>
+        {% endfor %}
+        </ul>
     </li>
-    {% endif %}
-{% endfor %}
 </ul>
 {% endif %}
 
