@@ -3025,7 +3025,7 @@ TEMPL_SEARCH_ENTRIES = wrap("""
                     padding:.35em 1em;                             /* same height as input */
                     text-decoration:none; border-bottom:none;
                     {% if not loop.first %}border-left:1px solid #555;{% endif %}
-                    {% if sort==val %}background:#A5BA93;color:#000;
+                    {% if sort==val %}background:{{ theme_color() }};color:#000;
                     {% else %}background:#333;color:#eee;{% endif %}">
             {{ label }}
             </a>
