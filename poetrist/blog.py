@@ -2935,7 +2935,8 @@ def search_items(q: str, *, db, page=1, per_page=PAGE_DEFAULT):
                       THEN SUBSTR(im.v,1,4)
                     END) AS year,
                COUNT(DISTINCT ei.entry_id) AS cnt,
-               MAX(e.created_at)          AS last_at
+               MAX(e.created_at)          AS last_at,
+               MIN(ei.verb)               AS verb
           FROM item        i
           LEFT JOIN item_meta  im ON im.item_id=i.id
           LEFT JOIN entry_item ei ON ei.item_id=i.id
@@ -3098,7 +3099,7 @@ TEMPL_SEARCH_ITEMS = wrap("""
     {% for r in rows %}
       <li style="margin:.6rem 0;">
         <a href="{{ url_for('item_detail',
-                            verb='read',          
+                            verb=r.verb,          
                             item_type=r.item_type,
                             slug=r.slug) }}">
           {{ r.title }}
