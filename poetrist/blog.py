@@ -8,11 +8,14 @@ import secrets
 import shlex
 import sqlite3
 import uuid
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from email.utils import format_datetime
+from functools import wraps
 from html import escape
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from time import time
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
@@ -75,13 +78,8 @@ app.config.update(SECRET_KEY=SECRET_KEY, DATABASE=str(DB_FILE))
 app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",   # blocks most CSRF on simple links
     SESSION_COOKIE_HTTPONLY=True,    # mitigate XSS → cookie theft
-    SESSION_COOKIE_SECURE=False,      # only if you serve over HTTPS
+    SESSION_COOKIE_SECURE=True,      # only if you serve over HTTPS
 )
-@app.before_request
-def enforce_secure_flag():
-    if request.is_secure:             # True when running behind HTTPS
-        app.config['SESSION_COOKIE_SECURE'] = True
-
 
 md = markdown.Markdown(
     extensions=[
@@ -944,7 +942,41 @@ def login_required() -> None:
     if not session.get("logged_in"):
         abort(403)
 
+def rate_limit(max_requests: int, window: int = 60):
+    """
+    Decorate a view so that each caller (by IP) can hit it
+    at most `max_requests` times per `window` seconds.
+    """
+    # one deque per IP address
+    _log: dict[str, deque] = defaultdict(deque)
+
+    def decorator(view):
+        @wraps(view)
+        def wrapped(*args, **kwargs):
+            now = time()
+            ip = request.remote_addr or "unknown"
+
+            dq = _log[ip]
+            # drop timestamps outside the window
+            while dq and now - dq[0] > window:
+                dq.popleft()
+
+            if len(dq) >= max_requests:
+                retry_after = int(window - (now - dq[0]))
+                return Response(
+                    "Too many requests – try again later.",
+                    status=429,
+                    headers={"Retry-After": str(retry_after)},
+                )
+
+            dq.append(now)
+            return view(*args, **kwargs)
+
+        return wrapped
+    return decorator
+
 @app.route('/login', methods=['GET', 'POST'])
+@rate_limit(max_requests=5, window=60)  # 5 attempts per minute
 def login():
     # ── read token only from the form ──────────────────────────────
     token = request.form.get('token', '').strip()
@@ -958,8 +990,10 @@ def login():
         )
         db.commit()
 
+        session.clear()
         session.permanent = True
         session['logged_in'] = True
+        session['csrf'] = secrets.token_hex(16)
         return redirect(url_for('index'))
 
     return render_template_string(TEMPL_LOGIN)
