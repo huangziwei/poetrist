@@ -432,7 +432,7 @@ def cli_init(username: str, password: str):
 
     click.secho("\n✅  Admin created.", fg="green")
     click.echo(f"\nOne-time login token:\n\n{token}\n")
-    click.echo("Paste it into the login form at /login.")
+    click.echo("Paste it into the login form at /login within 1 minute.")
 
 
 @app.cli.command("token")
@@ -443,7 +443,7 @@ def cli_token():
 
     click.secho("\n🔑  Fresh login token generated.\n", fg="yellow")
     click.echo(f"{token}\n")
-    click.echo("Paste it into the login form at /login.")
+    click.echo("Paste it into the login form at /login within 1 minute.")
 
 
 ###############################################################################
