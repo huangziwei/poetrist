@@ -2468,9 +2468,8 @@ def item_detail(verb, item_type, slug):
 TEMPL_ITEM_DETAIL = wrap("""
 {% block body %}
 <hr>
-{% set _year = (meta | selectattr('k', 'equalto', 'date')
-                      | map(attribute='v')
-                      | list | first)[:4] if meta else '' %}
+{% set _dates = meta | selectattr('k', 'equalto', 'date') | map(attribute='v') | list %}
+{% set _year  = _dates[0][:4] if _dates else '' %}
 <h2 style="margin-top:0">
     {{ item['title'] }}{% if _year %} ({{ _year }}){% endif %}
 </h2>
