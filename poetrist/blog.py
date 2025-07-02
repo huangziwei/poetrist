@@ -225,6 +225,8 @@ def close_db(error=None):
     if db is not None:
         db.close()
 
+
+
 def init_db():
     db = get_db()
     db.executescript(
@@ -347,7 +349,9 @@ def init_db():
         );
 
         CREATE INDEX IF NOT EXISTS idx_item_type      ON item(item_type);
-        CREATE INDEX IF NOT EXISTS idx_item_meta_kv   ON item_meta(k, v);
+        CREATE INDEX IF NOT EXISTS idx_item_meta_kv   ON item_meta(k, v)
+             WHERE k NOT IN ('cover','img','poster')
+               AND length(v) < 500;
 
         ------------------------------------------------------------
         -- 8.  Links “which entry talks about which item”
@@ -2981,55 +2985,81 @@ def _parse_item_query(q: str):
 
 def search_items(q: str, *, db, page=1, per_page=PAGE_DEFAULT):
     """
-    LIKE‑based search in item.title *and* item_meta.v.
+    LIKE-based search in item.title and item_meta.v, **excluding**
+    large base-64 image blobs (cover/img/poster).
+
+    Query forms supported
+        book:"Kafka"          ← any field
+        book:title:kafka      ← title only
+        book:author:kafka     ← specific meta field
+
     Returns (rows_on_page, total_hits)
     """
     spec = _parse_item_query(q)
     if not spec:
-        return [], 0                # not an item query → caller will fall back
+        return [], 0           # not an item query → let caller fall back
 
+    # ------------------------------------------------------------------ 
+    # Build WHERE-clause and parameter list
+    # ------------------------------------------------------------------
     conds, params = ["i.item_type = ?"], [spec['type']]
     like = f"%{spec['term'].lower()}%"
 
-    if spec['field'] is None:                          # book:"Kafka"
-        conds.append("""
-            (LOWER(i.title) LIKE ? OR
-             EXISTS (SELECT 1 FROM item_meta im
-                       WHERE im.item_id=i.id AND LOWER(im.v) LIKE ?))
+    # --- helper fragment: exclude base64 images -----------------------
+    _no_b64 = (
+        "im.k NOT IN ('cover','img','poster') "
+        "AND LENGTH(im.v) < 500"              # >≈300 chars → almost always an image
+    )
+
+    if spec['field'] is None:                           #   book:"Kafka"
+        conds.append(f"""
+           (
+             LOWER(i.title) LIKE ?
+             OR EXISTS (SELECT 1 FROM item_meta im
+                          WHERE im.item_id = i.id
+                            AND {_no_b64}
+                            AND LOWER(im.v) LIKE ?)
+           )
         """)
         params.extend([like, like])
 
-    elif spec['field'] == 'title':                     # book:title:kafka
+    elif spec['field'] == 'title':                      #   book:title:kafka
         conds.append("LOWER(i.title) LIKE ?")
         params.append(like)
 
-    else:                                              # book:author:kafka
-        conds.append("""
+    else:                                               #   book:author:kafka
+        conds.append(f"""
             EXISTS (SELECT 1 FROM item_meta im
-                     WHERE im.item_id=i.id
-                       AND LOWER(im.k)=?
+                     WHERE im.item_id = i.id
+                       AND LOWER(im.k) = ?
+                       AND {_no_b64}
                        AND LOWER(im.v) LIKE ?)
         """)
         params.extend([spec['field'], like])
 
     where_sql = " AND ".join(conds)
+
+    # ------------------------------------------------------------------ 
+    # Final query (unchanged apart from the new WHERE)
+    # ------------------------------------------------------------------
     base_sql = f"""
         SELECT i.*,
                MIN(CASE
-                      WHEN im.k='date' AND LENGTH(im.v)>=4
-                      THEN SUBSTR(im.v,1,4)
-                    END) AS year,
+                     WHEN im.k='date' AND LENGTH(im.v)>=4
+                     THEN SUBSTR(im.v,1,4)
+                   END) AS year,
                COUNT(DISTINCT ei.entry_id) AS cnt,
-               MAX(e.created_at)          AS last_at,
-               MIN(ei.verb)               AS verb
+               MAX(e.created_at)           AS last_at,
+               MIN(ei.verb)                AS verb
           FROM item        i
-          LEFT JOIN item_meta  im ON im.item_id=i.id
-          LEFT JOIN entry_item ei ON ei.item_id=i.id
+          LEFT JOIN item_meta  im ON im.item_id = i.id
+          LEFT JOIN entry_item ei ON ei.item_id = i.id
           LEFT JOIN entry      e  ON e.id       = ei.entry_id
          WHERE {where_sql}
          GROUP BY i.id
          ORDER BY cnt DESC, last_at DESC
     """
+
     total = db.execute(f"SELECT COUNT(*) FROM ({base_sql})", tuple(params)).fetchone()[0]
     rows  = db.execute(f"{base_sql} LIMIT ? OFFSET ?",
                        tuple(params) + (per_page, (page-1)*per_page)).fetchall()
