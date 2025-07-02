@@ -557,10 +557,7 @@ CARET_COMPACT_RE = re.compile(r'''
     (?:\s*:\s*(?:"([^"]+)"|([^":\s]+)))?  # ➍ progress (grp 8/9)
 ''', re.X | re.I | re.U)
 # ── “long” meta lines ─────────────────────────
-META_RE = re.compile(
-    r'^\^([a-z0-9_-]+):"?(.*?)"?$',     # key : "value"   or   key : value
-    re.I
-)
+META_RE = re.compile(r'^\^([^\s:]+):"?(.*?)"?$', re.U)
 UUID4_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$', re.I)
 
 def parse_trigger(text: str) -> tuple[str, list[dict]]:
