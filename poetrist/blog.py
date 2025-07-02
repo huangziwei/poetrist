@@ -425,7 +425,7 @@ def cli_init(username: str, password: str):
 
     click.secho("\n✅  Admin created.", fg="green")
     click.echo(f"\nOne-time login token:\n\n{token}\n")
-    click.echo("Use it at /login?token=<token> or paste it into the form.")
+    click.echo("Paste it into the login form at /login.")
 
 
 @app.cli.command("token")
@@ -436,7 +436,7 @@ def cli_token():
 
     click.secho("\n🔑  Fresh login token generated.\n", fg="yellow")
     click.echo(f"{token}\n")
-    click.echo("Valid until first use → /login?token=<token>")
+    click.echo("Paste it into the login form at /login.")
 
 
 ###############################################################################
@@ -949,18 +949,19 @@ def login_required() -> None:
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    # ── read token from form or query string ──────────────────────────────
-    token = (request.form['token'] if request.method == 'POST'
-             else request.args.get('token', '')).strip()
+    # ── read token only from the form ──────────────────────────────
+    token = request.form.get('token', '').strip()
 
-    if token and validate_token(token):
-        # ── token matched → burn it right away ────────────────────────
+    if request.method == 'POST' and token and validate_token(token):
+        # ── token matched → burn it right away ─────────────────────
         db = get_db()
-        db.execute('UPDATE user SET token_hash=? WHERE id=1',
-                   (generate_password_hash(secrets.token_hex(16)),))
+        db.execute(
+            'UPDATE user SET token_hash=? WHERE id=1',
+            (generate_password_hash(secrets.token_hex(16)),)
+        )
         db.commit()
 
-        session.permanent = True      # keep user logged in across browser restarts
+        session.permanent = True
         session['logged_in'] = True
         return redirect(url_for('index'))
 

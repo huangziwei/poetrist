@@ -15,13 +15,13 @@ FLASK_APP=poetrist/blog.py flask init          # follow the prompts
 # FLASK_APP=poetrist/blog.py flask token
 
 # Create a self-signed cert so you can test HTTPS locally
+mkdir secrets
 openssl req -x509 -newkey rsa:4096 \
-            -keyout poetrist/key.pem \
-            -out    poetrist/cert.pem \
+            -keyout secrets/key.pem \
+            -out    secrets/cert.pem \
             -sha256 -days 365 -nodes \
             -subj "/CN=localhost"
 
 # Run it
-FLASK_APP=poetrist/blog.py \
-flask run --cert=poetrist/cert.pem --key=poetrist/key.pem --debug
+FLASK_APP=poetrist/blog.py flask run --cert=secrets/cert.pem --key=secrets/key.pem --debug
 ```
