@@ -62,11 +62,10 @@ rotate_token() {
   token=$(
     fly ssh console -a "$APP" -C \
       '/app/.venv/bin/flask --app poetrist/blog.py token' |
-    grep -Eo '^[A-Za-z0-9_-]{20,}$' | head -n1
+    grep -Eo '^[A-Za-z0-9._-]{20,}$' | head -n1
   )
   echo
-  echo "One-time token → $token"
-  echo "Login URL      → https://$APP.fly.dev/login?token=$token"
+  echo "One-time token (1 minute) → \n$token"
 }
 
 # ───── dispatcher ──────────────────────────────────────────────────────────────
