@@ -734,9 +734,7 @@ def _verbose_block(blk, uuid_):
 
 def _csrf_token() -> str:
     """One token per session (rotates when the cookie does)."""
-    if "csrf" not in session:
-        session["csrf"] = secrets.token_hex(16)
-    return session["csrf"]
+    return session.get("csrf", "")
 
 # Expose helpers to templates
 app.jinja_env.globals.update(kind_to_slug=kind_to_slug, get_setting=get_setting)
@@ -999,7 +997,9 @@ TEMPL_LOGIN = wrap("""
     {% block body %}
     <hr>
     <form method=post>
-        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+        {% if csrf_token() %}
+            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+            {% endif %}
         <div style="position:relative;">
             <input  name="token"
                 type="password"          
@@ -1064,13 +1064,19 @@ def robots():
     }
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
+
 @app.before_request
 def csrf_protect():
+    # ➊ read-only verbs ⇒ always allowed
     if request.method in SAFE_METHODS:
-        return                       # read-only → no check
+        return
 
+    # ➋ no logged-in flag yet ⇒ allow (covers /login POST)
+    if not session.get("logged_in"):
+        return
+
+    # ➌ for authenticated users we REQUIRE a valid token
     token = session.get("csrf", "")
-    # prefer form field, fall back to custom header for fetch/axios
     sent  = request.form.get("csrf") or request.headers.get("X-CSRFToken", "")
     if not token or not secrets.compare_digest(token, sent):
         abort(403)
@@ -1133,7 +1139,9 @@ TEMPL_SETTINGS = wrap("""
     {% block body %}
     <hr>
     <form method="post" style="max-width:36rem">
-        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+        {% if csrf_token() %}
+            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+            {% endif %}
         <!-- ──────────── site info ──────────── -->
         <fieldset style="margin:0 0 1.5rem 0; border:0; padding:0">
             <legend style="font-weight:bold; margin-bottom:.5rem;">Site</legend>
@@ -1191,7 +1199,9 @@ TEMPL_SETTINGS = wrap("""
     <div style="display:flex; gap:1rem; max-width:36rem; margin-top:2rem;">
         <!-- token button in its own tiny form -->
         <form method="post" style="margin:0;">
+            {% if csrf_token() %}
             <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+            {% endif %}
             <button name="action" value="rotate_token" style="color:{{ theme_color() }}; background:#333;">
                 Get new token
             </button>
@@ -1323,7 +1333,9 @@ TEMPL_INDEX = wrap("""{% block body %}
                      flex-direction:column;
                      gap:10px;
                      align-items:flex-start;">
+            {% if csrf_token() %}
             <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+            {% endif %}
             <textarea name="body"
                       rows="3"
                       style="width:100%;margin:0"
@@ -1581,7 +1593,9 @@ TEMPL_LIST = wrap("""
         <hr style="margin:10px 0">
         <form method="post" 
                   style="display:flex;flex-direction:column;gap:10px;align-items:flex-start;">
+            {% if csrf_token() %}
             <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+            {% endif %}
             {# Title field for Posts & Pins #}
             {% if kind in ('post', 'pin') %}
                 <input name="title" style="width:100%;margin:0" placeholder="Title">
@@ -1976,7 +1990,9 @@ TEMPL_EDIT_ENTRY = wrap("""
 <hr>
 <h2>Edit {{ e['kind']|capitalize }}</h2>
 <form method="post">
-    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    {% if csrf_token() %}
+            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+            {% endif %}
     {% if e['kind'] in ('post','pin', 'page') %}
         <div style="position:relative;">
             <input id="title"
@@ -2094,7 +2110,9 @@ TEMPL_DELETE_ENTRY = wrap("""
         <small style="color:#aaa;">{{ e['created_at']|ts }}</small>
     </article>
     <form method="post" style="margin-top:1rem;">
-        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+        {% if csrf_token() %}
+            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+            {% endif %}
         <button style="background:#c00; color:#fff;">Yes – delete it</button>
         <a href="{{ url_for('index') }}" style="margin-left:1rem;">Cancel</a>
     </form>
@@ -2545,7 +2563,9 @@ TEMPL_ITEM_DETAIL = wrap("""
             flex-direction:column;
             gap:10px;
             align-items:flex-start;">
-    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    {% if csrf_token() %}
+            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+            {% endif %}
     <textarea name="meta"
             rows="3"
             style="width:100%;margin:0;"
@@ -2692,7 +2712,9 @@ TEMPL_EDIT_ITEM = wrap("""
 <h2 style="margin-top:0">Edit item</h2>
 
 <form method="post" style="max-width:32rem;display:flex;flex-direction:column;gap:1rem;">
-  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  {% if csrf_token() %}
+            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+            {% endif %}
   {# ────────── title / slug / type ────────── #}
   <label>
     <span style="font-size:.8em;color:#888">Title</span><br>
@@ -2776,7 +2798,9 @@ TEMPL_DELETE_ITEM = wrap("""
   <h2 style="margin-top:0">Delete item?</h2>
   <p><strong>{{ item['title'] }}</strong> <em>({{ item['item_type'] }})</em></p>
   <form method="post" style="margin-top:1rem;">
-    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    {% if csrf_token() %}
+            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+            {% endif %}
     <button style="background:#c00;color:#fff;">Yes – delete it</button>
     <a href="{{ url_for('item_detail',
                         verb=verb,
