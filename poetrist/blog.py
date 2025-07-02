@@ -35,6 +35,7 @@ from flask import (
     session,
     url_for,
 )
+from itsdangerous import BadSignature, SignatureExpired, TimestampSigner
 from markupsafe import Markup
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -45,11 +46,14 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 ROOT        = Path(__file__).parent
 DB_FILE     = ROOT / "blog.sqlite3"
-TOKEN_LEN = 48
+
 SECRET_FILE = ROOT / ".secret_key"
 SECRET_KEY  = SECRET_FILE.read_text().strip() if SECRET_FILE.exists() \
               else secrets.token_hex(32)
 SECRET_FILE.write_text(SECRET_KEY)
+TOKEN_LEN = 48
+signer = TimestampSigner(SECRET_KEY, salt='login-token')
+
 SLUG_DEFAULTS = {"say": "says", "post": "posts", "pin": "pins"}
 VERB_MAP = {
     "read"   : ["to-read", "to read", "reading", "read", "rereading", "reread", "finished reading"],
@@ -389,12 +393,13 @@ load_simple_env()
 
 def _create_admin(db, *, username: str, password: str) -> str:
     """Insert admin user and return the one-time token."""
-    token = secrets.token_urlsafe(TOKEN_LEN)
+    handle = secrets.token_urlsafe(TOKEN_LEN)          # random payload
+    token  = signer.sign(handle).decode()              # handle.timestamp.sig
     db.execute(
         "INSERT INTO user (username, pwd_hash, token_hash) VALUES (?,?,?)",
         (username,
          generate_password_hash(password),
-         generate_password_hash(token))
+         generate_password_hash(handle))
     )
     db.commit()
     return token
@@ -402,10 +407,11 @@ def _create_admin(db, *, username: str, password: str) -> str:
 
 def _rotate_token(db) -> str:
     """Generate + store a *new* one-time token, return it for display."""
-    token = secrets.token_urlsafe(TOKEN_LEN)
+    handle = secrets.token_urlsafe(TOKEN_LEN)
+    token  = signer.sign(handle).decode()
     db.execute(
         "UPDATE user SET token_hash=? WHERE id=1",
-        (generate_password_hash(token),)
+        (generate_password_hash(handle),)
     )
     db.commit()
     return token
@@ -934,26 +940,38 @@ TEMPL_EPILOG = """
 ###############################################################################
 # Authentication
 ###############################################################################
-def validate_token(token: str) -> bool:
-    db = get_db()
-    row = db.execute('SELECT token_hash FROM user LIMIT 1').fetchone()
-    return row and check_password_hash(row['token_hash'], token)
+def validate_token(token: str, max_age: int = 60) -> bool:
+    """
+    • Unsigned  age-check in *one* step (`max_age` seconds).
+    • Compare the payload (“handle”) against the hashed copy in the DB.
+    """
+    try:
+        handle = signer.unsign(token, max_age=max_age).decode()
+    except SignatureExpired:
+        return False                        # too old ➜ invalid
+    except BadSignature:
+        return False                        # forged ➜ invalid
+
+    row = get_db().execute(
+            'SELECT token_hash FROM user LIMIT 1').fetchone()
+    return row and check_password_hash(row['token_hash'], handle)
 
 def login_required() -> None:         
     if not session.get("logged_in"):
         abort(403)
 
 def rate_limit(max_requests: int, window: int = 60):
-    _log: DefaultDict[str, deque] = defaultdict(deque)
+    hits: DefaultDict[str, deque] = defaultdict(deque)
 
     def decorator(view):
         @wraps(view)
         def wrapped(*args, **kwargs):
             now = time()
-            ip  = request.remote_addr or "unknown"
+            # left-most entry after ProxyFix = real client
+            ip = (request.access_route[0] if request.access_route else request.remote_addr) or "unknown"
 
-            dq = _log[ip]
-            while dq and now - dq[0] > window:      # drop old hits
+            dq = hits[ip]
+            while dq and now - dq[0] > window:
                 dq.popleft()
 
             if len(dq) >= max_requests:
