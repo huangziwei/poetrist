@@ -16,6 +16,7 @@ from html import escape
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from time import time
+from typing import DefaultDict
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
@@ -35,6 +36,7 @@ from flask import (
     url_for,
 )
 from markupsafe import Markup
+from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
 ################################################################################
@@ -80,6 +82,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,    # mitigate XSS → cookie theft
     SESSION_COOKIE_SECURE=True,      # only if you serve over HTTPS
 )
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 md = markdown.Markdown(
     extensions=[
@@ -943,22 +946,16 @@ def login_required() -> None:
         abort(403)
 
 def rate_limit(max_requests: int, window: int = 60):
-    """
-    Decorate a view so that each caller (by IP) can hit it
-    at most `max_requests` times per `window` seconds.
-    """
-    # one deque per IP address
-    _log: dict[str, deque] = defaultdict(deque)
+    _log: DefaultDict[str, deque] = defaultdict(deque)
 
     def decorator(view):
         @wraps(view)
         def wrapped(*args, **kwargs):
             now = time()
-            ip = request.remote_addr or "unknown"
+            ip  = request.remote_addr or "unknown"
 
             dq = _log[ip]
-            # drop timestamps outside the window
-            while dq and now - dq[0] > window:
+            while dq and now - dq[0] > window:      # drop old hits
                 dq.popleft()
 
             if len(dq) >= max_requests:
@@ -971,7 +968,6 @@ def rate_limit(max_requests: int, window: int = 60):
 
             dq.append(now)
             return view(*args, **kwargs)
-
         return wrapped
     return decorator
 
