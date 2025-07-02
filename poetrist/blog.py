@@ -1099,6 +1099,16 @@ def csrf_protect():
     if not token or not secrets.compare_digest(token, sent):
         abort(403)
 
+@app.after_request
+def sec_headers(resp):
+    resp.headers.update({
+        "X-Frame-Options": "DENY",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+        "Permissions-Policy": "interest-cohort=()",   # opt-out of FLoC etc.
+    })
+    return resp
+
 ###############################################################################
 # Settings
 ###############################################################################
