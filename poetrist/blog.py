@@ -2638,14 +2638,10 @@ TEMPL_ITEM_DETAIL = wrap("""
 </form>
 {% endif %}
 
-<hr>                
-<div style="padding:1rem 0;
-            
-            font-size:.8em;
-            color:#888;
-            display:flex;
-            align-items:center;      
-            justify-content:space-between;">
+<hr>
+{% if entries|length > 1 %}                
+<div style="padding:1rem 0;font-size:.8em;color:#888;
+                         display:flex;align-items:center;justify-content:space-between;">
     {# ─── sort pills ────────────────────────────────────────────── #}
     <span style="display:inline-flex;
                 border:1px solid #555;
@@ -2670,7 +2666,7 @@ TEMPL_ITEM_DETAIL = wrap("""
         {% endfor %}
     </span>
 </div>
-
+{% endif %}
 {% for e in entries %}    
 <article style="padding-bottom:1rem; {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
     <p>{{ e['body']|md }}</p>
