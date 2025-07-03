@@ -216,7 +216,7 @@ def get_db():
         g.db = sqlite3.connect(app.config['DATABASE'])
         g.db.execute("PRAGMA foreign_keys = ON;")
         g.db.row_factory = sqlite3.Row
-
+        g.db.create_function("strip_caret", 1, strip_caret)
     return g.db
 
 @app.teardown_appcontext
@@ -309,7 +309,7 @@ def init_db():
             INSERT INTO entry_fts(rowid,title,body,link)
                 VALUES (new.id,
                         COALESCE(new.title,''),
-                        new.body,
+                        strip_caret(new.body),
                         COALESCE(new.link,''));
         END;
 
@@ -319,7 +319,7 @@ def init_db():
             INSERT INTO entry_fts(rowid,title,body,link)
                 VALUES(new.id,
                         COALESCE(new.title,''),
-                        new.body,
+                        strip_caret(new.body),
                         COALESCE(new.link,''));
         END;
 
@@ -453,6 +453,18 @@ def cli_token():
 ###############################################################################
 # Content helpers
 ###############################################################################
+def strip_caret(text: str | None) -> str:
+    """
+    Drop every line that starts with “^something:”  
+    (Used for both FTS indexing and LIKE-fallback searches.)
+    """
+    if not text:
+        return ""
+    return "\n".join(
+        ln for ln in text.splitlines()
+        if not ln.lstrip().startswith("^")
+    )
+
 def infer_kind(title, link):
     if not title and not link:
         return 'say'
@@ -2942,13 +2954,20 @@ def search_entries(q: str,
         order_sql = "ORDER BY rank"
 
     rows = db.execute(f"""
-            SELECT e.*, bm25(entry_fts) AS rank
-              FROM entry_fts
-              JOIN entry e ON e.id = entry_fts.rowid
-             WHERE entry_fts MATCH ?
-             {order_sql}
-             LIMIT ? OFFSET ?""",
-             (q, per_page, (page-1)*per_page)).fetchall()
+        SELECT  e.*,
+                bm25(entry_fts) AS rank,
+                snippet(entry_fts,      
+                        -1,             
+                        '<mark>', '</mark>',
+                        ' … ', 12)      
+                    AS snippet
+        FROM entry_fts
+        JOIN entry e ON e.id = entry_fts.rowid
+        WHERE entry_fts MATCH ?
+        {order_sql}
+        LIMIT ? OFFSET ?""",
+        (q, per_page, (page-1)*per_page)
+    ).fetchall()
 
     total = db.execute(
                 "SELECT COUNT(*) FROM entry_fts WHERE entry_fts MATCH ?",
@@ -3064,6 +3083,23 @@ def search_items(q: str, *, db, page=1, per_page=PAGE_DEFAULT):
                        tuple(params) + (per_page, (page-1)*per_page)).fetchall()
     return rows, total
 
+def _make_like_snippet(title, body, terms):
+    """
+    Cheap LIKE-search snippet.
+    - Strips caret meta.
+    - Escapes HTML.
+    - Highlights every term with <mark>.
+    """
+    body = strip_caret(body)
+    pieces = [title] if title else []
+    if body:
+        pieces.append(body)
+    txt = ' – '.join(pieces)          # no leading dash if title missing
+
+    excerpt = escape(txt[:250])
+    pattern = re.compile('|'.join(re.escape(t) for t in terms), re.I)
+    return Markup(pattern.sub(lambda m: f'<mark>{m.group(0)}</mark>', excerpt))
+
 
 @app.route('/search')
 def search():
@@ -3094,6 +3130,13 @@ def search():
                 page=page,
                 per_page=page_size(),
                 sort=sort)
+    
+    terms = [q_raw]                              # q here is your original short token
+    rows = [dict(r) for r in rows]           # make mutable copies
+    for r in rows:
+        r['snippet'] = _make_like_snippet(r['title'], r['body'], terms)
+
+
     pages = list(range(1, (total + page_size() - 1)//page_size() + 1))
 
     return render_template_string(
@@ -3157,7 +3200,7 @@ TEMPL_SEARCH_ENTRIES = wrap("""
             {% if e['title'] %}
                 <h3 style="margin:.4rem 0;">{{ e['title'] }}</h3>
             {% endif %}
-            <p>{{ e['body']|md }}</p>
+            <p>{{ e['snippet']|md }}</p>
             <small style="color:#aaa;">
                 <span style="
                     display:inline-block;
