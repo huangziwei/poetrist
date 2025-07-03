@@ -26,6 +26,7 @@ fly-tool – modular Fly helper for “${APP}”
 Sub-commands:
   check-secret   Ensure .secret_key exists locally
   pull-db        Download blog.sqlite3 from production
+  restore-db     Restore local blog.sqlite3 from backup
   deploy         fly deploy (build + release)
   token          Rotate one-time login token & print login URL
   all            Perform every step (check-secret → pull-db → deploy → token)
@@ -51,6 +52,19 @@ pull_db() {
   fi
 }
 
+restore_db() {
+  # copy poetrist/blog.sqlite3.backup → poetrist/blog.sqlite3
+  local target="${LOCAL_DB%.backup}"   # strips the “.backup” suffix
+  echo "♻️   Restoring database from backup…"
+  if [[ -f "$LOCAL_DB" ]]; then
+    cp -f "$LOCAL_DB" "$target"
+    echo "    copied $LOCAL_DB → $target"
+  else
+    echo "    backup not found: $LOCAL_DB"
+    return 1
+  fi
+ }
+
 deploy_app() {
   echo "🚀  fly deploy"
   fly deploy -a "$APP"
@@ -73,6 +87,7 @@ cmd="${1:-help}"
 case "$cmd" in
   check-secret)  check_secret ;;
   pull-db)       pull_db ;;
+  restore-db)     restore_db ;;
   deploy)        deploy_app ;;
   token)         rotate_token ;;
   all)           check_secret && pull_db && deploy_app && rotate_token ;;

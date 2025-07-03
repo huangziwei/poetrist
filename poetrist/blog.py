@@ -3091,12 +3091,12 @@ def _make_like_snippet(title, body, terms):
     - Highlights every term with <mark>.
     """
     body = strip_caret(body)
-    pieces = [title] if title else []
+    pieces = []
     if body:
         pieces.append(body)
     txt = ' – '.join(pieces)          # no leading dash if title missing
 
-    excerpt = escape(txt[:250])
+    excerpt = escape(txt[:250]) + "…" if len(txt) > 250 else escape(txt)
     pattern = re.compile('|'.join(re.escape(t) for t in terms), re.I)
     return Markup(pattern.sub(lambda m: f'<mark>{m.group(0)}</mark>', excerpt))
 
@@ -3215,10 +3215,17 @@ TEMPL_SEARCH_ENTRIES = wrap("""
                 ">
                     {{ e['kind'] }}
                 </span>
+                {% if e['kind'] == 'page' %}
+                    <a href="{{ '/' ~ e['slug'] }}"
+                        style="text-decoration:none; color:inherit;vertical-align:middle;">
+                        {{ e['created_at']|ts }}
+                    </a>&nbsp;
+                {% else %}
                 <a href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
                     style="text-decoration:none; color:inherit;vertical-align:middle;">
                     {{ e['created_at']|ts }}
                 </a>&nbsp;
+                {% endif %}
                 {% if session.get('logged_in') %}
                     <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" 
                         style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
