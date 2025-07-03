@@ -804,6 +804,11 @@ TEMPL_PROLOG = """
 <link rel="icon" href="{{ url_for('favicon') }}">
 <link rel="alternate" type="application/rss+xml"
       href="{{ url_for('global_rss') }}" title="{{ title }} – RSS">
+<style>
+@media (max-width:560px){
+    .meta {flex:0 0 100%;order:1;margin-left:0;text-align:left;}
+}
+</style>
 <a href="#page-bottom" aria-label="Jump to footer"
    style="
         position:fixed;
@@ -1429,7 +1434,7 @@ TEMPL_INDEX = wrap("""{% block body %}
                 </a>
             </span>
             <a href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
-                style="text-decoration:none; color:inherit;vertical-align:middle;">
+                style="text-decoration:none; color:inherit;vertical-align:middle;font-variant-numeric:tabular-nums;white-space:nowrap;">
                 {{ e['created_at']|ts }}
             </a>&nbsp;
             {% if session.get('logged_in') %}
@@ -1685,7 +1690,7 @@ TEMPL_LIST = wrap("""
                     </a>
                 </span>
                 <a href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
-                    style="text-decoration:none; color:inherit;vertical-align:middle;">
+                    style="text-decoration:none; color:inherit;vertical-align:middle;font-variant-numeric:tabular-nums;white-space:nowrap;">
                     {{ e['created_at']|ts }}
                 </a>&nbsp;
                 {% if session.get('logged_in') %}
@@ -1791,8 +1796,9 @@ TEMPL_ITEM_LIST = wrap("""
         <li style="display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:.35rem 1rem;margin:.75rem 0;">
             <a href="{{ url_for('item_detail', verb=verb, item_type=r.item_type, slug=r.slug) }}"
                style="font-weight:normal;">{{ r.title }}{% if r.year %} ({{ r.year }}){% endif %}</a>
-            <small style="color:#888;flex:0 0 auto;">
-                {{ r.item_type }} • {{ r.cnt }}× • {{ r.last_at|ts }}
+            <small class="meta"
+                style="color:#888;margin-left:auto;white-space:nowrap;font-variant-numeric:tabular-nums;">
+            {{ r.item_type }} • {{ r.cnt }}× • {{ r.last_at|ts }}
             </small>
         </li>
         {% endfor %}
@@ -1920,7 +1926,7 @@ TEMPL_ENTRY_DETAIL = wrap("""
             <a href="{{ url_for('entry_detail',
                                  kind_slug=kind_to_slug(e['kind']),
                                  entry_slug=e['slug']) }}"
-               style="text-decoration:none;color:inherit;vertical-align:middle;">
+               style="text-decoration:none; color:inherit;vertical-align:middle;font-variant-numeric:tabular-nums;white-space:nowrap;">
                {{ e['created_at']|ts }}
             </a>
             <span style="vertical-align:middle;">&nbsp;by&nbsp;{{ username }}</span>&nbsp;&nbsp;
