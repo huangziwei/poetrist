@@ -15,7 +15,7 @@ set -euo pipefail
 # ───── constants ────────────────────────────────────────────────────────────────
 APP="poetrist"
 REMOTE_DB="/app/poetrist/blog.sqlite3"
-LOCAL_DB="poetrist/blog.sqlite3"
+LOCAL_DB="poetrist/blog.sqlite3.backup"
 TMP_DB="${LOCAL_DB}.remote"
 SECRET_FILE="poetrist/.secret_key"
 
