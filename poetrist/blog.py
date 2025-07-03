@@ -3091,14 +3091,10 @@ def _make_like_snippet(title, body, terms):
     - Highlights every term with <mark>.
     """
     body = strip_caret(body)
-    pieces = []
-    if body:
-        pieces.append(body)
-    txt = ' – '.join(pieces)          # no leading dash if title missing
 
-    excerpt = escape(txt[:250]) + "…" if len(txt) > 250 else escape(txt)
+    # excerpt = escape(txt[:250]) + "…" if len(txt) > 250 else escape(txt)
     pattern = re.compile('|'.join(re.escape(t) for t in terms), re.I)
-    return Markup(pattern.sub(lambda m: f'<mark>{m.group(0)}</mark>', excerpt))
+    return Markup(pattern.sub(lambda m: f'<mark>{m.group(0)}</mark>', body))
 
 
 @app.route('/search')
