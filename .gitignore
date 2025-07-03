@@ -19,6 +19,7 @@ secrets/
 
 .secret_key
 *.sqlite3
+*.sqlite3.backup
 
 # Jupyter Notebook
 .ipynb_checkpoints
