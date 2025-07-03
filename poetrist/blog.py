@@ -2879,28 +2879,20 @@ TEMPL_DELETE_ITEM = wrap("""
 # Search
 ###############################################################################
 
-_OP_CHARS = r'-+:"*()@%<>=#'
+_SAFE_TOKEN_RE = re.compile(r'^[0-9A-Za-z_]+$')
 
-def _sanitize(q: str) -> tuple[str, set[str]]:
-    # if we have an odd number of quotes → replace them, too
-    has_unmatched_quote = q.count('"') % 2 == 1
-
-    op_chars = _OP_CHARS + ('"' if has_unmatched_quote else '')
-    escape_re = re.compile(f'([{re.escape(op_chars)}])')
-
-    removed: set[str] = set()
-    def repl(m):
-        removed.add(m.group(1))
-        return ' '
-
-    return escape_re.sub(repl, q), removed
-
-def _needs_quotes(token: str) -> bool:
-    """
-    Return True if *token* contains any char that sqlite's unicode61
-    tokenizer would drop (punctuation, symbols, etc.).
-    """
-    return TOKEN_RE.fullmatch(token) is None
+def _auto_quote(q: str) -> str:
+    """Wrap every token that contains punctuation in double quotes."""
+    out = []
+    for tok in q.split():
+        # leave trailing * outside the quotes so prefix-search still works
+        star = tok.endswith('*')
+        core = tok[:-1] if star else tok
+        if not _SAFE_TOKEN_RE.fullmatch(core):
+            core = core.replace('"', '""')         # escape embedded quotes
+            tok = f'"{core}"' + ('*' if star else '')
+        out.append(tok)
+    return ' '.join(out)
 
 # ------------------------------------------------------------------
 # Full-text / LIKE search
@@ -2919,9 +2911,12 @@ def search_entries(q: str,
     * “new” = newest first
     * “old” = oldest first
     """
+    # q, removed = _sanitize(q)
+    q = _auto_quote(q)
+    removed = set()  # no-op for now, but could be useful later
     q = q.strip()
     if not q:
-        return [], 0, set()
+        return [], 0, removed
 
     # ─── 1-2 characters → simple LIKE ---------------------------------
     if len(q) < 3:
@@ -2936,7 +2931,7 @@ def search_entries(q: str,
                            (like, like)).fetchone()[0]
         rows  = db.execute(f"{base} LIMIT ? OFFSET ?",
                            (like, like, per_page, (page-1)*per_page)).fetchall()
-        return rows, total, set()
+        return rows, total, removed
 
     # ─── ≥3 chars → FTS5 trigram index --------------------------------
     if   sort == "new": 
@@ -2958,7 +2953,7 @@ def search_entries(q: str,
     total = db.execute(
                 "SELECT COUNT(*) FROM entry_fts WHERE entry_fts MATCH ?",
                 (q,)).fetchone()[0]
-    return rows, total, set()
+    return rows, total, removed
 
 
 _ITEM_Q_RE = re.compile(r"""
@@ -3210,7 +3205,7 @@ TEMPL_SEARCH_ITEMS = wrap("""
 {% block body %}
   <hr>
   <p style="font-size:.8em;color:#888;">
-    {{ total }}item{{ '' if total==1 else 's' }} for <strong>{{ query }}</strong>
+    {{ total }} item{{ '' if total==1 else 's' }} for <strong>{{ query }}</strong>
   </p>
 
   {% if rows %}
