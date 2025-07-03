@@ -123,9 +123,10 @@ def md_filter(text: str | None) -> Markup:
 
     # post-process the generated HTML
     def hashtag_repl(match):
-        tag = match.group(1).lower()
-        href = url_for("tags", tag_list=tag)
-        return f'<a href="{href}" style="text-decoration:none;color:{ theme_col };border-bottom:0.1px dotted currentColor;">#{tag}</a>'
+        orig_tag = match.group(1)
+        tag_lc   = orig_tag.lower() 
+        href     = url_for("tags", tag_list=tag_lc)
+        return f'<a href="{href}" style="text-decoration:none;color:{ theme_col };border-bottom:0.1px dotted currentColor;">#{orig_tag}</a>'
 
     HASH_LINK_RE = re.compile(
         r'''
