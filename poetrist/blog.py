@@ -2879,7 +2879,7 @@ TEMPL_DELETE_ITEM = wrap("""
 # Search
 ###############################################################################
 
-_SAFE_TOKEN_RE = re.compile(r'^[0-9A-Za-z_]+$')
+_SAFE_TOKEN_RE = re.compile(r'^\w+$', re.UNICODE)
 
 def _auto_quote(q: str) -> str:
     """Wrap every token that contains punctuation in double quotes."""
@@ -2914,7 +2914,7 @@ def search_entries(q: str,
     # q, removed = _sanitize(q)
     q = _auto_quote(q)
     removed = set()  # no-op for now, but could be useful later
-    q = q.strip()
+    q = q.strip().lower()
     if not q:
         return [], 0, removed
 
