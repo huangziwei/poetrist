@@ -90,7 +90,7 @@ case "$cmd" in
   restore-db)     restore_db ;;
   deploy)        deploy_app ;;
   token)         rotate_token ;;
-  all)           check_secret && pull_db && deploy_app && rotate_token ;;
+  all)           check_secret && pull_db && restore_db && deploy_app && rotate_token ;;
   help|-h|--help) usage ;;
   *) echo "Unknown sub-command: $cmd"; echo; usage; exit 1 ;;
 esac
