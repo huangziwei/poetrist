@@ -882,7 +882,7 @@ TEMPL_PROLOG = """
                     Settings</a>
                 {% else %}
                     <a href="{{ url_for('login') }}"
-                    {% if request.endpoint=='login' %}style="font-weight:bold;text-decoration:none;"{% endif %}>
+                    {% if request.endpoint=='login' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
                     Login</a>
                 {% endif %}
             </div>
