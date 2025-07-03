@@ -1,4 +1,4 @@
-FROM python:3.12.0 AS builder
+FROM python:3.13.0 AS builder
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
@@ -11,7 +11,7 @@ RUN python -m venv .venv \
     && .venv/bin/pip install -U pip \
     && .venv/bin/pip install . \
     && .venv/bin/pip install gunicorn
-FROM python:3.12-slim
+FROM python:3.13-slim
 WORKDIR /app
 ENV PORT=8080 PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 
