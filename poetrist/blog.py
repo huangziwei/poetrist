@@ -2190,9 +2190,11 @@ def tags(tag_list: str):
         r["href"] = url_for('tags', tag_list='+'.join(sorted(new_sel))) if new_sel else url_for('tags')
 
     # ---------- fetch entries if something is selected ----------------------
+    sort = request.args.get('sort', 'new') 
     page = max(int(request.args.get('page', 1)), 1)
     per  = page_size()
     if selected:
+        order_sql = "e.created_at DESC" if sort == "new" else "e.created_at ASC"
         q_marks = ','.join('?' * len(selected))
         base_sql = f"""SELECT e.*
                   FROM entry  e
@@ -2201,7 +2203,7 @@ def tags(tag_list: str):
                   WHERE t.name IN ({q_marks})
                   GROUP BY e.id
                   HAVING COUNT(DISTINCT t.name)=?
-                  ORDER BY e.created_at DESC"""
+                  ORDER BY {order_sql}"""
         entries, total_pages = paginate(base_sql,
                                         (*selected, len(selected)),
                                         page=page, per_page=per, db=db)
@@ -2216,6 +2218,7 @@ def tags(tag_list: str):
         selected = selected,
         page     = page,
         pages    = pages,
+        sort     = sort,
         kind     = 'tags',
         username = current_username(),
     )
@@ -2251,6 +2254,34 @@ TEMPL_TAGS = wrap("""
 <!-- —— Entry list (only if sth. is selected) ————————— -->
 {% if entries is not none %}
     <hr>
+    {% if entries|length > 1 %}
+    <div style="padding:1rem 0;
+                font-size:.8em;color:#888;
+                display:flex;align-items:center;
+                justify-content:space-between;">
+        <span style="display:inline-flex;
+                border:1px solid #555;
+                border-radius:4px;
+                overflow:hidden;
+                font-size:.8em;">
+        {% for val,label in [('new','Newest'),('old','Oldest')] %}
+            <a href="{{ url_for('tags',
+                                tag_list='+'.join(selected),
+                                sort=val) }}"
+               style="display:flex;align-items:center;padding:.35em 1em;
+                      text-decoration:none;border-bottom:none;
+                      {% if not loop.first %}border-left:1px solid #555;{% endif %}
+                      {% if sort==val %}
+                          background:{{ theme_color() }};color:#000;
+                      {% else %}
+                          background:#333;color:#eee;
+                      {% endif %}">
+                {{ label }}
+            </a>
+        {% endfor %}
+        </span>
+    </div>
+    {% endif %}
     {% for e in entries %}
         <article style="padding-bottom:1.5rem;
                         {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
