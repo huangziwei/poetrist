@@ -933,7 +933,7 @@ TEMPL_EPILOG = """
         </span>
 
         <!-- right-hand side – extra pages -->
-        <nav style="display:flex; gap:.75rem;">
+        <nav style="margin-bottom:1rem; display:inline-block; align-items:flex-end; font-size:.9em;">
             {% for p in nav_pages() %}
                 <a href="{{ '/' ~ p['slug'] }}"
                 {% if request.path|trim('/') == p['slug'] %}
@@ -1793,9 +1793,9 @@ TEMPL_ITEM_LIST = wrap("""
     <hr>
     <ul style="list-style:none; padding:0;">
         {% for r in rows %}
-        <li style="display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:.35rem 1rem;margin:.75rem 0;">
+        <li style="display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:.35rem 1rem;margin:1rem 0;">
             <a href="{{ url_for('item_detail', verb=verb, item_type=r.item_type, slug=r.slug) }}"
-               style="font-weight:normal;">{{ r.title }}{% if r.year %} ({{ r.year }}){% endif %}</a>
+               style="font-weight:normal;line-height:1.25;">{{ r.title }}{% if r.year %} ({{ r.year }}){% endif %}</a>
             <small class="meta"
                 style="color:#888;margin-left:auto;white-space:nowrap;font-variant-numeric:tabular-nums;">
             {{ r.item_type }} • {{ r.cnt }}× • {{ r.last_at|ts }}
