@@ -70,6 +70,17 @@ TAG_RE = re.compile(r'(?<!\w)#([\w\-]+)')
 RFC2822_FMT = "%a, %d %b %Y %H:%M:%S %z"
 _TOKEN_CHARS = r"0-9A-Za-z\u0080-\uFFFF_"          # what unicode61 keeps
 TOKEN_RE     = re.compile(f"[{_TOKEN_CHARS}]+")
+HASH_LINK_RE = re.compile(
+    r'''
+    (?<![A-Za-z0-9_="'&])        # no word char, quote, = or & right before
+    \#                           # literal “#”
+    (?!x?[0-9A-Fa-f]+;)          # NOT an HTML entity  (e.g. &#x1F60A;)
+    (?![0-9A-Fa-f]{3,8}\b)       # ★ NEW: NOT a 3- to 8-digit hex colour
+    ([\w\-]+)                    # the actual tag
+    ''',
+    re.X
+)
+
 try:
     __version__ = version("poetrist")
 except PackageNotFoundError:
@@ -110,7 +121,6 @@ def md_filter(text: str | None) -> Markup:
     Render Markdown and turn every #tag into
     <a href="/tags/<tag>">#tag</a>.
     """
-    html = md.reset().convert(text or "")
     theme_col = theme_color()  # get the current theme color
 
     # ➊ drop every line that starts with ^something:   (= caret meta)
@@ -127,17 +137,6 @@ def md_filter(text: str | None) -> Markup:
         tag_lc   = orig_tag.lower() 
         href     = url_for("tags", tag_list=tag_lc)
         return f'<a href="{href}" style="text-decoration:none;color:{ theme_col };border-bottom:0.1px dotted currentColor;">#{orig_tag}</a>'
-
-    HASH_LINK_RE = re.compile(
-        r'''
-        (?<![A-Za-z0-9_="'&])        # no word char, quote, = or & right before
-        \#                           # literal “#”
-        (?!x?[0-9A-Fa-f]+;)          # NOT an HTML entity  (e.g. &#x1F60A;)
-        (?![0-9A-Fa-f]{3,8}\b)       # ★ NEW: NOT a 3- to 8-digit hex colour
-        ([\w\-]+)                    # the actual tag
-        ''',
-        re.X
-    )
 
     html = HASH_LINK_RE.sub(hashtag_repl, html)
 
@@ -630,7 +629,6 @@ def parse_trigger(text: str) -> tuple[str, list[dict]]:
             tmp = {"verb":None,"action":None,"item_type":None,
                    "title":None,"slug":None,"progress":None,"meta":{}}
             while i < len(lines) and lines[i].lstrip().startswith('^'):
-                print(i)
                 ln = lines[i].strip()
                 m2 = META_RE.match(ln)
                 if not m2:
@@ -2903,34 +2901,6 @@ def _needs_quotes(token: str) -> bool:
     tokenizer would drop (punctuation, symbols, etc.).
     """
     return TOKEN_RE.fullmatch(token) is None
-
-def _expand_fuzzy(q: str) -> str:
-    """
-    • unquoted plain words  -> prefix search  (word*)
-    • words with punctuation-> exact match   ("word%")
-    • words in "quotes"     -> left untouched
-    • Boolean ops AND/OR/NOT are preserved (case-insensitive)
-    """
-    parts = re.findall(r'"[^"]*"|\S+', q)
-    out   = []
-
-    for p in parts:
-        if p.startswith('"') and p.endswith('"'):        # already quoted
-            out.append(p)
-
-        elif p.upper() in {"AND", "OR", "NOT"}:          # boolean op
-            out.append(p.upper())
-
-        elif _needs_quotes(p):                           # has % or other symbols
-            out.append(f'"{p}"')                         # quote, no *
-
-        else:                                            # simple word → prefix
-            out.append(p + '*')
-
-    return ' '.join(out)
-
-def _has_quotes(q: str) -> bool:
-    return '"' in q
 
 # ------------------------------------------------------------------
 # Full-text / LIKE search
