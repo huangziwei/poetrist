@@ -17,8 +17,11 @@ FLASK_APP=poetrist/blog.py flask init          # follow the prompts
 # Create a **trusted** HTTPS certificate for localhost
 # Passkeys need a cert the OS/browser actually trusts → use mkcert
 # brew install mkcert
-# mkcert -install
+mkcert localhost
+mkdir secrets
+mv *.pem secrets
+mkcert -install
 
 # Run it
-FLASK_APP=poetrist/blog.py flask run --cert=<cert>.pem --key=<key>.pem --port 2064 --debug
+FLASK_APP=poetrist/blog.py flask run --cert=secrets/localhost.pem --key=secrets/localhost-key.pem --port 2046 --debug
 ```
