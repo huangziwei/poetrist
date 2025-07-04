@@ -1034,7 +1034,7 @@ def rate_limit(max_requests: int, window: int = 60):
     return decorator
 
 @app.route('/login', methods=['GET', 'POST'])
-@rate_limit(max_requests=100, window=60)  # 3 attempts per minute
+@rate_limit(max_requests=5, window=60)  # 3 attempts per minute
 def login():
     # ── read token only from the form ──────────────────────────────
     token = request.form.get('token', '').strip()
