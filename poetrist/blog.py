@@ -1070,12 +1070,43 @@ TEMPL_LOGIN = wrap("""
       <label style="position:absolute;right:.5rem;top:40%;transform:translateY(-50%);
                     pointer-events:none;font-size:.75em;color:#aaa;">token</label>
   </div>
-  <button>Log&nbsp;in</button>
+    <div style="
+            margin-top:1rem;
+            display:flex;
+            gap:.6rem;                 
+    ">
+    <!-- traditional token login -->
+    <button
+        type="submit"
+        style="
+        flex:1 1 auto;
+        padding:.55rem 1rem;
+        font-size:.95em;
+        "
+    >
+        Sign&nbsp;in&nbsp;with&nbsp;Token
+    </button>
 
-  <!-- passkey button -->
-  <button id="pk-btn" type="button" style="display:none;margin-top:.5rem;">
-    Sign&nbsp;in&nbsp;with&nbsp;Passkey
-  </button>
+    <!-- passkey login (revealed by JS) -->
+    <button
+        id="pk-btn"
+        type="button"
+        style="
+        display:none;                
+        flex:1 1 auto;
+        padding:.55rem 1rem;
+        font-size:.95em;
+
+        background:{{ theme_color() }};
+        color:#000;
+        border:1px solid #666;
+        box-shadow:0 2px 4px rgba(0,0,0,.25);
+        cursor:pointer;
+        "
+    >
+        <span style="white-space:nowrap;">Sign&nbsp;in&nbsp;with&nbsp;Passkey</span>
+    </button>
+    </div>
 </form>
 
 <script>
@@ -1216,13 +1247,16 @@ def webauthn_complete_login():
 @app.route("/webauthn/begin_register")
 def webauthn_begin_register():
     login_required()
+    exclude = [
+        PublicKeyCredentialDescriptor(id=r["cred_id"])
+        for r in _passkeys()
+    ]
     options = generate_registration_options(
         rp_id   = _rp_id(),  
         rp_name = get_setting("site_name", RP_NAME),
         user_id = str(_u()).encode(),
         user_name = current_username(),
-        exclude_credentials=[base64url_to_bytes(r["cred_id"])
-                             for r in _passkeys()],
+        exclude_credentials = exclude,
         attestation = AttestationConveyancePreference.NONE,
     )
     session["wa_chal"] = options.challenge
@@ -1256,14 +1290,23 @@ def webauthn_complete_register():
     )
     return {"ok": True}
 
+
 @app.route("/webauthn/delete/<int:pkid>", methods=["POST"])
 def webauthn_delete_passkey(pkid):
-    # 2-step defence: the *POST* itself must be CSRF-guarded **and**
-    # the user must be already logged-in by passkey
+    """
+    Delete one stored passkey and return the user to the Settings page.
+    The request is already CSRF-guarded and the user is authenticated.
+    """
     login_required()
-    get_db().execute("DELETE FROM passkey WHERE id=? AND user_id=?", (pkid, _u()))
-    get_db().commit()
-    return {"ok": True}
+
+    db = get_db()
+    db.execute(
+        "DELETE FROM passkey WHERE id=? AND user_id=?", (pkid, _u())
+    )
+    db.commit()
+
+    flash("Passkey deleted.")                   # nice feedback for the toast
+    return redirect(url_for("settings"), code=303)  # PRG pattern
 
 ###############################################################################
 # Resources
@@ -1386,14 +1429,13 @@ def settings():
 TEMPL_SETTINGS = wrap("""
     {% block body %}
     <hr>
+    <h3>Site Settings</h3>
     <form method="post" style="max-width:36rem">
         {% if csrf_token() %}
             <input type="hidden" name="csrf" value="{{ csrf_token() }}">
             {% endif %}
         <!-- ──────────── site info ──────────── -->
         <fieldset style="margin:0 0 1.5rem 0; border:0; padding:0">
-            <legend style="font-weight:bold; margin-bottom:.5rem;">Site</legend>
-
             <label style="display:block; margin:.5rem 0">
                 <span style="font-size:.8em; color:#aaa">Site name</span><br>
                 <input name="site_name" value="{{ site_name }}" style="width:100%">
@@ -1444,6 +1486,11 @@ TEMPL_SETTINGS = wrap("""
         </fieldset>
         <button style="margin-top:.5rem;">Save settings</button>
     </form>
+    <br>
+    <hr>
+          
+
+    <h3>Token</h3>
     <div style="display:flex; gap:1rem; max-width:36rem; margin-top:2rem;">
         <!-- token button in its own tiny form -->
         <form method="post" style="margin:0;">
@@ -1462,19 +1509,37 @@ TEMPL_SETTINGS = wrap("""
             {{ new_token }}
         </div>
     {% endif %}
-                      
+         
     <!-- ─────────── Passkeys ─────────── -->
-    <hr style="margin:2rem 0 .75rem 0">
+    <br>
+    <hr>
     <h3>Passkeys</h3>
-    <ul style="list-style:none;padding:0;">
+    <ul id="pk-list" style="list-style:none;padding:0;margin:0;">
     {% for p in _passkeys() %}
-    <li style="margin:.5rem 0;">
-        {{ p.nickname or 'Passkey' }} –
-        {{ p.created_at|ts }}  
-        <form method="post" action="{{ url_for('webauthn_delete_passkey', pkid=p.id) }}"
-            style="display:inline;" onsubmit="return confirm('Delete passkey?');">
-        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-        <button style="background:#c00;color:#fff;font-size:.7em;">Delete</button>
+    <li
+        class="pk-row"
+        style="display:flex;justify-content:space-between;align-items:center;margin:.6rem 0;"
+    >
+        <span>
+        {{ p.nickname or 'Passkey' }}  ({{ p.created_at|ts }})
+        </span>
+
+        <!-- delete form -->
+        <form
+        class="pk-del-form"
+        data-pkid="{{ p.id }}"
+        method="post"
+        action="{{ url_for('webauthn_delete_passkey', pkid=p.id) }}"
+        style="margin:0;"
+        >
+        <input type="hidden" name="csrf"     value="{{ csrf_token() }}">
+        <input type="hidden" name="assertion">       {# JS drops WebAuthn result here #}
+        <button
+            type="submit"
+            style="background:#c00;color:#fff;font-size:.7em;padding:.25em .9em;border:none;"
+        >
+            Delete
+        </button>
         </form>
     </li>
     {% else %}
@@ -1485,44 +1550,99 @@ TEMPL_SETTINGS = wrap("""
     <button id="add-pk">Add&nbsp;Passkey</button>
 
     <script>
-    const CSRF = document.querySelector('input[name="csrf"]').value;                  
-    document.getElementById("add-pk").onclick = async () => {
-    const oRes = await fetch("/webauthn/begin_register");
-    if (!oRes.ok) return alert("Server error");
-    const opts = await oRes.json();
-    const b2u = s => Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')),
-                                    c=>c.charCodeAt(0));
-    opts.challenge = b2u(opts.challenge);
-    opts.user.id   = b2u(opts.user.id);
-    opts.excludeCredentials = opts.excludeCredentials.map(c => ({...c,id:b2u(c.id)}));
+    /* ──────────────────────────────────────────────────────────────
+    “Add Passkey” – smarter version
+    • Sets nickname to the browser name (“Safari”, “Firefox”, …).
+    • Works everywhere – falls back gracefully if UA parsing fails.
+    • No server-side changes required.
+    ──────────────────────────────────────────────────────────── */
 
+    const CSRF = document.querySelector('input[name="csrf"]').value;
+
+    /* helper:  base64url ⇆ Uint8Array  */
+    const b2u = s => Uint8Array.from(
+    atob(s.replace(/-/g, '+').replace(/_/g, '/')),
+    c => c.charCodeAt(0)
+    );
+    const u2b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+
+    /* ── Browser-name detector ──────────────────────────────────── */
+    function getBrowserName () {
+    /* 1) Modern: UA-CH (navigator.userAgentData.brands) */
+    if (navigator.userAgentData?.brands?.length) {
+    const brands = navigator.userAgentData.brands
+    .map(b => b.brand)
+    .filter(b => !/^Chromium$/i.test(b) &&
+                    !/^Not.*Brand$/i.test(b));        
+    if (brands.length) return brands[0];                    // first real one
+    }
+
+    /* 2) Fallback: classic UA sniffing  */
+    const ua = navigator.userAgent;
+    if (/Firefox\/\d+/i.test(ua))        return 'Firefox';
+    if (/Edg\/\d+/i.test(ua))            return 'Edge';
+    if (/OPR\/\d+/i.test(ua))            return 'Opera';
+    if (/Chrome\/\d+/i.test(ua))         return 'Chrome';
+    if (/Safari\/\d+/i.test(ua))         return 'Safari';
+    return 'Passkey';                    // ultimate fallback
+    }
+
+    /* ── Main handler ───────────────────────────────────────────── */
+    document.getElementById('add-pk').onclick = async () => {
+    /* 1. Get options from the server */
+    const optRes = await fetch('/webauthn/begin_register');
+    if (!optRes.ok) return alert('Server error');
+    const opts = await optRes.json();
+
+    /* 2.  Base64url → Uint8Array conversions */
+    opts.challenge   = b2u(opts.challenge);
+    opts.user.id     = b2u(opts.user.id);
+    opts.excludeCredentials =
+        opts.excludeCredentials.map(c => ({ ...c, id: b2u(c.id) }));
+
+    /* 3.  Call WebAuthn API */
     let cred;
     try {
-        cred = await navigator.credentials.create({publicKey: opts});
-    } catch (e) { return console.log(e); }
+        cred = await navigator.credentials.create({ publicKey: opts });
+    } catch (e) {
+        console.log('Passkey creation aborted:', e);
+        return;
+    }
 
-    const toB64 = a => btoa(String.fromCharCode(...new Uint8Array(a)));
+    /* 4.  Build payload for the server */
     const body = {
         id: cred.id,
-        rawId: toB64(cred.rawId),
-        type: cred.type,
+        rawId:              u2b64(cred.rawId),
+        type:               cred.type,
         response: {
-        attestationObject: toB64(cred.response.attestationObject),
-        clientDataJSON:    toB64(cred.response.clientDataJSON)
+        attestationObject: u2b64(cred.response.attestationObject),
+        clientDataJSON:    u2b64(cred.response.clientDataJSON)
         },
         clientExtensionResults: cred.getClientExtensionResults()
     };
 
-    const v = await fetch("/webauthn/complete_register", {
-        method:"POST", headers: {"Content-Type": "application/json", "X-CSRFToken": CSRF},
+    /* 5.  POST to server, include nickname as query string */
+    const nickname = encodeURIComponent(getBrowserName());
+    const res = await fetch(
+        `/webauthn/complete_register?nickname=${nickname}`,
+        {
+        method:  'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken':  CSRF
+        },
         body: JSON.stringify(body)
-    });
-    if (v.ok) location.reload();
+        }
+    );
+
+    if (res.ok) location.reload();
+    else        alert('Passkey registration failed');
     };
     </script>
 
 
-    
+    <br>
+    <hr style="margin:2rem 0">
     <!-- logout link, vertically centered -->
     <div style="display:flex; gap:1rem; max-width:36rem; margin-top:2rem;">
         <a href="{{ url_for('logout') }}"
