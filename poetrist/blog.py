@@ -37,6 +37,18 @@ from flask import (
 )
 from itsdangerous import BadSignature, SignatureExpired, TimestampSigner
 from markupsafe import Markup
+from webauthn import (
+    generate_authentication_options,
+    generate_registration_options,
+    verify_authentication_response,
+    verify_registration_response,
+)
+from webauthn.helpers import base64url_to_bytes, bytes_to_base64url, options_to_json
+from webauthn.helpers.structs import (
+    AttestationConveyancePreference,
+    PublicKeyCredentialDescriptor,
+    UserVerificationRequirement,
+)
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -365,6 +377,20 @@ def init_db():
             PRIMARY KEY (entry_id, item_id),
             FOREIGN KEY (entry_id) REFERENCES entry(id) ON DELETE CASCADE,
             FOREIGN KEY (item_id)  REFERENCES item(id)  ON DELETE CASCADE
+        );
+
+        ------------------------------------------------------------
+        --  9. Passkeys  (multiple per account)
+        ------------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS passkey (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id       INTEGER NOT NULL,
+            cred_id       BLOB    UNIQUE NOT NULL,   -- raw bytes
+            pub_key       BLOB    NOT NULL,
+            sign_count    INTEGER NOT NULL,
+            nickname      TEXT,
+            created_at    TEXT    NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
         );
         """
     )
@@ -1008,7 +1034,7 @@ def rate_limit(max_requests: int, window: int = 60):
     return decorator
 
 @app.route('/login', methods=['GET', 'POST'])
-@rate_limit(max_requests=3, window=60)  # 3 attempts per minute
+@rate_limit(max_requests=100, window=60)  # 3 attempts per minute
 def login():
     # ── read token only from the form ──────────────────────────────
     token = request.form.get('token', '').strip()
@@ -1030,40 +1056,214 @@ def login():
 
     return render_template_string(TEMPL_LOGIN)
 
-
 TEMPL_LOGIN = wrap("""
-    {% block body %}
-    <hr>
-    <form method=post>
-        {% if csrf_token() %}
-            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-            {% endif %}
-        <div style="position:relative;">
-            <input  name="token"
-                type="password"          
-                autocomplete="current-password"
-                style="width:100%; padding-right:7rem;">
-            <label for="token"
-                    style="position:absolute;
-                            right:.5rem;
-                            top:40%;
-                            transform:translateY(-50%);
-                            pointer-events:none;
-                            font-size:.75em;
-                            color:#aaa;">
-                        token
-            </label>
-        </div>
-        <button>Log&nbsp;in</button>
-    </form>
-    {% endblock %}
-""")
+{% block body %}
+<hr>
+<form method="post" id="token-form">
+  {% if csrf_token() %}
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  {% endif %}
 
+  <div style="position:relative;">
+      <input name="token" type="password" autocomplete="current-password"
+             style="width:100%;padding-right:7rem;">
+      <label style="position:absolute;right:.5rem;top:40%;transform:translateY(-50%);
+                    pointer-events:none;font-size:.75em;color:#aaa;">token</label>
+  </div>
+  <button>Log&nbsp;in</button>
+
+  <!-- passkey button -->
+  <button id="pk-btn" type="button" style="display:none;margin-top:.5rem;">
+    Sign&nbsp;in&nbsp;with&nbsp;Passkey
+  </button>
+</form>
+
+<script>
+(async () => {
+  if (!('credentials' in navigator)) return;          // WebAuthn unsupported
+
+  // 1)  ask the server for options
+  const optRes = await fetch("/webauthn/begin_login");
+  if (!optRes.ok) return;
+  const opts = await optRes.json();
+  if (!opts.allowCredentials.length) return;          // no keys stored
+
+  // 2)  convert Base64-URL → Uint8Array
+  const b2u = s => Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')),
+                                   c=>c.charCodeAt(0));
+  opts.challenge        = b2u(opts.challenge);
+  opts.allowCredentials = opts.allowCredentials.map(c => ({...c, id: b2u(c.id)}));
+
+  // 3)  show the button
+  const btn = document.getElementById('pk-btn');
+  btn.style.display = 'block';
+  btn.onclick = async () => {
+    try {
+      const cred = await navigator.credentials.get({publicKey: opts});
+
+      // 4)  send to the server
+      const toB64 = a => btoa(String.fromCharCode(...new Uint8Array(a)));
+      const headers = {"Content-Type": "application/json"};
+      const csrf = document.querySelector('input[name=\"csrf\"]');
+      if (csrf) headers["X-CSRFToken"] = csrf.value;
+
+      const res = await fetch("/webauthn/complete_login", {
+        method:"POST",
+        headers,
+        body: JSON.stringify({
+          id: cred.id,
+          type: cred.type,
+          rawId: toB64(cred.rawId),
+          response: {
+            authenticatorData: toB64(cred.response.authenticatorData),
+            clientDataJSON:    toB64(cred.response.clientDataJSON),
+            signature:         toB64(cred.response.signature),
+            userHandle: cred.response.userHandle ?
+                         toB64(cred.response.userHandle) : null
+          },
+          clientExtensionResults: cred.getClientExtensionResults()
+        })
+      });
+      if (res.ok) location.href = "/";
+      else alert("Passkey sign-in failed");
+    } catch (err) {
+      console.log("passkey login failed", err);
+    }
+  };
+})();
+</script>
+{% endblock %}
+""")
 
 @app.route('/logout')
 def logout():
     session.clear()
     return redirect(url_for('index'))
+
+# ──── WebAuthn / Passkey constants ──────────────────────────────
+RP_NAME = "po.etr.ist"
+
+# ──── tiny utils ────────────────────────────────────────────────
+def _u(): return get_db().execute("SELECT id FROM user LIMIT 1").fetchone()["id"]
+
+def _passkeys():
+    return get_db().execute("""SELECT id, cred_id, nickname, created_at
+                               FROM passkey WHERE user_id=?""", (_u(),)).fetchall()
+app.jinja_env.globals['_passkeys'] = _passkeys
+
+def _add_passkey(cred_id, pub_key, sign_count, nick):
+    db = get_db()
+    db.execute("""INSERT INTO passkey
+                  (user_id, cred_id, pub_key, sign_count, nickname, created_at)
+                  VALUES (?,?,?,?,?,?)""",
+               (_u(), cred_id, pub_key, sign_count, nick,
+                utc_now().isoformat(timespec="seconds")))
+    db.commit()
+
+def _rp_id() -> str:
+    return request.host.partition(":")[0]
+
+
+@app.route("/webauthn/begin_login")
+def webauthn_begin_login():
+    # 1. pull the raw bytes straight from the DB
+    cred_bytes = [r["cred_id"] for r in _passkeys()]     #  <-- changed line
+    if not cred_bytes:
+        return {"allowCredentials": []}
+
+    # 2. wrap every blob in a PublicKeyCredentialDescriptor
+    allow = [PublicKeyCredentialDescriptor(id=b) for b in cred_bytes]
+
+    # 3. generate options with the **current** host as rp_id
+    opts = generate_authentication_options(
+        rp_id             = _rp_id(),
+        allow_credentials = allow,
+        user_verification = UserVerificationRequirement.PREFERRED,
+    )
+    session["wa_chal"] = opts.challenge
+    return options_to_json(opts)
+
+@app.route("/webauthn/complete_login", methods=["POST"])
+def webauthn_complete_login():
+    data = request.get_json(force=True)
+    cred_id = base64url_to_bytes(data["id"])
+    pk      = get_db().execute("SELECT * FROM passkey WHERE cred_id=?", (cred_id,)).fetchone()
+    if not pk:
+        abort(400)
+    try:
+        ver = verify_authentication_response(
+            credential                       = data,
+            expected_challenge               = session.pop("wa_chal", ""),
+            expected_rp_id                   = _rp_id(),                      # "localhost"
+            expected_origin                  = f"{request.scheme}://{request.host}",
+            credential_public_key            = pk["pub_key"],
+            credential_current_sign_count    = pk["sign_count"],
+            require_user_verification        = True,
+        )
+        # update the stored sign-count that WebAuthn uses for replay protection
+        get_db().execute("UPDATE passkey SET sign_count=? WHERE id=?",
+                        (ver.new_sign_count, pk["id"]))
+        get_db().commit()
+    except Exception:
+        abort(400)
+
+    session.clear()
+    session.permanent = True
+    session["logged_in"] = True
+    session["csrf"] = secrets.token_hex(16)
+    return {"ok": True}
+
+@app.route("/webauthn/begin_register")
+def webauthn_begin_register():
+    login_required()
+    options = generate_registration_options(
+        rp_id   = _rp_id(),  
+        rp_name = get_setting("site_name", RP_NAME),
+        user_id = str(_u()).encode(),
+        user_name = current_username(),
+        exclude_credentials=[base64url_to_bytes(r["cred_id"])
+                             for r in _passkeys()],
+        attestation = AttestationConveyancePreference.NONE,
+    )
+    session["wa_chal"] = options.challenge
+    return options_to_json(options)
+
+@app.route("/webauthn/complete_register", methods=["POST"])
+def webauthn_complete_register():
+    login_required()
+    data = request.get_json(force=True)
+
+    rp_id  = request.host.split(":", 1)[0]
+    origin = f"{request.scheme}://{request.host}"
+
+    try:
+        ver = verify_registration_response(
+            credential                = data,
+            expected_challenge        = session.pop("wa_chal", ""),  # ← note default
+            expected_rp_id            = rp_id,
+            expected_origin           = origin,
+            require_user_verification = True,
+        )
+    except Exception as e:
+        print("webauthn register failed")        # prints stack in terminal
+        return {"error": str(e)}, 400                    # visible in JS
+
+    _add_passkey(
+        cred_id    = base64url_to_bytes(data["id"]),
+        pub_key    = ver.credential_public_key,
+        sign_count = ver.sign_count,
+        nick       = request.args.get("nickname") or "Passkey"
+    )
+    return {"ok": True}
+
+@app.route("/webauthn/delete/<int:pkid>", methods=["POST"])
+def webauthn_delete_passkey(pkid):
+    # 2-step defence: the *POST* itself must be CSRF-guarded **and**
+    # the user must be already logged-in by passkey
+    login_required()
+    get_db().execute("DELETE FROM passkey WHERE id=? AND user_id=?", (pkid, _u()))
+    get_db().commit()
+    return {"ok": True}
 
 ###############################################################################
 # Resources
@@ -1262,6 +1462,65 @@ TEMPL_SETTINGS = wrap("""
             {{ new_token }}
         </div>
     {% endif %}
+                      
+    <!-- ─────────── Passkeys ─────────── -->
+    <hr style="margin:2rem 0 .75rem 0">
+    <h3>Passkeys</h3>
+    <ul style="list-style:none;padding:0;">
+    {% for p in _passkeys() %}
+    <li style="margin:.5rem 0;">
+        {{ p.nickname or 'Passkey' }} –
+        {{ p.created_at|ts }}  
+        <form method="post" action="{{ url_for('webauthn_delete_passkey', pkid=p.id) }}"
+            style="display:inline;" onsubmit="return confirm('Delete passkey?');">
+        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+        <button style="background:#c00;color:#fff;font-size:.7em;">Delete</button>
+        </form>
+    </li>
+    {% else %}
+    <li>No passkeys yet.</li>
+    {% endfor %}
+    </ul>
+
+    <button id="add-pk">Add&nbsp;Passkey</button>
+
+    <script>
+    const CSRF = document.querySelector('input[name="csrf"]').value;                  
+    document.getElementById("add-pk").onclick = async () => {
+    const oRes = await fetch("/webauthn/begin_register");
+    if (!oRes.ok) return alert("Server error");
+    const opts = await oRes.json();
+    const b2u = s => Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')),
+                                    c=>c.charCodeAt(0));
+    opts.challenge = b2u(opts.challenge);
+    opts.user.id   = b2u(opts.user.id);
+    opts.excludeCredentials = opts.excludeCredentials.map(c => ({...c,id:b2u(c.id)}));
+
+    let cred;
+    try {
+        cred = await navigator.credentials.create({publicKey: opts});
+    } catch (e) { return console.log(e); }
+
+    const toB64 = a => btoa(String.fromCharCode(...new Uint8Array(a)));
+    const body = {
+        id: cred.id,
+        rawId: toB64(cred.rawId),
+        type: cred.type,
+        response: {
+        attestationObject: toB64(cred.response.attestationObject),
+        clientDataJSON:    toB64(cred.response.clientDataJSON)
+        },
+        clientExtensionResults: cred.getClientExtensionResults()
+    };
+
+    const v = await fetch("/webauthn/complete_register", {
+        method:"POST", headers: {"Content-Type": "application/json", "X-CSRFToken": CSRF},
+        body: JSON.stringify(body)
+    });
+    if (v.ok) location.reload();
+    };
+    </script>
+
 
     
     <!-- logout link, vertically centered -->
