@@ -2055,19 +2055,24 @@ def by_kind(slug):
                         page: int, per: int, db):
             base_sql = """
                 SELECT i.id, i.title, i.item_type, i.slug,
-                    MIN(CASE
-                            WHEN im.k = 'date' AND LENGTH(im.v) >= 4
-                            THEN SUBSTR(im.v, 1, 4)
-                        END)                AS year,
-                    COUNT(DISTINCT e.id)    AS cnt,
-                    MAX(e.created_at)       AS last_at
+                    MIN(CASE WHEN im.k='date' AND LENGTH(im.v)>=4
+                                THEN SUBSTR(im.v,1,4) END)         AS year,
+                    COUNT(DISTINCT e.id)                           AS cnt,
+                    MAX(e.created_at)                              AS last_at,
+                    (SELECT ei2.action
+                        FROM entry_item ei2
+                        JOIN entry      e2 ON e2.id = ei2.entry_id
+                        WHERE ei2.item_id = i.id
+                        AND ei2.verb    = ?
+                        ORDER BY e2.created_at DESC
+                        LIMIT 1)                                   AS last_action
                 FROM item        i
-                LEFT JOIN item_meta im ON im.item_id = i.id 
-                JOIN entry_item  ei ON ei.item_id = i.id
-                JOIN entry       e  ON e.id       = ei.entry_id
+                LEFT JOIN item_meta  im ON im.item_id = i.id
+                JOIN  entry_item  ei ON ei.item_id  = i.id
+                JOIN  entry       e  ON e.id        = ei.entry_id
                 WHERE ei.verb = ?
             """
-            params = [verb]
+            params = [verb, verb]
             if item_type:
                 base_sql += " AND i.item_type = ?"
                 params.append(item_type)
@@ -2286,16 +2291,36 @@ TEMPL_ITEM_LIST = wrap("""
 {% if rows %}
     <hr>
     <ul style="list-style:none; padding:0;">
-        {% for r in rows %}
-        <li style="display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:.35rem 1rem;margin:1rem 0;">
-            <a href="{{ url_for('item_detail', verb=verb, item_type=r.item_type, slug=r.slug) }}"
-               style="font-weight:normal;line-height:1.25;">{{ r.title }}{% if r.year %} ({{ r.year }}){% endif %}</a>
-            <small class="meta"
-                style="color:#888;margin-left:auto;white-space:nowrap;font-variant-numeric:tabular-nums;">
-            {{ r.item_type | capitalize }} • {{ r.cnt }}× • {{ r.last_at|ts }}
+    {% for r in rows %}
+    <li style="display:flex;flex-wrap:wrap;align-items:baseline;
+                justify-content:space-between;gap:.35rem 1rem;margin:1rem 0;">
+
+        <div>
+            <!-- ✨ last_action pill (only if present) -->
+            {% if r.last_action %}
+            <small
+                style="display:inline-block;padding:.1em .6em;margin-right:.4em;
+                        background:#444;color:#fff;border-radius:1em;font-size:.65em;
+                        text-transform:capitalize;">
+                {{ r.last_action }}
             </small>
-        </li>
-        {% endfor %}
+            {% endif %}                 
+            <!-- title -->
+            <a href="{{ url_for('item_detail',
+                                verb=verb, item_type=r.item_type, slug=r.slug) }}"
+                style="font-weight:normal;line-height:1.25;">
+                {{ r.title }}{% if r.year %} ({{ r.year }}){% endif %}
+            </a>
+        </div>
+
+        <!-- meta block stays as-is -->
+        <small class="meta"
+                style="color:#888;margin-left:auto;white-space:nowrap;
+                        font-variant-numeric:tabular-nums;">
+            {{ r.item_type|capitalize }} • {{ r.cnt }}× • {{ r.last_at|ts }}
+        </small>
+    </li>
+    {% endfor %}
     </ul>
 
     {% if pages|length > 1 %}
