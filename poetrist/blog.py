@@ -3664,7 +3664,8 @@ def _make_like_snippet(title, body, terms):
     """
     body = strip_caret(body)
     pattern = re.compile('|'.join(re.escape(t) for t in terms), re.I)
-    return Markup(pattern.sub(lambda m: f'<mark>{m.group(0)}</mark>', body))
+    col = theme_color()
+    return Markup(pattern.sub(lambda m: f'<mark style="background:transparent;color:{col};border-bottom:2px solid {col};">{m.group(0)}</mark>', body))
 
 @app.route('/search')
 def search():
