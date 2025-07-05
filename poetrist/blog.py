@@ -3461,7 +3461,7 @@ def search_entries(q: str,
               LEFT JOIN entry_item ei ON ei.entry_id = e.id
               LEFT JOIN item       i  ON i.id        = ei.item_id
               LEFT JOIN item_meta  im ON im.item_id  = i.id
-             WHERE e.title LIKE ? OR e.body LIKE ?
+             WHERE e.title LIKE ? OR strip_caret(e.body) LIKE ?
           GROUP BY e.id
             ORDER BY {order_sql}
         """
