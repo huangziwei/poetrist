@@ -326,18 +326,24 @@ def init_db():
         END;
 
         CREATE TRIGGER IF NOT EXISTS entry_au AFTER UPDATE ON entry BEGIN
-            INSERT INTO entry_fts(entry_fts,rowid,title,body,link)
-                VALUES('delete',old.id,old.title,old.body,old.link);
-            INSERT INTO entry_fts(rowid,title,body,link)
-                VALUES(new.id,
-                        COALESCE(new.title,''),
-                        strip_caret(new.body),
-                        COALESCE(new.link,''));
+            /* ① drop the stale version */
+            INSERT INTO entry_fts(entry_fts, rowid)
+                VALUES('delete', old.id);
+
+            /* ② add the fresh version */
+            INSERT INTO entry_fts(rowid, title, body, link)
+                VALUES(
+                    new.id,
+                    COALESCE(new.title,''),
+                    strip_caret(new.body),
+                    COALESCE(new.link,'')
+                );
         END;
 
+        /* AFTER DELETE: just remove it from the index */
         CREATE TRIGGER IF NOT EXISTS entry_ad AFTER DELETE ON entry BEGIN
-            INSERT INTO entry_fts(entry_fts,rowid,title,body,link)
-                VALUES('delete',old.id,old.title,old.body,old.link);
+            INSERT INTO entry_fts(entry_fts, rowid)
+                VALUES('delete', old.id);
         END;
 
         ------------------------------------------------------------
