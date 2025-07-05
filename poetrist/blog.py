@@ -43,7 +43,7 @@ from webauthn import (
     verify_authentication_response,
     verify_registration_response,
 )
-from webauthn.helpers import base64url_to_bytes, bytes_to_base64url, options_to_json
+from webauthn.helpers import base64url_to_bytes, options_to_json
 from webauthn.helpers.structs import (
     AttestationConveyancePreference,
     PublicKeyCredentialDescriptor,
@@ -1602,11 +1602,11 @@ TEMPL_SETTINGS = wrap("""
         if (real.length) return real[0];
         }
         const ua = navigator.userAgent;
-        if (/Firefox\/\d+/i.test(ua)) return 'Firefox';
-        if (/Edg\/\d+/i.test(ua))     return 'Edge';
-        if (/OPR\/\d+/i.test(ua))     return 'Opera';
-        if (/Chrome\/\d+/i.test(ua))  return 'Chrome';
-        if (/Safari\/\d+/i.test(ua))  return 'Safari';
+        if (/Firefox\\/\\d+/i.test(ua)) return 'Firefox';
+        if (/Edg\\/\\d+/i.test(ua))     return 'Edge';
+        if (/OPR\\/\\d+/i.test(ua))     return 'Opera';
+        if (/Chrome\\/\\d+/i.test(ua))  return 'Chrome';
+        if (/Safari\\/\\d+/i.test(ua))  return 'Safari';
         return 'Passkey';
     }
 
