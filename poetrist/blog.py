@@ -2353,6 +2353,14 @@ TEMPL_ENTRY_DETAIL = wrap("""
                       text-transform:capitalize;vertical-align:middle;">
                     {{ e.action }}
                 </span>
+                {% if e.item_type %}
+                    <span style="
+                          display:inline-block;padding:.1em .6em;margin-right:.4em;
+                          background:#444;color:#fff;border-radius:1em;font-size:.75em;
+                          vertical-align:middle;">
+                        {{ e.item_type | capitalize }}
+                    </span>
+                {% endif %}           
                 {% if e.progress %}
                     <span style="
                           display:inline-block;padding:.1em .6em;margin-right:.4em;
