@@ -1405,7 +1405,7 @@ def settings():
 
     if request.method == 'POST' and request.form.get('action') == 'rotate_token':
         session['one_time_token'] = _rotate_token(db)   # store once
-        return redirect(url_for('settings'), code=303)  # PRG; 303 = “See Other”
+        return redirect(url_for('settings') + '#new-token', code=303)  # PRG; 303 = “See Other”
 
 
     if request.method == 'POST':
@@ -1498,7 +1498,7 @@ TEMPL_SETTINGS = wrap("""
 
         <!-- ──────────── display ──────────── -->
         <fieldset style="margin:0 0 1.5rem 0; border:0; padding:0">
-            <legend style="font-weight:bold; margin-bottom:.5rem;">Display</legend>
+            <legend style="font-weight:bold; margin-bottom:.5rem;">Pagination</legend>
             <label style="display:block; margin:.5rem 0">
                 <span style="font-size:.8em; color:#aaa">Entries per page</span><br>
                 <input name="page_size"
@@ -1527,7 +1527,7 @@ TEMPL_SETTINGS = wrap("""
     </div>
 
     {% if new_token %}
-        <div style="margin-top:1.5rem; padding:1rem; border:1px solid #555;
+        <div id="new-token" style="margin-top:1.5rem; padding:1rem; border:1px solid #555;
                     background:#222; font-family:monospace; word-break:break-all;font-size:1.2rem;">
             {{ new_token }}
         </div>
@@ -1539,7 +1539,7 @@ TEMPL_SETTINGS = wrap("""
         {% for p in _passkeys() %}
         <li class="pk-row"
             data-pkid="{{ p.id }}"
-            style="display:flex;align-items:center;gap:.5rem;margin:.6rem 0;">
+            style="display:flex;align-items:start;gap:.5rem;margin:.6rem 0;">
 
             <!-- left: nickname + timestamp stacked in a mini-column -->
             <div style="flex:1;display:flex;flex-direction:column;gap:.15rem;">
@@ -1550,22 +1550,24 @@ TEMPL_SETTINGS = wrap("""
             </div>
 
             <!-- edit / save toggle -->
+            <div style="margin:0;display:inline-block;">
             <button type="button"
-                    class="pk-edit-btn"
-                    style="font-size:.7em;padding:.25em .9em;">
+                    class="pk-edit-btn">
                 Edit
             </button>
+            </div>
 
-            <!-- delete (unchanged) -->
-            <form  class="pk-del-form"
+            <!-- delete -->
+            <form class="pk-del-form"
                 data-pkid="{{ p.id }}"
                 method="post"
                 action="{{ url_for('webauthn_delete_passkey', pkid=p.id) }}"
-                style="margin:0;">
+                style="margin:0;display:inline-block;">
                 <input type="hidden" name="csrf"     value="{{ csrf_token() }}">
                 <input type="hidden" name="assertion">
                 <button type="submit"
-                        style="background:#c00;color:#fff;font-size:.7em;padding:.25em .9em;border:none;">
+                        onclick="return confirm('Delete this passkey?');"
+                        style="color:#fff;background:#c00;border-color:#c00;">
                     Delete
                 </button>
             </form>
@@ -1662,7 +1664,7 @@ TEMPL_SETTINGS = wrap("""
             const input  = document.createElement('input');
             input.type   = 'text';
             input.value  = span.textContent.trim();
-            input.style.maxWidth = '14rem';
+            input.style.maxWidth = '25rem';
             input.style.flex = '1';                 // keep column width
             input.className  = 'pk-name-edit';      // easy selector
 
