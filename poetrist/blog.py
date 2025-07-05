@@ -3931,7 +3931,9 @@ TEMPL_500 = wrap("""
 ###############################################################################
 # Import /Export Items data
 ###############################################################################
+
 @app.route('/<verb>/<item_type>/<slug>/json')
+@rate_limit(max_requests=30, window=60)
 def export_item_json(verb, item_type, slug):
     db  = get_db()
     itm = db.execute("""SELECT id, uuid, slug, item_type, title
