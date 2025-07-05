@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 
 import click
 import markdown
+import requests
 from flask import (
     Flask,
     Response,
@@ -614,6 +615,12 @@ CARET_COMPACT_RE = re.compile(r'''
 # ── “long” meta lines ─────────────────────────
 META_RE = re.compile(r'^\^([^\s:]+):"?(.*?)"?$', re.U)
 UUID4_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$', re.I)
+IMPORT_RE = re.compile(r'''
+    ^\^
+    (?:"([^"]+)"|([0-9A-Za-z_-]+))   # action (grp1 if quoted, else grp2)
+    :
+    (https?://\S+)                   # absolute URL (grp3)
+''', re.X | re.I)
 
 def parse_trigger(text: str) -> tuple[str, list[dict]]:
     out_blocks, new_lines = [], []
@@ -621,6 +628,27 @@ def parse_trigger(text: str) -> tuple[str, list[dict]]:
     i = 0
     while i < len(lines):
         line = lines[i].strip()
+
+        # ───────────────────────── 1) import block  (NEW) ──────────────────
+        m = IMPORT_RE.match(line)
+        if m:
+            action = m.group(1) or m.group(2)
+            url    = m.group(3)
+
+            try:
+                blk = _import_item_json(url, action=action)
+            except ValueError as exc:
+                # Re-emit the original line so the user sees what failed,
+                # and record nothing.
+                new_lines.append(line + f"   ← {exc}")
+                i += 1
+                continue
+
+            out_blocks.append(blk)
+            new_lines.append(f'^{blk["item_type"]}:$PENDING${len(out_blocks)-1}$')
+            i += 1
+            continue
+
 
         # ── try compact form first ────────────────────────────────
         m = CARET_COMPACT_RE.match(line)
@@ -3899,6 +3927,81 @@ TEMPL_500 = wrap("""
         style="color:{{ theme_color() }};">report the bug</a>.</p>
 {% endblock %}
 """)
+
+###############################################################################
+# Import /Export Items data
+###############################################################################
+@app.route('/<verb>/<item_type>/<slug>/json')
+def export_item_json(verb, item_type, slug):
+    db  = get_db()
+    itm = db.execute("""SELECT id, uuid, slug, item_type, title
+                          FROM item
+                         WHERE item_type=? AND slug=?""",
+                     (item_type, slug)).fetchone()
+    if not itm:
+        abort(404)
+
+    meta = db.execute("""SELECT k, v, ord
+                           FROM item_meta
+                          WHERE item_id=?
+                          ORDER BY ord""",
+                      (itm['id'],)).fetchall()
+
+    return {
+        'title'    : itm['title'],
+        'item_type': itm['item_type'],
+        'slug'     : itm['slug'],
+        'uuid'     : itm['uuid'],
+        'meta'     : [{'k': m['k'], 'v': m['v'], 'ord': m['ord']} for m in meta]
+    }
+
+def _import_item_json(url: str, *, action: str):
+    """
+    • Appends '/json' if missing.
+    • Verifies that the verb in the URL matches the action/verb that the
+      user wrote (so we don't attach a ^reading: …/watch/… item, etc.).
+    • Returns a *block-dict* ready for get_or_create_item().
+    """
+    jurl = url if url.rstrip('/').endswith('/json') else url.rstrip('/') + '/json'
+    parsed = urlparse(jurl)
+    insecure_host = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+    try:
+        r = requests.get(jurl, timeout=5, verify=not insecure_host)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as exc:
+        raise ValueError(f"Cannot fetch remote item → {exc}") from None
+
+    # -------- sanity checks --------------------------------------------------
+    need = {'uuid', 'slug', 'item_type', 'title'}
+    if not need.issubset(data):
+        raise ValueError("Remote item is missing mandatory fields")
+
+    # -------- verb consistency ----------------------------------------------
+    # 1) derive verb from URL  → '/read/book/kafka'   → 'read'
+    path_parts = urlparse(url).path.strip('/').split('/')
+    if len(path_parts) < 3:
+        raise ValueError("Malformed URL")
+
+    verb_from_url = path_parts[0]         # 'read', 'watch', …
+
+    # 2) derive verb from action  ('reading' → 'read', 'to-read' → 'read', …)
+    verb_from_action = next((v for v, acts in VERB_MAP.items()
+                             if action in acts), action)
+
+    if verb_from_url != verb_from_action:
+        raise ValueError("Verb/action mismatch")
+
+    # -------- craft the block dict ------------------------------------------
+    return {
+        "verb"      : verb_from_action,
+        "action"    : action,
+        "item_type" : data["item_type"],
+        "title"     : data["title"],
+        "slug"      : data["slug"],       # keep their nice slug
+        "progress"  : None,
+        "meta"      : {m["k"]: m["v"] for m in data.get("meta", [])},
+    }
 
 
 ###############################################################################
