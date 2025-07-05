@@ -3439,47 +3439,79 @@ def search_entries(q: str,
     # ─── 1-2 characters → simple LIKE ---------------------------------
     if len(q) < 3:
         like = f"%{q}%"
-        base = "SELECT * FROM entry WHERE title LIKE ? OR body LIKE ?"
-        if   sort == "new": 
-            base += " ORDER BY created_at DESC"
-        elif sort == "old": 
-            base += " ORDER BY created_at ASC"
-
-        total = db.execute(f"SELECT COUNT(*) FROM ({base})",
+        order_sql = {"new": "e.created_at DESC",
+                     "old": "e.created_at ASC"}.get(sort, "e.created_at DESC")
+        base_sql = f"""
+            SELECT e.*,
+                   ei.action, ei.progress,
+                   i.title       AS item_title,
+                   i.slug        AS item_slug,
+                   i.item_type   AS item_type,
+                   MIN(CASE
+                         WHEN im.k='date' AND LENGTH(im.v)>=4
+                         THEN SUBSTR(im.v,1,4)
+                       END)       AS item_year
+              FROM entry e
+              LEFT JOIN entry_item ei ON ei.entry_id = e.id
+              LEFT JOIN item       i  ON i.id        = ei.item_id
+              LEFT JOIN item_meta  im ON im.item_id  = i.id
+             WHERE e.title LIKE ? OR e.body LIKE ?
+          GROUP BY e.id
+            ORDER BY {order_sql}
+        """
+        total = db.execute(f"SELECT COUNT(*) FROM ({base_sql})",
                            (like, like)).fetchone()[0]
-        rows  = db.execute(f"{base} LIMIT ? OFFSET ?",
+        rows  = db.execute(f"{base_sql} LIMIT ? OFFSET ?",
                            (like, like, per_page, (page-1)*per_page)).fetchall()
         return rows, total, removed
 
     # ─── ≥3 chars → FTS5 trigram index --------------------------------
-    if   sort == "new": 
-        order_sql = "ORDER BY e.created_at DESC"
-    elif sort == "old": 
-        order_sql = "ORDER BY e.created_at ASC"
-    else:               
-        order_sql = "ORDER BY rank"
+    order_sql = {"new": "e.created_at DESC",
+                    "old": "e.created_at ASC"}.get(sort, "rank")
 
     rows = db.execute(f"""
-        SELECT  e.*,
-                bm25(entry_fts) AS rank,
-                snippet(entry_fts,      
-                        -1,             
-                        '<mark>', '</mark>',
-                        ' … ', 12)      
-                    AS snippet
+        SELECT
+            e.*,
+            bm25(entry_fts) AS rank,
+            snippet(entry_fts, -1,
+                    '<mark>', '</mark>', ' … ', 12) AS snippet,
+
+            /* one representative action / progress */
+            (SELECT ei.action   FROM entry_item ei
+                WHERE ei.entry_id = e.id LIMIT 1)                AS action,
+            (SELECT ei.progress FROM entry_item ei
+                WHERE ei.entry_id = e.id LIMIT 1)                AS progress,
+
+            /* item-related fields from the *first* linked item, if any */
+            (SELECT i.title     FROM entry_item ei
+                                JOIN item i ON i.id = ei.item_id
+                WHERE ei.entry_id = e.id LIMIT 1)                AS item_title,
+            (SELECT i.slug      FROM entry_item ei
+                                JOIN item i ON i.id = ei.item_id
+                WHERE ei.entry_id = e.id LIMIT 1)                AS item_slug,
+            (SELECT i.item_type FROM entry_item ei
+                                JOIN item i ON i.id = ei.item_id
+                WHERE ei.entry_id = e.id LIMIT 1)                AS item_type,
+            (SELECT SUBSTR(im.v,1,4)
+                FROM entry_item ei
+                JOIN item       i  ON i.id = ei.item_id
+                JOIN item_meta  im ON im.item_id = i.id
+                WHERE ei.entry_id = e.id
+                AND im.k = 'date' AND LENGTH(im.v) >= 4
+                LIMIT 1)                                          AS item_year
+
         FROM entry_fts
         JOIN entry e ON e.id = entry_fts.rowid
         WHERE entry_fts MATCH ?
-        {order_sql}
-        LIMIT ? OFFSET ?""",
-        (q, per_page, (page-1)*per_page)
-    ).fetchall()
+        ORDER BY {order_sql}
+        LIMIT ? OFFSET ?
+    """, (q, per_page, (page - 1) * per_page)).fetchall()
 
     total = db.execute(
-                "SELECT COUNT(*) FROM entry_fts WHERE entry_fts MATCH ?",
-                (q,)).fetchone()[0]
-    return rows, total, removed
+        "SELECT COUNT(*) FROM entry_fts WHERE entry_fts MATCH ?", (q,)
+    ).fetchone()[0]
 
+    return rows, total, removed
 
 _ITEM_Q_RE = re.compile(r"""
     ^\s*
@@ -3701,6 +3733,35 @@ TEMPL_SEARCH_ENTRIES = wrap("""
             {% endif %}
             <p>{{ e['snippet']|md }}</p>
             <small style="color:#aaa;">
+                {% if e.item_title %}
+                    <span style="display:inline-block;padding:.1em .6em;margin-right:.4em;
+                                background:#444;color:#fff;border-radius:1em;font-size:.75em;
+                                text-transform:capitalize;vertical-align:middle;">
+                    {{ e.action }}
+                    </span>
+                    {% if e.item_type %}
+                    <span style="display:inline-block;padding:.1em .6em;margin-right:.4em;
+                                background:#444;color:#fff;border-radius:1em;font-size:.75em;
+                                vertical-align:middle;">
+                        {{ e.item_type|capitalize }}
+                    </span>
+                    {% endif %}
+                    {% if e.progress %}
+                    <span style="display:inline-block;padding:.1em .6em;margin-right:.4em;
+                                background:#444;color:#fff;border-radius:1em;font-size:.75em;
+                                vertical-align:middle;">
+                        {{ e.progress }}
+                    </span>
+                    {% endif %}
+                    <a href="{{ url_for('item_detail',
+                                        verb=e.kind,               
+                                        item_type=e.item_type,
+                                        slug=e.item_slug) }}"
+                    style="text-decoration:none;margin-right:.4em;
+                            color:{{ theme_color() }};vertical-align:middle;">
+                    {{ e.item_title }}{% if e.item_year %} ({{ e.item_year }}){% endif %}
+                    </a><br>
+                {% endif %}
                 <span style="
                     display:inline-block;
                     padding:.1em .6em;
