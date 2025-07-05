@@ -1308,6 +1308,28 @@ def webauthn_delete_passkey(pkid):
     flash("Passkey deleted.")                   # nice feedback for the toast
     return redirect(url_for("settings"), code=303)  # PRG pattern
 
+@app.route("/webauthn/rename/<int:pkid>", methods=["POST"])
+def webauthn_rename_passkey(pkid):
+    """
+    Rename one stored passkey.
+    Body: {"nickname": "<new name>"}  (JSON)
+    Headers: X-CSRFToken (same token you already use)
+    """
+    login_required()
+
+    data = request.get_json(force=True)
+    nickname = (data.get("nickname") or "").strip()
+    if not nickname:
+        return {"error": "empty nickname"}, 400
+
+    db = get_db()
+    db.execute(
+        "UPDATE passkey SET nickname=? WHERE id=? AND user_id=?",
+        (nickname, pkid, _u()),
+    )
+    db.commit()
+    return {"ok": True}
+
 ###############################################################################
 # Resources
 ###############################################################################
@@ -1429,7 +1451,7 @@ def settings():
 TEMPL_SETTINGS = wrap("""
     {% block body %}
     <hr>
-    <h3>Site Settings</h3>
+    <h2>Site Settings</h2>
     <form method="post" style="max-width:36rem">
         {% if csrf_token() %}
             <input type="hidden" name="csrf" value="{{ csrf_token() }}">
@@ -1489,7 +1511,8 @@ TEMPL_SETTINGS = wrap("""
     <br>
     <hr>
           
-
+    <h2>Authentication</h2>
+                      
     <h3>Token</h3>
     <div style="display:flex; gap:1rem; max-width:36rem; margin-top:2rem;">
         <!-- token button in its own tiny form -->
@@ -1511,133 +1534,172 @@ TEMPL_SETTINGS = wrap("""
     {% endif %}
          
     <!-- ─────────── Passkeys ─────────── -->
-    <br>
-    <hr>
     <h3>Passkeys</h3>
     <ul id="pk-list" style="list-style:none;padding:0;margin:0;">
-    {% for p in _passkeys() %}
-    <li
-        class="pk-row"
-        style="display:flex;justify-content:space-between;align-items:center;margin:.6rem 0;"
-    >
-        <span>
-        {{ p.nickname or 'Passkey' }}  ({{ p.created_at|ts }})
-        </span>
+        {% for p in _passkeys() %}
+        <li class="pk-row"
+            data-pkid="{{ p.id }}"
+            style="display:flex;align-items:center;gap:.5rem;margin:.6rem 0;">
 
-        <!-- delete form -->
-        <form
-        class="pk-del-form"
-        data-pkid="{{ p.id }}"
-        method="post"
-        action="{{ url_for('webauthn_delete_passkey', pkid=p.id) }}"
-        style="margin:0;"
-        >
-        <input type="hidden" name="csrf"     value="{{ csrf_token() }}">
-        <input type="hidden" name="assertion">       {# JS drops WebAuthn result here #}
-        <button
-            type="submit"
-            style="background:#c00;color:#fff;font-size:.7em;padding:.25em .9em;border:none;"
-        >
-            Delete
-        </button>
-        </form>
-    </li>
-    {% else %}
-    <li>No passkeys yet.</li>
-    {% endfor %}
-    </ul>
+            <!-- left: nickname + timestamp stacked in a mini-column -->
+            <div style="flex:1;display:flex;flex-direction:column;gap:.15rem;">
+                <span  class="pk-name">{{ p.nickname or 'Passkey' }}</span>
+                <small class="pk-date" style="color:#888;font-size:.75em;">
+                    {{ p.created_at|ts }}
+                </small>
+            </div>
+
+            <!-- edit / save toggle -->
+            <button type="button"
+                    class="pk-edit-btn"
+                    style="font-size:.7em;padding:.25em .9em;">
+                Edit
+            </button>
+
+            <!-- delete (unchanged) -->
+            <form  class="pk-del-form"
+                data-pkid="{{ p.id }}"
+                method="post"
+                action="{{ url_for('webauthn_delete_passkey', pkid=p.id) }}"
+                style="margin:0;">
+                <input type="hidden" name="csrf"     value="{{ csrf_token() }}">
+                <input type="hidden" name="assertion">
+                <button type="submit"
+                        style="background:#c00;color:#fff;font-size:.7em;padding:.25em .9em;border:none;">
+                    Delete
+                </button>
+            </form>
+        </li>
+        {% else %}
+        <li>No passkeys yet.</li>
+        {% endfor %}
+
 
     <button id="add-pk">Add&nbsp;Passkey</button>
 
     <script>
-    /* ──────────────────────────────────────────────────────────────
-    “Add Passkey” – smarter version
-    • Sets nickname to the browser name (“Safari”, “Firefox”, …).
-    • Works everywhere – falls back gracefully if UA parsing fails.
-    • No server-side changes required.
-    ──────────────────────────────────────────────────────────── */
+    /*  settings → passkeys
+        ───────────────────────────────────────────────────────────
+        • create new passkey  (existing code, untouched)
+        • rename / delete without leaving the page  (new)
+        • wrapped in an IIFE to avoid globals
+    */
+    (() => {
+    /* csrf token: take the first one we find on the page */
+    const CSRF = document.querySelector('input[name="csrf"]')?.value || '';
 
-    const CSRF = document.querySelector('input[name="csrf"]').value;
+    /* ---------- tiny helpers ------------------------------------------- */
+    const b2u   = s => Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')), c => c.charCodeAt(0));
+    const u2b64 = b => btoa(String.fromCharCode(...new Uint8Array(b)));
 
-    /* helper:  base64url ⇆ Uint8Array  */
-    const b2u = s => Uint8Array.from(
-    atob(s.replace(/-/g, '+').replace(/_/g, '/')),
-    c => c.charCodeAt(0)
-    );
-    const u2b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
-
-    /* ── Browser-name detector ──────────────────────────────────── */
     function getBrowserName () {
-    /* 1) Modern: UA-CH (navigator.userAgentData.brands) */
-    if (navigator.userAgentData?.brands?.length) {
-    const brands = navigator.userAgentData.brands
-    .map(b => b.brand)
-    .filter(b => !/^Chromium$/i.test(b) &&
-                    !/^Not.*Brand$/i.test(b));        
-    if (brands.length) return brands[0];                    // first real one
+        if (navigator.userAgentData?.brands?.length) {
+        const real = navigator.userAgentData.brands
+                        .map(b => b.brand)
+                        .filter(b => !/^Chromium$/i.test(b) && !/^Not.*Brand$/i.test(b));
+        if (real.length) return real[0];
+        }
+        const ua = navigator.userAgent;
+        if (/Firefox\/\d+/i.test(ua)) return 'Firefox';
+        if (/Edg\/\d+/i.test(ua))     return 'Edge';
+        if (/OPR\/\d+/i.test(ua))     return 'Opera';
+        if (/Chrome\/\d+/i.test(ua))  return 'Chrome';
+        if (/Safari\/\d+/i.test(ua))  return 'Safari';
+        return 'Passkey';
     }
 
-    /* 2) Fallback: classic UA sniffing  */
-    const ua = navigator.userAgent;
-    if (/Firefox\/\d+/i.test(ua))        return 'Firefox';
-    if (/Edg\/\d+/i.test(ua))            return 'Edge';
-    if (/OPR\/\d+/i.test(ua))            return 'Opera';
-    if (/Chrome\/\d+/i.test(ua))         return 'Chrome';
-    if (/Safari\/\d+/i.test(ua))         return 'Safari';
-    return 'Passkey';                    // ultimate fallback
-    }
+    /* ====================================================================
+        A)  “Add passkey”  (original behaviour, left intact)
+        ================================================================== */
+    const addBtn = document.getElementById('add-pk');
+    if (addBtn) addBtn.onclick = async () => {
+        const optRes = await fetch('/webauthn/begin_register');
+        if (!optRes.ok) return alert('Server error');
 
-    /* ── Main handler ───────────────────────────────────────────── */
-    document.getElementById('add-pk').onclick = async () => {
-    /* 1. Get options from the server */
-    const optRes = await fetch('/webauthn/begin_register');
-    if (!optRes.ok) return alert('Server error');
-    const opts = await optRes.json();
+        const opts = await optRes.json();
+        opts.challenge           = b2u(opts.challenge);
+        opts.user.id             = b2u(opts.user.id);
+        opts.excludeCredentials  = opts.excludeCredentials.map(c => ({...c,id:b2u(c.id)}));
 
-    /* 2.  Base64url → Uint8Array conversions */
-    opts.challenge   = b2u(opts.challenge);
-    opts.user.id     = b2u(opts.user.id);
-    opts.excludeCredentials =
-        opts.excludeCredentials.map(c => ({ ...c, id: b2u(c.id) }));
+        let cred;
+        try { cred = await navigator.credentials.create({publicKey:opts}); }
+        catch (e) { console.log('Passkey creation aborted', e); return; }
 
-    /* 3.  Call WebAuthn API */
-    let cred;
-    try {
-        cred = await navigator.credentials.create({ publicKey: opts });
-    } catch (e) {
-        console.log('Passkey creation aborted:', e);
-        return;
-    }
-
-    /* 4.  Build payload for the server */
-    const body = {
+        const body = {
         id: cred.id,
-        rawId:              u2b64(cred.rawId),
-        type:               cred.type,
+        rawId: u2b64(cred.rawId),
+        type: cred.type,
         response: {
-        attestationObject: u2b64(cred.response.attestationObject),
-        clientDataJSON:    u2b64(cred.response.clientDataJSON)
+            attestationObject: u2b64(cred.response.attestationObject),
+            clientDataJSON:    u2b64(cred.response.clientDataJSON)
         },
         clientExtensionResults: cred.getClientExtensionResults()
+        };
+
+        const nn   = encodeURIComponent(getBrowserName());
+        const res  = await fetch(`/webauthn/complete_register?nickname=${nn}`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json','X-CSRFToken':CSRF},
+        body:JSON.stringify(body)
+        });
+
+        if (res.ok) location.reload();
+        else        alert('Passkey registration failed');
     };
 
-    /* 5.  POST to server, include nickname as query string */
-    const nickname = encodeURIComponent(getBrowserName());
-    const res = await fetch(
-        `/webauthn/complete_register?nickname=${nickname}`,
-        {
-        method:  'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRFToken':  CSRF
-        },
-        body: JSON.stringify(body)
+    /* ====================================================================
+        B)  Rename an existing passkey in-place
+        ================================================================== */
+    document.querySelectorAll('.pk-edit-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+        const row   = btn.closest('.pk-row');
+        const pkid  = row.dataset.pkid;
+        console.log('pkid', pkid);
+                      
+        /* —— enter edit mode ——————————————————————————— */
+        if (btn.textContent.trim() === 'Edit') {
+            const span   = row.querySelector('.pk-name');
+            const input  = document.createElement('input');
+            input.type   = 'text';
+            input.value  = span.textContent.trim();
+            input.style.maxWidth = '14rem';
+            input.style.flex = '1';                 // keep column width
+            input.className  = 'pk-name-edit';      // easy selector
+
+            span.replaceWith(input);
+            btn.textContent = 'Save';
+            input.focus();
+            return;
         }
-    );
+                      
 
-    if (res.ok) location.reload();
-    else        alert('Passkey registration failed');
-    };
+        /* —— save nickname ———————————————————————————— */
+        if (btn.textContent.trim() !== 'Save') return;   // should never happen
+        const input    = row.querySelector('.pk-name-edit');
+        if (!input) return;
+        const nickname = input.value.trim();
+
+        try {
+            const res = await fetch(`/webauthn/rename/${pkid}`, {
+            method :'POST',
+            headers:{'Content-Type':'application/json','X-CSRFToken':CSRF},
+            body   :JSON.stringify({nickname})
+            });
+            if (!res.ok) throw new Error();
+        } catch {
+            alert('Rename failed – please try again.');
+            return;
+        }
+
+        /* —— update UI on success ——————————————————— */
+        const newSpan = document.createElement('span');
+        newSpan.className = 'pk-name';
+        newSpan.textContent = nickname || 'Passkey';
+        input.replaceWith(newSpan);
+        btn.textContent = 'Edit';
+        });
+    });
+    })();
     </script>
 
 
