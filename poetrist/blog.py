@@ -2670,14 +2670,28 @@ def tags(tag_list: str):
     if selected:
         order_sql = "e.created_at DESC" if sort == "new" else "e.created_at ASC"
         q_marks = ','.join('?' * len(selected))
-        base_sql = f"""SELECT e.*
-                  FROM entry  e
-                  JOIN entry_tag et ON et.entry_id = e.id
-                  JOIN tag       t  ON t.id        = et.tag_id
-                  WHERE t.name IN ({q_marks})
-                  GROUP BY e.id
-                  HAVING COUNT(DISTINCT t.name)=?
-                  ORDER BY {order_sql}"""
+        base_sql = f"""
+            SELECT  e.*,
+                    ei.action,
+                    ei.progress,
+                    i.title      AS item_title,
+                    i.slug       AS item_slug,
+                    i.item_type  AS item_type,
+                    MIN(CASE
+                            WHEN im.k = 'date' AND LENGTH(im.v) >= 4
+                            THEN SUBSTR(im.v, 1, 4)
+                        END)     AS item_year
+            FROM entry        e
+            JOIN entry_tag    et ON et.entry_id = e.id
+            JOIN tag          t  ON t.id       = et.tag_id
+            LEFT JOIN entry_item ei ON ei.entry_id = e.id
+            LEFT JOIN item       i  ON i.id        = ei.item_id
+            LEFT JOIN item_meta  im ON im.item_id  = i.id
+            WHERE t.name IN ({q_marks})
+        GROUP BY e.id
+            HAVING COUNT(DISTINCT t.name)=?
+        ORDER BY {order_sql}
+        """
         entries, total_pages = paginate(base_sql,
                                         (*selected, len(selected)),
                                         page=page, per_page=per, db=db)
@@ -2764,6 +2778,40 @@ TEMPL_TAGS = wrap("""
             {% endif %}
             <p>{{ e['body']|md }}</p>
             <small style="color:#aaa;">
+                {# —— item info (if any) ———————————————————————— #}
+                {% if e.item_title %}
+                    <span style="
+                        display:inline-block;padding:.1em .6em;margin-right:.4em;
+                        background:#444;color:#fff;border-radius:1em;font-size:.75em;
+                        text-transform:capitalize;vertical-align:middle;">
+                        {{ e.action }}
+                    </span>
+                    {% if e.item_type %}
+                        <span style="
+                            display:inline-block;padding:.1em .6em;margin-right:.4em;
+                            background:#444;color:#fff;border-radius:1em;font-size:.75em;
+                            vertical-align:middle;">
+                            {{ e.item_type | capitalize }}
+                        </span>
+                    {% endif %}
+                    {% if e.progress %}
+                        <span style="
+                            display:inline-block;padding:.1em .6em;margin-right:.4em;
+                            background:#444;color:#fff;border-radius:1em;font-size:.75em;
+                            vertical-align:middle;">
+                            {{ e.progress }}
+                        </span>
+                    {% endif %}
+                    <a href="{{ url_for('item_detail',
+                                        verb=e.kind,
+                                        item_type=e.item_type,
+                                        slug=e.item_slug) }}"
+                    style="text-decoration:none;margin-right:.4em;
+                            color:{{ theme_color() }};vertical-align:middle;">
+                    {{ e.item_title }}{% if e.item_year %} ({{ e.item_year }}){% endif %}
+                    </a><br>
+                {% endif %}
+
                 <span style="
                     display:inline-block;
                     padding:.1em .6em;
