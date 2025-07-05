@@ -636,7 +636,7 @@ def parse_trigger(text: str) -> tuple[str, list[dict]]:
             url    = m.group(3)
 
             try:
-                blk = _import_item_json(url, action=action)
+                blk = import_item_json(url, action=action)
             except ValueError as exc:
                 # Re-emit the original line so the user sees what failed,
                 # and record nothing.
@@ -2919,12 +2919,12 @@ def _rss(entries, *, title, feed_url, site_url):
             _external=True,            # absolute URL
         )
 
-        body_html = md.reset().convert(e["body"] or "")
+        body_html = md.reset().convert(strip_caret(e["body"]) if e["body"] else "")
 
         items.append(
             f"""
         <item>
-          <title>{escape(e['title'] or (e['body'][:60] + '…'))}</title>
+          <title>{escape(e['title'] or (strip_caret(e["body"][:120]) + '…'))}</title>
           <link>{link}</link>
           <guid>{link}</guid>
           <pubDate>{_rfc2822(e['created_at'])}</pubDate>
@@ -3958,7 +3958,7 @@ def export_item_json(verb, item_type, slug):
         'meta'     : [{'k': m['k'], 'v': m['v'], 'ord': m['ord']} for m in meta]
     }
 
-def _import_item_json(url: str, *, action: str):
+def import_item_json(url: str, *, action: str):
     """
     • Appends '/json' if missing.
     • Verifies that the verb in the URL matches the action/verb that the
