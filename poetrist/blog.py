@@ -2222,7 +2222,7 @@ TEMPL_ITEM_LIST = wrap("""
               {% else %}
                   background:#444;   color:{{ theme_color() }};
               {% endif %}">
-        all
+        All
         <sup style="font-size:.5em;">{{ total_cnt }}</sup>
     </a>
 
@@ -2242,7 +2242,7 @@ TEMPL_ITEM_LIST = wrap("""
               {% else %}
                   background:#444;   color:{{ theme_color() }};
               {% endif %}">
-        {{ t.item_type }}
+        {{ t.item_type | capitalize }}
         <sup style="font-size:.5em;">{{ t.cnt }}</sup>
     </a>
     {% endfor %}
@@ -2258,7 +2258,7 @@ TEMPL_ITEM_LIST = wrap("""
                style="font-weight:normal;line-height:1.25;">{{ r.title }}{% if r.year %} ({{ r.year }}){% endif %}</a>
             <small class="meta"
                 style="color:#888;margin-left:auto;white-space:nowrap;font-variant-numeric:tabular-nums;">
-            {{ r.item_type }} • {{ r.cnt }}× • {{ r.last_at|ts }}
+            {{ r.item_type | capitalize }} • {{ r.cnt }}× • {{ r.last_at|ts }}
             </small>
         </li>
         {% endfor %}
