@@ -3927,14 +3927,14 @@ TEMPL_SEARCH_ITEMS = wrap("""
 ###############################################################################
 
 @app.route('/.well-known')
-@app.route('/.well-known/<path:_any>')
-@app.route('/users/<path:_any>')
+@app.route('/.well-known/<path:path>')
+@app.route('/users/<path:path>')
 @app.route('/nodeinfo')
-@app.route('/nodeinfo/<path:_ver>')
+@app.route('/nodeinfo/<path:path>')
 @app.route('/api/nodeinfo')
-@app.route('/api/nodeinfo/<path:_ver>')
+@app.route('/api/nodeinfo/<path:path>')
 @app.route('/inbox', methods=['GET','POST'])
-def gone(_any=None):
+def gone(path=None):
     return ('', 410)
 
 
