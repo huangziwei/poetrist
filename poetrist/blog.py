@@ -3058,14 +3058,13 @@ def item_detail(verb, item_type, slug):
         body_lines: list[str] = []
 
         for ln in raw.splitlines():
-            ln = ln.strip()
-            if not ln:
-                continue
-            if ln.startswith('^') and ':' in ln:        # looks like “^key: val”
-                k, v = [p.strip() for p in ln.split(':', 1)]
+            stripped = ln.strip()
+
+            if stripped.startswith('^') and ':' in stripped:        # looks like “^key: val”
+                k, v = [p.strip() for p in stripped.split(':', 1)]
                 meta_dict[k.lower()] = v
             else:                                       # free text → body
-                body_lines.append(ln + '\n')  # keep line breaks
+                body_lines.append(ln.rstrip())  
 
         # ❷ ── ensure we have an *action* (may be inferred) ------------------
         if 'action' not in meta_dict:
