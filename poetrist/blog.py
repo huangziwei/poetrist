@@ -3054,7 +3054,6 @@ def item_detail(verb, item_type, slug):
         # ❶ ── turn the user input into a {key: value} dict -----------------
         raw = request.form['meta'].rstrip()
 
-        # ❶ ── split into body-lines vs. meta-lines --------------------------
         meta_dict: dict[str, str] = {}
         body_lines: list[str] = []
 
@@ -3062,11 +3061,11 @@ def item_detail(verb, item_type, slug):
             ln = ln.strip()
             if not ln:
                 continue
-            if ':' in ln:                               # looks like “key: val”
+            if ln.startswith('^') and ':' in ln:        # looks like “^key: val”
                 k, v = [p.strip() for p in ln.split(':', 1)]
                 meta_dict[k.lower()] = v
             else:                                       # free text → body
-                body_lines.append(ln)
+                body_lines.append(ln + '\n')  # keep line breaks
 
         # ❷ ── ensure we have an *action* (may be inferred) ------------------
         if 'action' not in meta_dict:
