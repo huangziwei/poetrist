@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
 #
-# fly-tool ─ modular helper for the “poetrist” Fly app
+# fly-tools ─ modular helper for the “poetrist” Fly app
 # --------------------------------------------
 # USAGE:
-#   ./fly-tool all         # run every step
-#   ./fly-tool check-secret
-#   ./fly-tool pull-db
-#   ./fly-tool deploy
-#   ./fly-tool token
-#   ./fly-tool help
+#   ./fly-tools all         # run every step
+#   ./fly-tools check-secret
+#   ./fly-tools pull-db
+#   ./fly-tools restore-db
+#   ./fly-tools compress-db
+#   ./fly-tools deploy
+#   ./fly-tools token
+#   ./fly-tools help
 
 set -euo pipefail
 
 # ───── constants ────────────────────────────────────────────────────────────────
 APP="poetrist"
 REMOTE_DB="/app/poetrist/blog.sqlite3"
-LOCAL_DB="poetrist/blog.sqlite3.backup"
-TMP_DB="${LOCAL_DB}.remote"
+
+LOCAL_DB="poetrist/blog.sqlite3.backup"     # backup copy pulled from Fly
+RESTORED_DB="${LOCAL_DB%.backup}"           # → poetrist/blog.sqlite3
+TMP_DB="${LOCAL_DB}.remote"                 # temp file during sftp download
+
 SECRET_FILE="poetrist/.secret_key"
 
 # ───── functions ───────────────────────────────────────────────────────────────
@@ -65,6 +70,30 @@ restore_db() {
   fi
  }
 
+compress_db() {
+  if [[ ! -f "$RESTORED_DB" ]]; then
+    echo "    local DB not found: $RESTORED_DB"
+    return 1
+  fi
+
+  echo "🗜️   Optimising & vacuuming $RESTORED_DB …"
+  python - <<PY
+import sqlite3, pathlib
+db_path = pathlib.Path("$RESTORED_DB")
+con = sqlite3.connect(db_path)
+try:
+    # 1) merge & compress all FTS5 segments
+    con.execute("INSERT INTO entry_fts(entry_fts) VALUES('optimize')")
+    con.commit()
+    # 2) reclaim free pages
+    con.isolation_level = None  # autocommit ON for VACUUM
+    con.execute("VACUUM")
+finally:
+    con.close()
+print("    optimisation complete.")
+PY
+}
+
 deploy_app() {
   echo "🚀  fly deploy"
   fly deploy -a "$APP"
@@ -87,7 +116,8 @@ cmd="${1:-help}"
 case "$cmd" in
   check-secret)  check_secret ;;
   pull-db)       pull_db ;;
-  restore-db)     restore_db ;;
+  restore-db)    restore_db ;;
+  compress-db)   compress_db ;;
   deploy)        deploy_app ;;
   token)         rotate_token ;;
   all)           check_secret && pull_db && restore_db && deploy_app && rotate_token ;;
