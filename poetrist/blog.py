@@ -2289,54 +2289,62 @@ TEMPL_ITEM_LIST = wrap("""
 
 <!-- —— Item list ——————————————————————————————— -->
 {% if rows %}
-    <hr>
-    <ul style="list-style:none; padding:0;">
-    {% for r in rows %}
-    <li style="display:flex;flex-wrap:wrap;align-items:baseline;
-                justify-content:space-between;gap:.35rem 1rem;margin:1rem 0;">
+  <hr>
+  <ul style="list-style:none; padding:0; margin:0;">
+  {% for r in rows %}
+    <li style="margin:1.5rem 0;">
 
-        <div>
-            <!-- ✨ last_action pill (only if present) -->
-            {% if r.last_action %}
-            <small
-                style="display:inline-block;padding:.1em .6em;margin-right:.4em;
-                        background:#444;color:#fff;border-radius:1em;font-size:.65em;
-                        text-transform:capitalize;">
-                {{ r.last_action }}
-            </small>
-            {% endif %}                 
-            <!-- title -->
-            <a href="{{ url_for('item_detail',
-                                verb=verb, item_type=r.item_type, slug=r.slug) }}"
-                style="font-weight:normal;line-height:1.25;">
-                {{ r.title }}{% if r.year %} ({{ r.year }}){% endif %}
-            </a>
-        </div>
+      {# ─────────── ROW 1 – title ─────────── #}
+      <a href="{{ url_for('item_detail',
+                          verb=verb,
+                          item_type=r.item_type,
+                          slug=r.slug) }}"
+         style="display:inline-block;               
+                font-weight:normal;
+                line-height:1.5;">
+        {{ r.title }}{% if r.year %} ({{ r.year }}){% endif %}
+      </a>
 
-        <!-- meta block stays as-is -->
-        <small class="meta"
-                style="color:#888;margin-left:auto;white-space:nowrap;
-                        font-variant-numeric:tabular-nums;">
-            {{ r.item_type|capitalize }} • {{ r.cnt }}× • {{ r.last_at|ts }}
-        </small>
+      {# ─────────── ROW 2 – meta ─────────── #}
+      <div style="display:flex;
+                  flex-wrap:wrap;
+                #   justify-content:space-between;
+                  align-items:center;
+                  gap:.35rem;
+                  font-size:1rem;
+                  color:#888;">
+
+        {% if r.last_action %}
+        <span style="display:inline-block;padding:.1em .6em;background:#444;color:#fff;border-radius:1em;text-transform:capitalize;">
+        {{ r.last_action }}
+        </span>
+        {% endif %}
+        <span style="display:inline-block;padding:.1em .6em;background:#444;color:#fff;border-radius:1em;text-transform:capitalize;">
+        {{ r.item_type|capitalize }}
+        </span>
+        <span style="white-space:nowrap;font-size:1rem;">
+           • {{ r.cnt }}× • {{ r.last_at|ts }}
+        </span>
+      </div>
     </li>
-    {% endfor %}
-    </ul>
+  {% endfor %}
+  </ul>
 
-    {% if pages|length > 1 %}
+  {# — pagination unchanged — #}
+  {% if pages|length > 1 %}
     <nav style="margin-top:1rem; font-size:.75em;">
-        {% for p in pages %}
-            {% if p == page %}
-                <span style="border-bottom:.33rem solid #aaa;">{{ p }}</span>
-            {% else %}
-                <a href="{{ request.path }}?{% if selected %}type={{ selected }}&{% endif %}page={{ p }}">{{ p }}</a>
-            {% endif %}
-            {% if not loop.last %}&nbsp;{% endif %}
-        {% endfor %}
+      {% for p in pages %}
+        {% if p == page %}
+          <span style="border-bottom:.33rem solid #aaa;">{{ p }}</span>
+        {% else %}
+          <a href="{{ request.path }}?{% if selected %}type={{ selected }}&{% endif %}page={{ p }}">{{ p }}</a>
+        {% endif %}
+        {% if not loop.last %}&nbsp;{% endif %}
+      {% endfor %}
     </nav>
-    {% endif %}
+  {% endif %}
 {% else %}
-    <p>No items{% if selected %} for this type{% endif %} yet.</p>
+  <p>No items{% if selected %} for this type{% endif %} yet.</p>
 {% endif %}
 {% endblock %}
 """)
