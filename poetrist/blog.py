@@ -1003,11 +1003,11 @@ TEMPL_EPILOG = """
         </span>
 
         <!-- right-hand side – extra pages -->
-        <nav style="margin-bottom:1rem; display:inline-block; align-items:flex-end; font-size:.9em;">
+        <nav style="display:inline-block;">
             {% for p in nav_pages() %}
                 <a href="{{ '/' ~ p['slug'] }}"
                 {% if request.path|trim('/') == p['slug'] %}
-                    style="text-decoration:none;border-bottom:.33rem solid #aaa;"
+                    style="text-decoration:none;border-bottom:.33rem solid #aaa;align-items:center;"
                 {% endif %}>
                     {{ p['title'] }}
                 </a>
@@ -2301,7 +2301,8 @@ TEMPL_ITEM_LIST = wrap("""
                           slug=r.slug) }}"
          style="display:inline-block;               
                 font-weight:normal;
-                line-height:1.5;">
+                line-height:1.25;
+                margin:0.5rem 0;">
         {{ r.title }}{% if r.year %} ({{ r.year }}){% endif %}
       </a>
 
