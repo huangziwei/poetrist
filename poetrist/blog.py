@@ -2301,16 +2301,15 @@ TEMPL_ITEM_LIST = wrap("""
                           slug=r.slug) }}"
          style="display:inline-block;               
                 font-weight:normal;
-                line-height:1.25;
-                margin:0.5rem 0;">
+                line-height:1.25;">
         {{ r.title }}{% if r.year %} ({{ r.year }}){% endif %}
       </a>
 
       {# ─────────── ROW 2 – meta ─────────── #}
       <div style="display:flex;
                   flex-wrap:wrap;
-                #   justify-content:space-between;
                   align-items:center;
+                  margin-top:.25rem;
                   gap:.35rem;
                   font-size:1rem;
                   color:#888;">
