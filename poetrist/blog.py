@@ -77,6 +77,12 @@ VERB_MAP = {
     "use": ["to-use", "to use", "using", "used", "reusing", "reused"],
     "buy": ["to-buy", "to buy", "buying", "bought", "rebuying", "rebought"],
 }
+ALIASES = {
+    "pg"   : "progress",
+    "it"   : "item_type",
+}
+def canon(k: str) -> str:        # helper: ^pg → progress
+    return ALIASES.get(k.lower(), k.lower())
 KINDS = ("say", "post", "pin") + tuple(VERB_MAP.keys()) + ("page",)
 PAGE_DEFAULT = 100
 TAG_RE = re.compile(r'(?<!\w)#([\w\-]+)')
@@ -674,7 +680,7 @@ def parse_trigger(text: str) -> tuple[str, list[dict]]:
                 "meta"      : {},
             }
 
-            # ── NEW: hoover up following '^key:value' lines ──────────────────
+            # ── hoover up following '^key:value' lines ──────────────────
             j = i + 1
             while j < len(lines):
                 nxt = lines[j].strip()
@@ -683,7 +689,7 @@ def parse_trigger(text: str) -> tuple[str, list[dict]]:
                 km = META_RE.match(nxt)
                 if km:
                     k, v = km.groups()
-                    k = k.lower()
+                    k = canon(k)
                     if k == "progress":
                         blk["progress"] = v
                     elif k not in {          # core fields already set above
@@ -709,7 +715,7 @@ def parse_trigger(text: str) -> tuple[str, list[dict]]:
                     i += 1
                     continue
                 k, v = m2.groups()
-                k = k.lower()
+                k = canon(k)
                 if k in ("action", "verb"):      
                     tmp["action"]    = v
                 elif k in ("item", "item_type"): 
@@ -3062,7 +3068,7 @@ def item_detail(verb, item_type, slug):
 
             if stripped.startswith('^') and ':' in stripped:        # looks like “^key: val”
                 k, v = [p.strip() for p in stripped.split(':', 1)]
-                meta_dict[k.lower()] = v
+                meta_dict[canon(k)] = v
             else:                                       # free text → body
                 body_lines.append(ln.rstrip())  
 
