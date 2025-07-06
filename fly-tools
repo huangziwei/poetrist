@@ -26,7 +26,7 @@ SECRET_FILE="poetrist/.secret_key"
 
 # ───── functions ───────────────────────────────────────────────────────────────
 usage() { cat <<EOF
-fly-tool – modular Fly helper for “${APP}”
+fly-tools – modular Fly helper for “${APP}”
 
 Sub-commands:
   check-secret   Ensure .secret_key exists locally

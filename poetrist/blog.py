@@ -3926,10 +3926,13 @@ TEMPL_SEARCH_ITEMS = wrap("""
 # Error pages
 ###############################################################################
 
-@app.route('/.well-known/webfinger')
-@app.route('/.well-known/host-meta')
-@app.route('/.well-known/nodeinfo')
+@app.route('/.well-known')
+@app.route('/.well-known/<path:_any>')
 @app.route('/users/<path:_any>')
+@app.route('/nodeinfo')
+@app.route('/nodeinfo/<path:_ver>')
+@app.route('/api/nodeinfo')
+@app.route('/api/nodeinfo/<path:_ver>')
 @app.route('/inbox', methods=['GET','POST'])
 def gone(_any=None):
     return ('', 410)
