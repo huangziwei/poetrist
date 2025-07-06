@@ -104,6 +104,7 @@ except PackageNotFoundError:
 # App + template filters
 ################################################################################
 app = Flask(__name__)
+app.url_map.strict_slashes = False
 app.config.update(SECRET_KEY=SECRET_KEY, DATABASE=str(DB_FILE))
 app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",   # blocks most CSRF on simple links
@@ -3924,6 +3925,15 @@ TEMPL_SEARCH_ITEMS = wrap("""
 ###############################################################################
 # Error pages
 ###############################################################################
+
+@app.route('/.well-known/webfinger')
+@app.route('/.well-known/host-meta')
+@app.route('/.well-known/nodeinfo')
+@app.route('/users/<path:_any>')
+@app.route('/inbox', methods=['GET','POST'])
+def gone(_any=None):
+    return ('', 410)
+
 
 @app.errorhandler(404)
 def not_found(exc):
