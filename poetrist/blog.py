@@ -2596,22 +2596,18 @@ TEMPL_EDIT_ENTRY = wrap("""
     {% endif %}
 
     {% if e['kind'] == 'pin' %}
-        <div style="position:relative;">
-            <input id="Link"
-                name="Link"
+    <div style="position:relative;">
+        <input id="link"
+                name="link"
                 value="{{ e['link'] or '' }}"
                 style="width:100%; padding-right:7rem;">
-            <label for="Link"
-                style="position:absolute;
-                right:.5rem;
-                top:40%;
-                transform:translateY(-50%);
-                pointer-events:none;
-                font-size:.75em;
-                color:#aaa;">
-                    Link
-            </label>
-        </div>
+        <label for="link" 
+                style="position:absolute; right:.5rem; top:40%;
+                        transform:translateY(-50%);
+                        pointer-events:none; font-size:.75em; color:#aaa;">
+            Link
+        </label>
+    </div>
     {% endif %}
 
     <div style="position:relative;">
