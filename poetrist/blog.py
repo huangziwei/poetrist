@@ -1018,8 +1018,7 @@ TEMPL_EPILOG = """
                 {% if request.path|trim('/') == p['slug'] %}
                     style="text-decoration:none;border-bottom:.33rem solid #aaa;align-items:center;"
                 {% endif %}>
-                    {{ p['title'] }}
-                </a>
+                    {{ p['title'] }}</a>{% if not loop.last %}&nbsp;{% endif %}
             {% endfor %}
         </nav>
     </footer>
@@ -2152,7 +2151,7 @@ TEMPL_LIST = wrap("""
             {% endif %}
             <textarea name="body" rows="3" style="width:100%;margin:0" placeholder="What's on your mind?"></textarea>
             
-            <div style="display:flex;gap:.75rem;">
+            <div style="display:flex;gap:.75rem;justify-content:space-between;width:100%;">
                 <button style="width:">Add&nbsp;{{ kind.capitalize() }}</button>      
                 {% if kind=='post' %}
                 <button name="is_page" value="1"
@@ -2513,9 +2512,16 @@ def edit_entry(kind_slug, entry_slug):
         body, blocks = parse_trigger(body)            # ← only call once
 
         # decide the final kind
-        if request.form.get('is_page') == '1' or row["kind"] == "page":
+        is_page_flag = request.form.get('is_page')   # None, '1' or '0'
+
+        if is_page_flag == '1' or (is_page_flag is None and row['kind'] == 'page'):
+            # keep / promote to page
             new_kind = 'page'
+        elif is_page_flag == '0' and row['kind'] == 'page':
+            # explicit demotion → become a post (or whatever is inferred)
+            new_kind = blocks[0]['verb'] if blocks else infer_kind(title, link)
         else:
+            # normal post / pin / say workflow
             new_kind = blocks[0]['verb'] if blocks else infer_kind(title, link)
 
         if not body:
@@ -2626,7 +2632,7 @@ TEMPL_EDIT_ENTRY = wrap("""
     </div>
 
     <textarea name="body" rows="8" style="width:100%;">{{ e['body'] }}</textarea><br>
-    <div style="display:flex;gap:.75rem;">
+    <div style="display:flex;gap:.75rem;justify-content:space-between;width:100%;">
         <button>Save</button>
 
         {% if e['kind']=='page' %}
