@@ -14,17 +14,22 @@
 
 set -euo pipefail
 
-# ───── constants ────────────────────────────────────────────────────────────────
+# ───── logging ────────────────────────────────────────────────────────────────
+# Print “YYYY-MM-DD HH:MM:SS · message”
+timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
+log()       { printf '%s · %s\n' "$(timestamp)" "$*"; }
+
+# ───── constants ───────────────────────────────────────────────────────────────
 APP="poetrist"
 REMOTE_DB="/app/poetrist/blog.sqlite3"
 
 LOCAL_DB="poetrist/blog.sqlite3.backup"     # backup copy pulled from Fly
-RESTORED_DB="poetrist/blog.sqlite3"                 
-TMP_DB="${LOCAL_DB}.remote"                # temp file during sftp download
+RESTORED_DB="poetrist/blog.sqlite3"
+TMP_DB="${LOCAL_DB}.remote"                 # temp file during sftp download
 
 SECRET_FILE="poetrist/.secret_key"
 
-# ───── helpers ─────────────────────────────────────────────────────────────────
+# ───── helpers ────────────────────────────────────────────────────────────────
 hash_db() {
   local file="$1"
 
@@ -39,7 +44,6 @@ hash_db() {
     "sha256sum $file" | awk '{print $1}'
 }
 
-
 # ───── functions ───────────────────────────────────────────────────────────────
 usage() { cat <<EOF
 fly-tools – modular Fly helper for “${APP}”
@@ -48,41 +52,43 @@ Sub-commands:
   check-secret   Ensure .secret_key exists locally
   pull-db        Download blog.sqlite3 from production (only if changed)
   restore-db     Restore local blog.sqlite3 from backup
+  compress-db    Optimise & vacuum local database
   deploy         fly deploy (build + release)
   token          Rotate one-time login token & print login URL
-  all            Perform every step (check-secret → pull-db → deploy → token)
+  all            Perform every step (check-secret → pull-db → restore-db
+                 → compress-db → deploy → token)
   help           Show this message
 EOF
 }
 
 check_secret() {
   if [[ -f "$SECRET_FILE" ]]; then return 0; fi
-  echo "➕  Creating missing .secret_key"
+  log "➕  Creating missing .secret_key"
   mkdir -p "$(dirname "$SECRET_FILE")"
   openssl rand -hex 32 > "$SECRET_FILE"
 }
 
 pull_db() {
-  echo "⬇️   Checking if remote database changed…"
+  log "⬇️   Checking if remote database changed…"
 
   local remote_hash local_hash
   remote_hash=$(hash_db "$REMOTE_DB") || true
   local_hash=$(hash_db "$LOCAL_DB")   || true
 
   if [[ -z "$remote_hash" ]]; then
-    echo "    ⚠️  Could not read remote DB hash – downloading anyway."
+    log "⚠️  Could not read remote DB hash – downloading anyway."
   elif [[ "$remote_hash" == "$local_hash" ]]; then
-    echo "    ✅  Remote DB identical to local backup – skipping download."
+    log "✅  Remote DB identical to local backup – skipping download."
     return 0
   else
-    echo "    🔄  Hashes differ – downloading new copy…"
+    log "🔄  Hashes differ – downloading new copy…"
   fi
 
   if fly ssh sftp get "$REMOTE_DB" "$TMP_DB" -a "$APP" 2>/dev/null; then
     mv -f "$TMP_DB" "$LOCAL_DB"
-    echo "    pulled → $LOCAL_DB"
+    log "pulled → $LOCAL_DB"
   else
-    echo "    ❌  No remote DB found – continuing"
+    log "❌  No remote DB found – continuing"
     rm -f "$TMP_DB" || true
   fi
 }
@@ -90,55 +96,52 @@ pull_db() {
 restore_db() {
   # copy poetrist/blog.sqlite3.backup → poetrist/blog.sqlite3
   local target="${LOCAL_DB%.backup}"   # strips the “.backup” suffix
-  echo "♻️   Restoring database from backup…"
+  log "♻️   Restoring database from backup…"
   if [[ -f "$LOCAL_DB" ]]; then
     cp -f "$LOCAL_DB" "$target"
-    echo "    copied $LOCAL_DB → $target"
+    log "    copied $LOCAL_DB → $target"
   else
-    echo "    backup not found: $LOCAL_DB"
+    log "    backup not found: $LOCAL_DB"
     return 1
   fi
 }
 
 compress_db() {
   if [[ ! -f "$RESTORED_DB" ]]; then
-    echo "    local DB not found: $RESTORED_DB"
+    log "    local DB not found: $RESTORED_DB"
     return 1
   fi
 
-  echo "🗜️   Optimising & vacuuming $RESTORED_DB …"
+  log "🗜️   Optimising & vacuuming $RESTORED_DB …"
   .venv/bin/python - <<PY
-import sqlite3, pathlib
+import sqlite3, pathlib, datetime, sys
 db_path = pathlib.Path("$RESTORED_DB")
 con = sqlite3.connect(db_path)
 try:
-    # 1) merge & compress all FTS5 segments
     con.execute("INSERT INTO entry_fts(entry_fts) VALUES('optimize')")
     con.commit()
-    # 2) reclaim free pages
-    con.isolation_level = None  # autocommit ON for VACUUM
+    con.isolation_level = None
     con.execute("VACUUM")
 finally:
     con.close()
-print("    optimisation complete.")
+print(f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S} ·     optimisation complete.")
 PY
 }
 
 deploy_app() {
-  echo "🚀  fly deploy"
+  log "🚀  fly deploy"
   fly deploy -a "$APP"
 }
 
 rotate_token() {
-  echo "🔑  Rotating one-time login token…"
+  log "🔑  Rotating one-time login token…"
   local token
   token=$(
     fly ssh console -a "$APP" -C \
       '/app/.venv/bin/flask --app poetrist/blog.py token' |
     grep -Eo '^[A-Za-z0-9._-]{20,}$' | head -n1
   )
-  echo
-  echo "One-time token (1 minute) →"
+  log "One-time token (1 minute) →"
   echo "$token"
 }
 
@@ -151,7 +154,8 @@ case "$cmd" in
   compress-db)   compress_db ;;
   deploy)        deploy_app ;;
   token)         rotate_token ;;
+  db-only)       pull_db && restore_db && compress_db ;;
   all)           check_secret && pull_db && restore_db && compress_db && deploy_app && rotate_token ;;
   help|-h|--help) usage ;;
-  *) echo "Unknown sub-command: $cmd"; echo; usage; exit 1 ;;
+  *) log "Unknown sub-command: $cmd"; echo; usage; exit 1 ;;
 esac
