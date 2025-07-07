@@ -16,7 +16,7 @@ uv sync
 FLASK_APP=poetrist/blog.py .venv/bin/flask init
 
 # (Optional) regenerate a one-time login token later (only valid for 1 min)
-# FLASK_APP=poetrist/blog.py flask token
+# FLASK_APP=poetrist/blog.py .venv/bin/flask token
 
 # Create a **trusted** HTTPS certificate for localhost
 # Passkeys need a cert the OS/browser actually trusts → use mkcert
