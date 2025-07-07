@@ -666,13 +666,14 @@ def parse_trigger(text: str) -> tuple[str, list[dict]]:
             slug  = m.group(7)                    # stays the same meaning
             prog  = m.group(8) or m.group(9)      # quoted OR un-quoted
 
+            action_lc = (action or "").lower()
             verb = next(
-                (vb for vb, acts in VERB_MAP.items() if action in acts),
-                action
+                (vb for vb, acts in VERB_MAP.items() if action_lc in acts),
+                action_lc
             )
             blk = {
                 "verb"      : verb,
-                "action"    : action,
+                "action"    : action_lc,
                 "item_type" : item_type,
                 "title"     : title,
                 "slug"      : slug,
@@ -737,9 +738,10 @@ def parse_trigger(text: str) -> tuple[str, list[dict]]:
                     tmp["meta"][k]   = v
                 i += 1
 
+            action_lc = (tmp["action"] or "").lower()
             tmp["verb"] = next(
-                (vb for vb, acts in VERB_MAP.items() if tmp["action"] in acts),
-                tmp["action"]
+                (vb for vb, acts in VERB_MAP.items() if action_lc in acts),
+                action_lc
             )
             out_blocks.append(tmp)
             new_lines.append(f'^{tmp["item_type"]}:$PENDING${len(out_blocks)-1}$')
@@ -4040,7 +4042,7 @@ def import_item_json(url: str, *, action: str):
 
     # 2) derive verb from action  ('reading' → 'read', 'to-read' → 'read', …)
     verb_from_action = next((v for v, acts in VERB_MAP.items()
-                             if action in acts), action)
+                             if action.lower() in acts), action.lower())
 
     if verb_from_url != verb_from_action:
         raise ValueError("Verb/action mismatch")
@@ -4048,7 +4050,7 @@ def import_item_json(url: str, *, action: str):
     # -------- craft the block dict ------------------------------------------
     return {
         "verb"      : verb_from_action,
-        "action"    : action,
+        "action"    : action.lower(),
         "item_type" : data["item_type"],
         "title"     : data["title"],
         "slug"      : data["slug"],       # keep their nice slug
