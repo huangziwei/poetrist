@@ -19,7 +19,7 @@ APP="poetrist"
 REMOTE_DB="/app/poetrist/blog.sqlite3"
 
 LOCAL_DB="poetrist/blog.sqlite3.backup"     # backup copy pulled from Fly
-RESTORED_DB="poetrist/blog.sqlite3"           
+RESTORED_DB="${LOCAL_DB%}"           # → poetrist/blog.sqlite3
 TMP_DB="${LOCAL_DB}.remote"                 # temp file during sftp download
 
 SECRET_FILE="poetrist/.secret_key"
@@ -120,7 +120,7 @@ case "$cmd" in
   compress-db)   compress_db ;;
   deploy)        deploy_app ;;
   token)         rotate_token ;;
-  all)           check_secret && pull_db && restore_db && compress_db && deploy_app && rotate_token ;;
+  all)           check_secret && pull_db && compress_db && restore_db && deploy_app && rotate_token ;;
   help|-h|--help) usage ;;
   *) echo "Unknown sub-command: $cmd"; echo; usage; exit 1 ;;
 esac
