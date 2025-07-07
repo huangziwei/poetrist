@@ -77,7 +77,7 @@ compress_db() {
   fi
 
   echo "🗜️   Optimising & vacuuming $RESTORED_DB …"
-  python - <<PY
+  .venv/bin/python - <<PY
 import sqlite3, pathlib
 db_path = pathlib.Path("$RESTORED_DB")
 con = sqlite3.connect(db_path)
