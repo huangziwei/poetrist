@@ -19,7 +19,7 @@ APP="poetrist"
 REMOTE_DB="/app/poetrist/blog.sqlite3"
 
 LOCAL_DB="poetrist/blog.sqlite3.backup"     # backup copy pulled from Fly
-RESTORED_DB="${LOCAL_DB%.backup}"           # → poetrist/blog.sqlite3
+RESTORED_DB="${LOCAL_DB%}"           # → poetrist/blog.sqlite3
 TMP_DB="${LOCAL_DB}.remote"                 # temp file during sftp download
 
 SECRET_FILE="poetrist/.secret_key"
