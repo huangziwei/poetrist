@@ -19,10 +19,26 @@ APP="poetrist"
 REMOTE_DB="/app/poetrist/blog.sqlite3"
 
 LOCAL_DB="poetrist/blog.sqlite3.backup"     # backup copy pulled from Fly
-RESTORED_DB="${LOCAL_DB%}"           # → poetrist/blog.sqlite3
-TMP_DB="${LOCAL_DB}.remote"                 # temp file during sftp download
+RESTORED_DB="${LOCAL_DB%}"                 # → poetrist/blog.sqlite3
+TMP_DB="${LOCAL_DB}.remote"                # temp file during sftp download
 
 SECRET_FILE="poetrist/.secret_key"
+
+# ───── helpers ─────────────────────────────────────────────────────────────────
+hash_db() {
+  local file="$1"
+
+  # 1) Local file?  → quick, no network hop
+  if [[ -f "$file" ]]; then
+    sha256sum "$file" | awk '{print $1}'
+    return 0
+  fi
+
+  # 2) Remote path (inside Fly VM) – ask the VM to hash it.
+  fly ssh console -q -a "$APP" -C \
+    "sha256sum $file" | awk '{print $1}'
+}
+
 
 # ───── functions ───────────────────────────────────────────────────────────────
 usage() { cat <<EOF
@@ -30,7 +46,7 @@ fly-tools – modular Fly helper for “${APP}”
 
 Sub-commands:
   check-secret   Ensure .secret_key exists locally
-  pull-db        Download blog.sqlite3 from production
+  pull-db        Download blog.sqlite3 from production (only if changed)
   restore-db     Restore local blog.sqlite3 from backup
   deploy         fly deploy (build + release)
   token          Rotate one-time login token & print login URL
@@ -47,12 +63,26 @@ check_secret() {
 }
 
 pull_db() {
-  echo "⬇️   Updating local database copy…"
+  echo "⬇️   Checking if remote database changed…"
+
+  local remote_hash local_hash
+  remote_hash=$(hash_db "$REMOTE_DB") || true
+  local_hash=$(hash_db "$LOCAL_DB")   || true
+
+  if [[ -z "$remote_hash" ]]; then
+    echo "    ⚠️  Could not read remote DB hash – downloading anyway."
+  elif [[ "$remote_hash" == "$local_hash" ]]; then
+    echo "    ✅  Remote DB identical to local backup – skipping download."
+    return 0
+  else
+    echo "    🔄  Hashes differ – downloading new copy…"
+  fi
+
   if fly ssh sftp get "$REMOTE_DB" "$TMP_DB" -a "$APP" 2>/dev/null; then
     mv -f "$TMP_DB" "$LOCAL_DB"
     echo "    pulled → $LOCAL_DB"
   else
-    echo "    no remote DB found – continuing"
+    echo "    ❌  No remote DB found – continuing"
     rm -f "$TMP_DB" || true
   fi
 }
@@ -68,7 +98,7 @@ restore_db() {
     echo "    backup not found: $LOCAL_DB"
     return 1
   fi
- }
+}
 
 compress_db() {
   if [[ ! -f "$RESTORED_DB" ]]; then
@@ -108,7 +138,8 @@ rotate_token() {
     grep -Eo '^[A-Za-z0-9._-]{20,}$' | head -n1
   )
   echo
-  echo "One-time token (1 minute) → \n$token"
+  echo "One-time token (1 minute) →"
+  echo "$token"
 }
 
 # ───── dispatcher ──────────────────────────────────────────────────────────────
