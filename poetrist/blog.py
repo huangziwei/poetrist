@@ -7,9 +7,7 @@ import re
 import secrets
 import shlex
 import sqlite3
-import struct
 import uuid
-import zlib
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from email.utils import format_datetime
