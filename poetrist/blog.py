@@ -173,7 +173,6 @@ def md_filter(text: str | None) -> Markup:
         )
     
     # ── 4 ▸ TeX → MathML ---------------------------------------------------
-    # ── 4 ▸ TeX → MathML ---------------------------------------------------
     _DELIMS = [("$$", "$$"), (r"\[", r"\]"), (r"\(", r"\)"), ("$", "$")]
 
     def _undelimit(tex: str) -> str:
@@ -184,13 +183,11 @@ def md_filter(text: str | None) -> Markup:
         return tex
 
     def _to_mathml(m: re.Match) -> str:
-        # ➋  unescape any HTML entities *before* sending to latex2mathml
-        tex  = unescape(_undelimit(m.group(2)))
-        mode = "inline" if m.group("tag") == "span" else "block"
-        try:                                 # latex2mathml ≥ 3.60
-            return _l2m.convert(tex, display=mode)
-        except Exception:                    # unsupported ⇒ show raw TeX
-            return f'<pre class="tex">{escape(tex)}</pre>'
+        try:
+            return _l2m.convert(unescape(_undelimit(m.group(2))), 
+                                display="inline" if m.group("tag") == "span" else "block")
+        except Exception:
+            return f'<pre class="tex">{escape(m.group(2))}</pre>'
 
     html = ARITH_RE.sub(_to_mathml, html)
 
@@ -911,13 +908,10 @@ TEMPL_PROLOG = """
 <link rel="alternate" type="application/rss+xml"
       href="{{ url_for('global_rss') }}" title="{{ title }} – RSS">
 <style>
-p > math[display="block"]            
-{
-    display: block;                  
-    margin: 1em 0;
+p > math[display="block"]{
+    display: block;margin: 1em 0;
 }
-math[display="block"]:not(:first-child)
-{
+math[display="block"]:not(:first-child){
     margin-top: 1.2em;
 }
 @media (max-width:560px){
