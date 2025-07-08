@@ -903,75 +903,38 @@ TEMPL_PROLOG = """
 <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no"> 
 <meta charset="utf-8">
 <meta name="description" content="po.etr.ist – a minimal blog">
-<link rel="stylesheet" href="{{ url_for('sakura_dark') }}">
 <link rel="icon" href="{{ url_for('favicon') }}">
 <link rel="alternate" type="application/rss+xml"
       href="{{ url_for('global_rss') }}" title="{{ title }} – RSS">
 <style>
-p > math[display="block"]{
-    display: block;margin: 1em 0;
-}
-math[display="block"]:not(:first-child){
-    margin-top: 1.2em;
-}
-@media (max-width:560px){
-    .meta {flex:0 0 100%;order:1;margin-left:0;text-align:left;}
-}
+html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif}body{font-size:1.8rem;line-height:1.618;max-width:38em;margin:auto;color:#c9c9c9;background-color:#222222;padding:13px}@media (max-width:684px){body{font-size:1.75rem}}@media (max-width:382px)@media (max-width:560px){.meta {flex:0 0 100%;order:1;margin-left:0;text-align:left;}}{body{font-size:1.35rem}}h1,h2,h3,h4,h5,h6{line-height:1.1;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;font-weight:700;margin-top:3rem;margin-bottom:1.5rem;overflow-wrap:break-word;word-wrap:break-word;-ms-word-break:break-all;word-break:break-word}h1{font-size:2.35em}h2{font-size:1.7em}h3{font-size:1.55em}h4{font-size:1.4em}h5{font-size:1.25em}h6{font-size:1.1em}p{margin-top:0px;margin-bottom:2.5rem}small,sub,sup{font-size:75%}hr{border-color:#ffffff}a{text-decoration:none;color:#ffffff}a:visited{color:#e6e6e6}a:hover{color:#c9c9c9;border-bottom:2px solid #c9c9c9}ul{padding-left:1.4em;margin-top:0px;margin-bottom:2.5rem}li{margin-bottom:0.4em}blockquote{margin-left:0px;margin-right:0px;padding-left:1em;padding-top:0.8em;padding-bottom:0.8em;padding-right:0.8em;border-left:5px solid #ffffff;margin-bottom:2.5rem;background-color:#4a4a4a}blockquote p{margin-bottom:0}img,video{height:auto;max-width:100%;margin-top:0px;margin-bottom:2.5rem}pre{background-color:#4a4a4a;display:block;padding:1em;overflow-x:auto;margin-top:0px;margin-bottom:2.5rem;font-size:0.9em}code,kbd,samp{font-size:0.9em;padding:0 0.5em;background-color:#4a4a4a;white-space:pre-wrap}pre>code{padding:0;background-color:transparent;white-space:pre;font-size:1em}table{text-align:justify;width:100%;border-collapse:collapse;margin-bottom:2rem}td,th{padding:0.5em;border-bottom:1px solid #4a4a4a}input,textarea{border:1px solid #c9c9c9}input:focus,textarea:focus{border:1px solid #ffffff}textarea{width:100%}.button,button,input[type=submit],input[type=reset],input[type=button],input[type=file]::file-selector-button{display:inline-block;padding:5px 10px;text-align:center;text-decoration:none;white-space:nowrap;background-color:#ffffff;color:#222222;border-radius:1px;border:1px solid #ffffff;cursor:pointer;box-sizing:border-box}.button[disabled],button[disabled],input[type=submit][disabled],input[type=reset][disabled],input[type=button][disabled],input[type=file]::file-selector-button[disabled]{cursor:default;opacity:0.5}.button:hover,button:hover,input[type=submit]:hover,input[type=reset]:hover,input[type=button]:hover,input[type=file]::file-selector-button:hover{background-color:#c9c9c9;color:#222222;outline:0}.button:focus-visible,button:focus-visible,input[type=submit]:focus-visible,input[type=reset]:focus-visible,input[type=button]:focus-visible,input[type=file]::file-selector-button:focus-visible{outline-style:solid;outline-width:2px}textarea,select,input{color:#c9c9c9;padding:6px 10px;margin-bottom:10px;background-color:#4a4a4a;border:1px solid #4a4a4a;border-radius:4px;box-shadow:none;box-sizing:border-box}textarea:focus,select:focus,input:focus{border:1px solid #ffffff;outline:0}input[type=checkbox]:focus{outline:1px dotted #ffffff}label,legend,fieldset{display:block;margin-bottom:0.5rem;font-weight:600}p>math[display="block"]{display: block;margin: 1em 0}math[display="block"]:not(:first-child){margin-top: 1.2em}
 </style>
 <a href="#page-bottom" aria-label="Jump to footer"
-   style="
-        position:fixed;
-        bottom:1.25rem;
-        right:1.25rem;
-        width:3rem; height:3rem;
-        display:flex; align-items:center; justify-content:center;
-        font-size:1.5rem; line-height:1;
-        text-decoration:none;
-        border-bottom:none;
-        border-radius:50%;
-        background:#aaa;
-        color:#000;
-        box-shadow:0 2px 6px rgba(0,0,0,.3);
-        z-index:1000;
-        opacity:.15;
-   ">
-    ↓
+   style="position:fixed;bottom:1.25rem;right:1.25rem;width:3rem; height:3rem;display:flex; align-items:center; justify-content:center;font-size:1.5rem; line-height:1;text-decoration:none;border-bottom:none;border-radius:50%;background:#aaa;color:#000;box-shadow:0 2px 6px rgba(0,0,0,.3);z-index:1000;opacity:.15;">↓
 </a>
 <div class="container" style="max-width: 60rem; margin: 3rem auto;">
     <h1 style="margin-top:0;"><a href="{{ url_for('index') }}" style="color:{{ theme_color() }};">{{title or 'po.etr.ist'}}</a></h1>
-    <nav style="margin-bottom:1rem;
-                display:flex;
-                align-items:flex-end;
-                font-size:.9em;">
-
+    <nav style="margin-bottom:1rem;display:flex;align-items:flex-end;font-size:.9em;">
         <!-- LEFT : two stacked rows -->
         <div style="display:flex; flex-direction:column; gap:.25rem;">
-
-            <!-- row 1 – legacy kinds -->
             <div>
                 <a href="{{ url_for('by_kind', slug=kind_to_slug('say')) }}"
                 {% if kind=='say' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
                 Says</a>&nbsp;&nbsp;
-
                 <a href="{{ url_for('by_kind', slug=kind_to_slug('post')) }}"
                 {% if kind=='post' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
                 Posts</a>&nbsp;&nbsp;
-
                 <a href="{{ url_for('by_kind', slug=kind_to_slug('pin')) }}"
                 {% if kind=='pin' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
                 Pins</a>&nbsp;&nbsp;
-
                 <a href="{{ url_for('tags') }}"
                 {% if kind=='tags' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
                 Tags</a>&nbsp;&nbsp;
             </div>
-
-            <!-- row 2 – verbs (shown only if at least one exists) -->
             {% if active_verbs() %}
             <div>
                 {% for v in active_verbs() %}
-                    {% set label = {'read':'Read','watch':'Watch',
-                                    'listen':'Listen','play':'Play','visit':'Visit', "use": "Use"}[v] %}
+                    {% set label = {'read':'Read','watch':'Watch','listen':'Listen','play':'Play','visit':'Visit', "use": "Use"}[v] %}
                     <a href="{{ url_for('by_kind', slug=kind_to_slug(v)) }}"
                     {% if verb==v %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
                     {{ label }}</a>{% if not loop.last %}&nbsp;&nbsp;{% endif %}
@@ -982,8 +945,6 @@ math[display="block"]:not(:first-child){
 
         <!-- RIGHT : two stacked rows (auth button, search) -->
         <div style="margin-left:auto; display:flex; flex-direction:column; gap:.25rem;align-items:flex-end;">
-
-            <!-- row 1 – Settings OR Login -->
             <div style="white-space:nowrap;">
                 {% if session.get('logged_in') %}
                     <a href="{{ url_for('settings') }}"
@@ -995,12 +956,9 @@ math[display="block"]:not(:first-child){
                     Login</a>
                 {% endif %}
             </div>
-
-            <!-- row 2 – search box -->
             <div>
                 <form action="{{ url_for('search') }}" method="get" style="margin:0;">
-                    <input type="search" name="q" placeholder="Search"
-                        value="{{ request.args.get('q','') }}"
+                    <input type="search" name="q" placeholder="Search" value="{{ request.args.get('q','') }}"
                         style="width:13rem;font-size:.8em; padding:.2em .6em; margin:0;">
                 </form>
             </div>
@@ -1009,14 +967,7 @@ math[display="block"]:not(:first-child){
     {% with msgs = get_flashed_messages() %}
     {% if msgs %}
         {# --- toast ----------------------------------------------------------- #}
-        <div style="position:fixed;
-                    top:1rem; right:1rem;
-                    background:#323232; color:#fff;
-                    padding:.75rem 1rem;
-                    border-radius:.4rem;
-                    font-size:.9rem; line-height:1.3;
-                    box-shadow:0 2px 6px rgba(0,0,0,.4);
-                    max-width:24rem; z-index:999;">
+        <div style="position:fixed;top:1rem; right:1rem;background:#323232; color:#fff;padding:.75rem 1rem;border-radius:.4rem;font-size:.9rem; line-height:1.3;box-shadow:0 2px 6px rgba(0,0,0,.4);max-width:24rem; z-index:999;">
         {{ msgs|join('<br>')|safe }}
         </div>
     {% endif %}
@@ -1024,14 +975,7 @@ math[display="block"]:not(:first-child){
 """
 
 TEMPL_EPILOG = """
-    <footer id="page-bottom" style="margin-top:1rem;
-                padding-top:1rem;
-                font-size:.8em;
-                color:#888;
-                display:flex;              
-                align-items:center;        
-                justify-content:space-between;  
-                border-top:1px solid #444;">
+    <footer id="page-bottom" style="margin-top:1rem;padding-top:1rem;font-size:.8em;color:#888;display:flex;align-items:center;justify-content:space-between;border-top:1px solid #444;">
         <!-- left-hand side -->
         <span style="font-weight:normal;color:#aaa;">
             Built with
@@ -1142,11 +1086,7 @@ TEMPL_LOGIN = wrap("""
       <label style="position:absolute;right:.5rem;top:40%;transform:translateY(-50%);
                     pointer-events:none;font-size:.75em;color:#aaa;">token</label>
   </div>
-    <div style="
-            margin-top:1rem;
-            display:flex;
-            gap:.6rem;                 
-    ">
+    <div style="margin-top:1rem;display:flex;gap:.6rem;">
     <!-- traditional token login -->
     <button
         type="submit"
@@ -1163,19 +1103,7 @@ TEMPL_LOGIN = wrap("""
     <button
         id="pk-btn"
         type="button"
-        style="
-        display:none;                
-        flex:1 1 auto;
-        padding:.55rem 1rem;
-        font-size:.95em;
-
-        background:{{ theme_color() }};
-        color:#000;
-        border:1px solid #666;
-        box-shadow:0 2px 4px rgba(0,0,0,.25);
-        cursor:pointer;
-        "
-    >
+        style="display:none;flex:1 1 auto;padding:.55rem 1rem;font-size:.95em;background:{{ theme_color() }};color:#000;border:1px solid #666;box-shadow:0 2px 4px rgba(0,0,0,.25);cursor:pointer;">
         <span style="white-space:nowrap;">Sign&nbsp;in&nbsp;with&nbsp;Passkey</span>
     </button>
     </div>
@@ -1405,16 +1333,6 @@ def webauthn_rename_passkey(pkid):
 ###############################################################################
 # Resources
 ###############################################################################
-@app.route("/sakura-dark.min.css")
-def sakura_dark():
-    """Serve the local Sakura stylesheet with long-term caching."""
-    return send_from_directory(
-        Path(__file__).parent,          # directory where blog.py lives
-        "sakura-dark.min.css",          # the file you downloaded
-        mimetype="text/css",
-        max_age=60*60*24*365            # 1-year cache header
-    )
-
 @app.route('/favicon.ico')
 def favicon():
     return send_from_directory(
@@ -3867,26 +3785,13 @@ TEMPL_SEARCH_ENTRIES = wrap("""
                         {{ e.progress }}
                     </span>
                     {% endif %}
-                    <a href="{{ url_for('item_detail',
-                                        verb=e.kind,               
-                                        item_type=e.item_type,
-                                        slug=e.item_slug) }}"
+                    <a href="{{ url_for('item_detail', verb=e.kind, item_type=e.item_type, slug=e.item_slug) }}"
                     style="text-decoration:none;margin-right:.4em;
                             color:{{ theme_color() }};vertical-align:middle;">
                     {{ e.item_title }}{% if e.item_year %} ({{ e.item_year }}){% endif %}
                     </a><br>
                 {% endif %}
-                <span style="
-                    display:inline-block;
-                    padding:.1em .6em;
-                    margin-right:.4em;
-                    background:#444;
-                    color:#fff;
-                    border-radius:1em;
-                    font-size:.75em;
-                    text-transform:capitalize;
-                    vertical-align:middle;
-                ">
+                <span style="display:inline-block;padding:.1em .6em;margin-right:.4em;background:#444;color:#fff;border-radius:1em;font-size:.75em;text-transform:capitalize;vertical-align:middle;">
                     {{ e['kind'] | smartcap }}
                 </span>
                 {% if e['kind'] == 'page' %}
@@ -3936,10 +3841,7 @@ TEMPL_SEARCH_ITEMS = wrap("""
     <ul style="list-style:none;padding:0;">
     {% for r in rows %}
       <li style="margin:.6rem 0;">
-        <a href="{{ url_for('item_detail',
-                            verb=r.verb,          
-                            item_type=r.item_type,
-                            slug=r.slug) }}">
+        <a href="{{ url_for('item_detail', verb=r.verb, item_type=r.item_type, slug=r.slug) }}">
           {{ r.title|safe }}
         </a>
         {% if r.year %}<small style="color:#888;">({{ r.year }})</small>{% endif %}
