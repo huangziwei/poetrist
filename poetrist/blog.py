@@ -121,12 +121,12 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 md = markdown.Markdown(
     extensions=[
-        "pymdownx.extra",       # tables, fenced-code…
-        "pymdownx.magiclink",   # auto-link bare URLs
-        "pymdownx.tilde",       # ~~strike~~
-        "pymdownx.mark",        # ==mark==
-        "pymdownx.superfences", # improved ``` code fences
-        "pymdownx.highlight",   # pygments highlighting
+        "pymdownx.extra",
+        "pymdownx.magiclink",
+        "pymdownx.tilde",
+        "pymdownx.mark",
+        "pymdownx.superfences",
+        "pymdownx.highlight",
         "pymdownx.betterem",
         "pymdownx.saneheaders"
     ],
@@ -1897,13 +1897,13 @@ TEMPL_INDEX = wrap("""{% block body %}
                     display:inline-block;padding:.1em .6em;margin-right:.4em;background:#444;
                     color:#fff;border-radius:1em;font-size:.75em;text-transform:capitalize;
                     vertical-align:middle;">
-                   {{ e['action'] }}
+                   {{ e.action | smartcap }}
                 </span>
                 {% if e.item_type %}
                 <span style="
                     display:inline-block;padding:.1em .6em;margin-right:.4em;background:#444;
                     color:#fff;border-radius:1em;font-size:.75em;vertical-align:middle;">
-                    {{ e.item_type|capitalize }}
+                    {{ e.item_type | smartcap }}
                 </span>
                 {% endif %}
                 {% if e.progress %}
@@ -2289,7 +2289,7 @@ TEMPL_ITEM_LIST = wrap("""
               {% else %}
                   background:#444;   color:{{ theme_color() }};
               {% endif %}">
-        {{ t.item_type | capitalize }}
+        {{ t.item_type | smartcap }}
         <sup style="font-size:.5em;">{{ t.cnt }}</sup>
     </a>
     {% endfor %}
@@ -2324,11 +2324,11 @@ TEMPL_ITEM_LIST = wrap("""
 
         {% if r.last_action %}
         <span style="display:inline-block;padding:.1em .6em;background:#444;color:#fff;border-radius:1em;text-transform:capitalize;">
-        {{ r.last_action }}
+        {{ r.last_action | smartcap }}
         </span>
         {% endif %}
         <span style="display:inline-block;padding:.1em .6em;background:#444;color:#fff;border-radius:1em;text-transform:capitalize;">
-        {{ r.item_type|capitalize }}
+        {{ r.item_type | smartcap }}
         </span>
         <span style="white-space:nowrap;font-size:1rem;">
            • {{ r.cnt }}× • {{ r.last_at|ts }}
@@ -2426,14 +2426,14 @@ TEMPL_ENTRY_DETAIL = wrap("""
                       display:inline-block;padding:.1em .6em;margin-right:.4em;
                       background:#444;color:#fff;border-radius:1em;font-size:.75em;
                       text-transform:capitalize;vertical-align:middle;">
-                    {{ e.action }}
+                    {{ e.action|smartcap }}
                 </span>
                 {% if e.item_type %}
                     <span style="
                           display:inline-block;padding:.1em .6em;margin-right:.4em;
                           background:#444;color:#fff;border-radius:1em;font-size:.75em;
                           vertical-align:middle;">
-                        {{ e.item_type | capitalize }}
+                        {{ e.item_type | smartcap }}
                     </span>
                 {% endif %}           
                 {% if e.progress %}
@@ -2577,7 +2577,7 @@ def edit_entry(kind_slug, entry_slug):
 TEMPL_EDIT_ENTRY = wrap("""
 {% block body %}
 <hr>
-<h2>Edit {{ e['kind']|capitalize }}</h2>
+<h2>Edit {{ e['kind']|smartcap }}</h2>
 <form method="post">
     {% if csrf_token() %}
             <input type="hidden" name="csrf" value="{{ csrf_token() }}">
@@ -2862,14 +2862,14 @@ TEMPL_TAGS = wrap("""
                         display:inline-block;padding:.1em .6em;margin-right:.4em;
                         background:#444;color:#fff;border-radius:1em;font-size:.75em;
                         text-transform:capitalize;vertical-align:middle;">
-                        {{ e.action }}
+                        {{ e.action | smartcap }}
                     </span>
                     {% if e.item_type %}
                         <span style="
                             display:inline-block;padding:.1em .6em;margin-right:.4em;
                             background:#444;color:#fff;border-radius:1em;font-size:.75em;
                             vertical-align:middle;">
-                            {{ e.item_type | capitalize }}
+                            {{ e.item_type | smartcap }}
                         </span>
                     {% endif %}
                     {% if e.progress %}
@@ -3275,7 +3275,7 @@ TEMPL_ITEM_DETAIL = wrap("""
             display:inline-block;padding:.1em .6em;margin-right:.4em;
             background:#444;color:#fff;border-radius:1em;font-size:.75em;
             text-transform:capitalize;vertical-align:middle;">
-            {{ e.action }}
+            {{ e.action | smartcap }}
         </span>
 
         {# —— progress pill (optional) ———————————————— #}
@@ -3814,13 +3814,13 @@ TEMPL_SEARCH_ENTRIES = wrap("""
                     <span style="display:inline-block;padding:.1em .6em;margin-right:.4em;
                                 background:#444;color:#fff;border-radius:1em;font-size:.75em;
                                 text-transform:capitalize;vertical-align:middle;">
-                    {{ e.action }}
+                    {{ e.action | smartcap }}
                     </span>
                     {% if e.item_type %}
                     <span style="display:inline-block;padding:.1em .6em;margin-right:.4em;
                                 background:#444;color:#fff;border-radius:1em;font-size:.75em;
                                 vertical-align:middle;">
-                        {{ e.item_type|capitalize }}
+                        {{ e.item_type | smartcap }}
                     </span>
                     {% endif %}
                     {% if e.progress %}
@@ -3850,7 +3850,7 @@ TEMPL_SEARCH_ENTRIES = wrap("""
                     text-transform:capitalize;
                     vertical-align:middle;
                 ">
-                    {{ e['kind'] }}
+                    {{ e['kind'] | smartcap }}
                 </span>
                 {% if e['kind'] == 'page' %}
                     <a href="{{ '/' ~ e['slug'] }}"
