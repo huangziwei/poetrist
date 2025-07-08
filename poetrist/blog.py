@@ -3697,17 +3697,23 @@ def search_items(q: str, *, db, page=1, per_page=PAGE_DEFAULT):
                        tuple(params) + (per_page, (page-1)*per_page)).fetchall()
     return rows, total
 
-def _make_like_snippet(title, body, terms):
+def _highlight(text: str | None, terms: list[str]) -> Markup:
     """
-    Cheap LIKE-search snippet.
-    - Strips caret meta.
-    - Escapes HTML.
-    - Highlights every term with <mark>.
+    Wrap every *term* that occurs in *text* in a <mark> tag that mimics the
+    FTS-snippet style.  Returns a Jinja-safe `Markup` object.
     """
-    body = strip_caret(body)
-    pattern = re.compile('|'.join(re.escape(t) for t in terms), re.I)
+    if not text:
+        return Markup("")
     col = theme_color()
-    return Markup(pattern.sub(lambda m: f'<mark style="background:transparent;color:{col};border-bottom:2px solid {col};">{m.group(0)}</mark>', body))
+    pattern = re.compile("|".join(re.escape(t) for t in terms), re.I)
+    return Markup(pattern.sub(
+        lambda m: (
+            f'<mark style="background:transparent;'
+            f'color:{col};border-bottom:2px solid {col};">'
+            f'{m.group(0)}</mark>'
+        ),
+        text,
+    ))
 
 @app.route('/search')
 def search():
@@ -3742,7 +3748,8 @@ def search():
     terms = [q_raw]                              # q here is your original short token
     rows = [dict(r) for r in rows]           # make mutable copies
     for r in rows:
-        r['snippet'] = _make_like_snippet(r['title'], r['body'], terms)
+        r['snippet'] = _highlight(strip_caret(r['body']), terms)
+        r["title"] = _highlight(r["title"], terms)
 
 
     pages = list(range(1, (total + page_size() - 1)//page_size() + 1))
@@ -3903,7 +3910,7 @@ TEMPL_SEARCH_ITEMS = wrap("""
                             verb=r.verb,          
                             item_type=r.item_type,
                             slug=r.slug) }}">
-          {{ r.title }}
+          {{ r.title|safe }}
         </a>
         {% if r.year %}<small style="color:#888;">({{ r.year }})</small>{% endif %}
         <br>
