@@ -12,7 +12,7 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 from email.utils import format_datetime
 from functools import wraps
-from html import escape
+from html import escape, unescape
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from time import time
@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 import click
+import latex2mathml.converter as _l2m
 import markdown
 import requests
 from flask import (
@@ -99,6 +100,10 @@ HASH_LINK_RE = re.compile(
     ''',
     re.X
 )
+ARITH_RE = re.compile(
+    r'<(?P<tag>span|div) class="arithmatex">(.*?)</(?P=tag)>',
+    re.S,
+)
 
 try:
     __version__ = version("poetrist")
@@ -128,10 +133,12 @@ md = markdown.Markdown(
         "pymdownx.superfences",
         "pymdownx.highlight",
         "pymdownx.betterem",
-        "pymdownx.saneheaders"
+        "pymdownx.saneheaders",
+        "pymdownx.arithmatex",
     ],
     extension_configs={
         "pymdownx.highlight": {"guess_lang": True, "noclasses": True, "pygments_style": "nord"},
+        "pymdownx.arithmatex": {"generic": True},
     },
 )
 
@@ -159,13 +166,33 @@ def md_filter(text: str | None) -> Markup:
         return f'<a href="{href}" style="text-decoration:none;color:{ theme_col };border-bottom:0.1px dotted currentColor;">#{orig_tag}</a>'
 
     html = HASH_LINK_RE.sub(hashtag_repl, html)
-
-    # change <mark> to have a custom style
     html = re.sub(
             r'(<mark)(>)',
             rf'\1 style="background:{ theme_col };color:#000;padding:0 .15em;"\2',
             html
         )
+    
+    # ── 4 ▸ TeX → MathML ---------------------------------------------------
+    # ── 4 ▸ TeX → MathML ---------------------------------------------------
+    _DELIMS = [("$$", "$$"), (r"\[", r"\]"), (r"\(", r"\)"), ("$", "$")]
+
+    def _undelimit(tex: str) -> str:
+        tex = tex.strip()
+        for left, right in _DELIMS:
+            if tex.startswith(left) and tex.endswith(right):
+                return tex[len(left):-len(right)].strip()
+        return tex
+
+    def _to_mathml(m: re.Match) -> str:
+        # ➋  unescape any HTML entities *before* sending to latex2mathml
+        tex  = unescape(_undelimit(m.group(2)))
+        mode = "inline" if m.group("tag") == "span" else "block"
+        try:                                 # latex2mathml ≥ 3.60
+            return _l2m.convert(tex, display=mode)
+        except Exception:                    # unsupported ⇒ show raw TeX
+            return f'<pre class="tex">{escape(tex)}</pre>'
+
+    html = ARITH_RE.sub(_to_mathml, html)
 
     return Markup(html)
 
@@ -884,6 +911,15 @@ TEMPL_PROLOG = """
 <link rel="alternate" type="application/rss+xml"
       href="{{ url_for('global_rss') }}" title="{{ title }} – RSS">
 <style>
+p > math[display="block"]            
+{
+    display: block;                  
+    margin: 1em 0;
+}
+math[display="block"]:not(:first-child)
+{
+    margin-top: 1.2em;
+}
 @media (max-width:560px){
     .meta {flex:0 0 100%;order:1;margin-left:0;text-align:left;}
 }
