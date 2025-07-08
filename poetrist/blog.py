@@ -33,7 +33,6 @@ from flask import (
     redirect,
     render_template_string,
     request,
-    send_from_directory,
     session,
     url_for,
 )
@@ -903,7 +902,8 @@ TEMPL_PROLOG = """
 <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no"> 
 <meta charset="utf-8">
 <meta name="description" content="po.etr.ist – a minimal blog">
-<link rel="icon" href="{{ url_for('favicon') }}">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="mask-icon" href="/favicon.svg" color="#000">
 <link rel="alternate" type="application/rss+xml"
       href="{{ url_for('global_rss') }}" title="{{ title }} – RSS">
 <style>
@@ -1070,7 +1070,7 @@ def login():
         session['csrf'] = secrets.token_hex(16)
         return redirect(url_for('index'))
 
-    return render_template_string(TEMPL_LOGIN)
+    return render_template_string(TEMPL_LOGIN, title = get_setting('site_name', 'po.etr.ist'))
 
 TEMPL_LOGIN = wrap("""
 {% block body %}
@@ -1333,15 +1333,33 @@ def webauthn_rename_passkey(pkid):
 ###############################################################################
 # Resources
 ###############################################################################
-@app.route('/favicon.ico')
+@app.route('/favicon.svg')
 def favicon():
-    return send_from_directory(
-        Path(__file__).parent,          # directory where blog.py lives
-        "favicon.ico",                  # the file you downloaded
-        mimetype='image/x-icon',
-        max_age=60*60*24*365            # 1-year cache header
-    )
+    """Return a 64 px SVG favicon whose colour follows the current theme."""
+    # ── background = theme colour ───────────────────────────────────────────
+    bg = theme_color().lstrip('#')
+    if len(bg) == 3:                               # allow #abc shorthand
+        bg = ''.join(c*2 for c in bg)
+    r, g, b = (int(bg[i:i+2], 16) for i in (0, 2, 4))
 
+    # ── foreground = simple RGB complement (#RRGGBB → #ʀ̅ ɢ̅ ʙ̅) ───────────
+    fg = '#FFFFFF' if (r + g + b) < 384 else '#000000'  # light/dark
+
+    # ── pick a letter: “P” by default, or 1st character of Site name ───────
+    letter = (get_setting('site_name', '') or 'P')[0].upper()
+
+    svg = f'''<svg xmlns="http://www.w3.org/2000/svg"
+                    width="64" height="64" viewBox="0 0 64 64">
+      <rect width="64" height="64" rx="8" ry="8" fill="#{bg}"/>
+      <text x="32" y="46" text-anchor="middle"
+            font-family="Arial,Helvetica,sans-serif"
+            font-size="48" font-weight="700"
+            fill="{fg}">{letter}</text>
+    </svg>'''
+
+    # 1-day cache so browsers don’t keep hammering the route
+    return Response(svg, mimetype='image/svg+xml',
+                    headers={"Cache-Control": "public, max-age=86400"})
 @app.route('/robots.txt')
 def robots():
     """
@@ -1435,7 +1453,8 @@ def settings():
         TEMPL_SETTINGS,
         site_name  = get_setting('site_name', 'po.etr.ist'),
         username   = cur_username,
-        new_token  = new_token
+        new_token  = new_token,
+        title      = get_setting('site_name', 'po.etr.ist'),
     )
 
 TEMPL_SETTINGS = wrap("""
@@ -1801,7 +1820,8 @@ def index():
         TEMPL_INDEX,
         entries = entries,
         page    = page,
-        pages   = pages,          
+        pages   = pages,         
+        title   = get_setting('site_name', 'po.etr.ist'), 
         username= current_username(),
     )
 
@@ -1924,6 +1944,7 @@ def by_kind(slug):
             TEMPL_PAGE,
             e        = page,
             username = current_username(),
+            title    = get_setting('site_name', 'po.etr.ist'), 
             kind     = 'page',
         )
 
@@ -2056,6 +2077,7 @@ def by_kind(slug):
             selected = selected,  
             total_cnt= total_cnt,
             username = current_username(),
+            title    = get_setting('site_name', 'po.etr.ist'),
         )
 
 
@@ -2078,6 +2100,7 @@ def by_kind(slug):
         heading  = (kind or '').capitalize()+'s',
         kind     = kind,
         username = current_username(),
+        title    = get_setting('site_name', 'po.etr.ist'),
     )
 
 TEMPL_LIST = wrap("""
@@ -2735,6 +2758,7 @@ def tags(tag_list: str):
         sort     = sort,
         kind     = 'tags',
         username = current_username(),
+        title    = get_setting('site_name', 'po.etr.ist'),
     )
 
 TEMPL_TAGS = wrap("""
@@ -3118,7 +3142,8 @@ def item_detail(verb, item_type, slug):
                                   entries= rows,
                                   verb   = verb,
                                   sort   = sort,
-                                  username=current_username())
+                                  username=current_username(),
+                                  title  = get_setting('site_name', 'po.etr.ist'))
 
 TEMPL_ITEM_DETAIL = wrap("""
 {% block body %}
@@ -3310,7 +3335,8 @@ def edit_item(verb, item_type, slug):
                                   item      = itm,
                                   meta      = meta_rows,
                                   verb      = verb,
-                                  username  = current_username())
+                                  username  = current_username(),
+                                  title     = get_setting('site_name', 'po.etr.ist'))
 
 TEMPL_EDIT_ITEM = wrap("""
 {% block body %}
@@ -3396,7 +3422,8 @@ def delete_item(verb, item_type, slug):
     return render_template_string(TEMPL_DELETE_ITEM,
                                   item     = itm,
                                   verb     = verb, 
-                                  username = current_username())
+                                  username = current_username(),
+                                  title    = get_setting('site_name', 'po.etr.ist'))
 
 TEMPL_DELETE_ITEM = wrap("""
 {% block body %}
@@ -3683,6 +3710,7 @@ def search():
                 pages  = pages,
                 kind   = 'search',
                 username = current_username(),
+                title   = get_setting('site_name', 'po.etr.ist'), 
             )
     
     # ── ②  fall back to the existing entry search ───────────────────
@@ -3712,6 +3740,7 @@ def search():
         removed  = ''.join(sorted(removed)),
         kind     = 'search',
         username = current_username(),
+        title    = get_setting('site_name', 'po.etr.ist'),
     )
 
 
@@ -3888,7 +3917,7 @@ def gone(path=None):
 @app.errorhandler(404)
 def not_found(exc):
     """Site-wide “Not Found” page."""
-    return render_template_string(TEMPL_404), 404
+    return render_template_string(TEMPL_404, title = get_setting('site_name', 'po.etr.ist')), 404
 
 @app.errorhandler(500)
 def internal_error(exc):
@@ -3899,7 +3928,7 @@ def internal_error(exc):
       this handler while debug is on.
     """
     # Optional: log the traceback here if you like
-    return render_template_string(TEMPL_500), 500
+    return render_template_string(TEMPL_500, title = get_setting('site_name', 'po.etr.ist')), 500
 
 TEMPL_404 = wrap("""
 {% block body %}
