@@ -7,7 +7,9 @@ import re
 import secrets
 import shlex
 import sqlite3
+import struct
 import uuid
+import zlib
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from email.utils import format_datetime
@@ -903,7 +905,6 @@ TEMPL_PROLOG = """
 <meta charset="utf-8">
 <meta name="description" content="po.etr.ist – a minimal blog">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<link rel="mask-icon" href="/favicon.svg" color="#000">
 <link rel="alternate" type="application/rss+xml"
       href="{{ url_for('global_rss') }}" title="{{ title }} – RSS">
 <style>
@@ -1360,6 +1361,7 @@ def favicon():
     # 1-day cache so browsers don’t keep hammering the route
     return Response(svg, mimetype='image/svg+xml',
                     headers={"Cache-Control": "public, max-age=86400"})
+
 @app.route('/robots.txt')
 def robots():
     """
