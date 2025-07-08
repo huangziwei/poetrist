@@ -272,6 +272,15 @@ wheels = [
 ]
 
 [[package]]
+name = "latex2mathml"
+version = "3.78.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/69/33/ad2c3929494ad160f5130ea132ca298627a6c81c70be6bedd1bc806b5b01/latex2mathml-3.78.0.tar.gz", hash = "sha256:712193aa4c6ade1a8e0145dac7bc1f9aafbd54f93046a2356a7e1c05fa0f8b31", size = 73737, upload-time = "2025-05-03T16:51:53.563Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1e/fd/aba08bb9e527168efad57985d7db9a853eb2384b1efa5ca5f3a3794c9cef/latex2mathml-3.78.0-py3-none-any.whl", hash = "sha256:1aeca3dc027b3006ad7b301b7f4a15ffbb4c1451e3dc8c3389e97b37b497e1d6", size = 73673, upload-time = "2025-05-03T16:51:51.991Z" },
+]
+
+[[package]]
 name = "lxml"
 version = "5.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -398,6 +407,7 @@ dependencies = [
     { name = "flask" },
     { name = "gunicorn" },
     { name = "html-sanitizer" },
+    { name = "latex2mathml" },
     { name = "markdown" },
     { name = "pymdown-extensions" },
     { name = "requests" },
@@ -415,6 +425,7 @@ requires-dist = [
     { name = "flask", specifier = ">=3.1.1" },
     { name = "gunicorn", specifier = ">=23.0.0" },
     { name = "html-sanitizer", specifier = ">=2.5.0" },
+    { name = "latex2mathml", specifier = ">=3.78.0" },
     { name = "markdown", specifier = ">=3.8.2" },
     { name = "pymdown-extensions", specifier = ">=10.16" },
     { name = "pytest", marker = "extra == 'dev'" },
