@@ -143,7 +143,7 @@ rotate_token() {
   local token
   token=$(
     fly ssh console -a "$APP" -C \
-      '/app/.venv/bin/flask --app poetrist/blog.py token' |
+      '/app/.venv/bin/flask --app poetrist.blog:app token' |
     grep -Eo '^[A-Za-z0-9._-]{20,}$' | head -n1
   )
   log "One-time token (1 minute) →"
