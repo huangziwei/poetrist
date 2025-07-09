@@ -2402,6 +2402,9 @@ def entry_detail(kind_slug, entry_slug):
         LIMIT 1
     """, (kind, entry_slug)).fetchone()
 
+    if kind not in (*KINDS, *VERB_KINDS) or row is None:
+        abort(404)
+
     return render_template_string(
         TEMPL_ENTRY_DETAIL,
         e=row,
