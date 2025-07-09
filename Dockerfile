@@ -16,7 +16,6 @@ WORKDIR /app
 ENV PORT=8080 PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 
 COPY --from=builder /app/.venv .venv/
-COPY poetrist/ poetrist/
 
 EXPOSE 8080
 CMD ["/app/.venv/bin/gunicorn", "-b", "0.0.0.0:8080", "poetrist.blog:app"]
