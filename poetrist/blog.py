@@ -104,12 +104,10 @@ ARITH_RE = re.compile(
     re.S,
 )
 _FOOTNOTE_DIV_RE = re.compile(r'<div class="footnote">.*?</div>', re.S)
-_FOOT_LI_RE     = re.compile(r'<li id="fn:(\d+)">(.*?)</li>', re.S)
+_FOOT_LI_RE = re.compile(r'<li id="fn:([^"]+)">(.*?)</li>', re.S)
 _PARA_RE = re.compile(r'<p[^>]*>(.*?)</p>', re.S)
-_BACKREF_RE     = re.compile(r'<a[^>]+footnote-backref[^>]*>.*?</a>', re.S)
-_SUP_RE         = re.compile(
-    r'<sup id="fnref:(\d+)"><a class="footnote-ref" href="#fn:\d+"[^>]*>\d+</a></sup>'
-)
+_BACKREF_RE = re.compile(r'<a[^>]+footnote-backref[^>]*>.*?</a>', re.S)
+_SUP_RE = re.compile(r'<sup id="fnref:([^"]+)"><a class="footnote-ref" href="#fn:[^"]+"[^>]*>.*?</a></sup>')
 
 try:
     __version__ = version("poetrist")
@@ -238,8 +236,21 @@ def md_filter(text: str | None) -> Markup:
                 f'  <label for="fn-none" class="fn-overlay"></label>'   # ← overlay here
                 f'</sup>'
             )
-        return _SUP_RE.sub(repl, html)
-    
+        html = _SUP_RE.sub(repl, html)
+
+        all_notes = ''.join(f'<li id="fn:{k}">{v}</li>' for k, v in notes.items())
+        html += (
+            '<details class="fn-all" style="margin-top:1.5rem;font-size:1rem;">'
+            f'  <summary style="cursor:pointer;font-weight:bold;">'
+            f'    Footnotes&nbsp;({len(notes)})'
+            '  </summary>'
+            '  <ol style="margin:1rem 0 0 1.5rem;">'
+            f'{all_notes}'
+            '  </ol>'
+            '</details>'
+        )
+        return html
+
     html = _popup_footnotes(html)
 
     return Markup(html)
