@@ -69,17 +69,19 @@ signer = TimestampSigner(SECRET_KEY, salt='login-token')
 
 SLUG_DEFAULTS = {"say": "says", "post": "posts", "pin": "pins"}
 VERB_MAP = {
-    "read"   : ["to-read", "to read", "reading", "read", "rereading", "reread", "finished reading"],
-    "watch"  : ["to-watch", "to watch" , "watching", "watched", "rewatching", "rewatched"],
-    "listen" : ["to-listen", "to listen", "listening", "listened", "relistening", "relistened"],
-    "play"   : ["to-play", "to play", "playing", "played", "replaying", "replayed"],
-    "visit"  : ["to-visit", "to visit", "visiting", "visited", "revisiting", "revisited"],
-    "use": ["to-use", "to use", "using", "used", "reusing", "reused"],
-    "buy": ["to-buy", "to buy", "buying", "bought", "rebuying", "rebought"],
+    "read"   : ["to-read", "to read", "reading", "read", "rereading", "reread", "finished reading", "reflect"],
+    "watch"  : ["to-watch", "to watch" , "watching", "watched", "rewatching", "rewatched", "reflect"],
+    "listen" : ["to-listen", "to listen", "listening", "listened", "relistening", "relistened", "reflect"],
+    "play"   : ["to-play", "to play", "playing", "played", "replaying", "replayed", "reflect"],
+    "visit"  : ["to-visit", "to visit", "visiting", "visited", "revisiting", "revisited", "reflect"],
+    "use": ["to-use", "to use", "using", "used", "reusing", "reused", "reflect"],
+    "buy": ["to-buy", "to buy", "buying", "bought", "rebuying", "rebought", "reflect"],
 }
 ALIASES = {
-    "pg"   : "progress",
-    "it"   : "item_type",
+    "p"    : "progress",  "pg"   : "progress",
+    "i"    : "item_type", "it"   : "item_type",
+    "a"    : "action",    "at"   : "action",
+    "v"    : "verb",      "vb"   : "verb",
 }
 def canon(k: str) -> str:        # helper: ^pg → progress
     return ALIASES.get(k.lower(), k.lower())
@@ -803,8 +805,10 @@ def parse_trigger(text: str) -> tuple[str, list[dict]]:
                     continue
                 k, v = m2.groups()
                 k = canon(k)
-                if k in ("action", "verb"):      
+                if k == "action":     
                     tmp["action"]    = v
+                elif k == "verb":
+                    tmp["verb"]      = v
                 elif k in ("item", "item_type"): 
                     tmp["item_type"] = v
                 elif k == "title":               
@@ -824,11 +828,12 @@ def parse_trigger(text: str) -> tuple[str, list[dict]]:
                     tmp["meta"][k]   = v
                 i += 1
 
-            action_lc = (tmp["action"] or "").lower()
-            tmp["verb"] = next(
-                (vb for vb, acts in VERB_MAP.items() if action_lc in acts),
-                action_lc
-            )
+            if "verb" not in tmp or not tmp["verb"]:
+                action_lc = (tmp["action"] or "").lower()
+                tmp["verb"] = next(
+                    (vb for vb, acts in VERB_MAP.items() if action_lc in acts),
+                    action_lc
+                )
             out_blocks.append(tmp)
             new_lines.append(f'^{tmp["item_type"]}:$PENDING${len(out_blocks)-1}$')
             continue
@@ -3136,6 +3141,7 @@ def item_detail(verb, item_type, slug):
             f'^uuid:{itm["uuid"]}',
             f'^item_type:{itm["item_type"]}',
             f'^action:{meta_dict.pop("action")}',
+            f'^verb:{verb}',
         ]
         for k, v in meta_dict.items():          # any remaining keys (progress, …)
             caret_lines.append(f'{k}:{v}')
