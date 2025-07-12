@@ -88,14 +88,14 @@ KINDS = ("say", "post", "pin") + tuple(VERB_MAP.keys()) + ("page",)
 PAGE_DEFAULT = 100
 TAG_RE = re.compile(r'(?<!\w)#([\w\-]+)')
 RFC2822_FMT = "%a, %d %b %Y %H:%M:%S %z"
-_TOKEN_CHARS = r"0-9A-Za-z\u0080-\uFFFF_"          # what unicode61 keeps
+_TOKEN_CHARS = r"0-9A-Za-z\u0080-\uFFFF_"
 TOKEN_RE     = re.compile(f"[{_TOKEN_CHARS}]+")
 HASH_LINK_RE = re.compile(
     r'''
     (?<![A-Za-z0-9_="'&])        # no word char, quote, = or & right before
     \#                           # literal “#”
     (?!x?[0-9A-Fa-f]+;)          # NOT an HTML entity  (e.g. &#x1F60A;)
-    (?![0-9A-Fa-f]{3,8}\b)       # ★ NEW: NOT a 3- to 8-digit hex colour
+    (?![0-9A-Fa-f]{3,8}\b)       # ★ NEW: NOT a 3- to 8-digit hex color
     ([\w\-]+)                    # the actual tag
     ''',
     re.X
@@ -155,7 +155,7 @@ def md_filter(text: str | None) -> Markup:
     """
     theme_col = theme_color()  # get the current theme color
 
-    # ➊ drop every line that starts with ^something:   (= caret meta)
+    # -- drop every line that starts with ^something:   (= caret meta)
     clean = "\n".join(
         ln for ln in (text or "").splitlines()
         if not ln.lstrip().startswith("^")
@@ -163,21 +163,21 @@ def md_filter(text: str | None) -> Markup:
 
     html = md.reset().convert(clean)
 
-    # post-process the generated HTML
-    def hashtag_repl(match):
+    # -- Hashtag `#tag` -------------------------------------------------
+    def _hashtag_repl(match):
         orig_tag = match.group(1)
         tag_lc   = orig_tag.lower() 
         href     = url_for("tags", tag_list=tag_lc)
         return f'<a href="{href}" style="text-decoration:none;color:{ theme_col };border-bottom:0.1px dotted currentColor;">#{orig_tag}</a>'
 
-    html = HASH_LINK_RE.sub(hashtag_repl, html)
+    html = HASH_LINK_RE.sub(_hashtag_repl, html)
     html = re.sub(
             r'(<mark)(>)',
             rf'\1 style="background:{ theme_col };color:#000;padding:0 .15em;"\2',
             html
         )
     
-    # ── 4 ▸ TeX → MathML ---------------------------------------------------
+    # -- TeX → MathML ---------------------------------------------------
     _DELIMS = [("$$", "$$"), (r"\[", r"\]"), (r"\(", r"\)"), ("$", "$")]
 
     def _undelimit(tex: str) -> str:
@@ -193,8 +193,7 @@ def md_filter(text: str | None) -> Markup:
                 unescape(_undelimit(m.group(2))),
                 display="inline" if m.group("tag") == "span" else "block"
             )
-            if m.group("tag") == "div":                      # block equation
-                # tabindex lets keyboard users scroll the box with ← →
+            if m.group("tag") == "div":                      
                 return f'<div class="math-scroll" tabindex="0">{mathml}</div>'
             return mathml
         except Exception:
@@ -202,7 +201,7 @@ def md_filter(text: str | None) -> Markup:
 
     html = ARITH_RE.sub(_to_mathml, html)
 
-    # ── 5 ▸ footnotes → <sup> links ---------------------------------------
+    # -- Pop-up Footnotes → <sup> links ----------------------------------
     def _popup_footnotes(html: str) -> str:
         div_m = _FOOTNOTE_DIV_RE.search(html)
         if not div_m:
@@ -303,10 +302,6 @@ def ts_filter(iso: str | None) -> str:
 
 @app.template_filter("url")
 def url_filter(url: str | None) -> str:
-    """
-    https://psyche.co/ideas/foo → https://psyche.co/
-    Returns the original string if it can’t be parsed.
-    """
     if not url:
         return ""
     try:
@@ -352,9 +347,9 @@ def init_db():
         ------------------------------------------------------------
         CREATE TABLE object (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            itype       TEXT NOT NULL,               -- book, movie, …
+            itype       TEXT NOT NULL,               
             title       TEXT NOT NULL,
-            slug        TEXT UNIQUE NOT NULL         -- never-let-me-go-2005
+            slug        TEXT UNIQUE NOT NULL         
         );
 
 
@@ -367,7 +362,7 @@ def init_db():
             body        TEXT NOT NULL,
             link        TEXT,
             created_at  TEXT NOT NULL,
-            updated_at  TEXT,                           -- NEW: seeded now
+            updated_at  TEXT,                           
             slug        TEXT UNIQUE NOT NULL,
             kind        TEXT NOT NULL                  -- say | post | pin | page
         );
@@ -402,7 +397,6 @@ def init_db():
         ------------------------------------------------------------
         -- 5.  Full-text search 
         ------------------------------------------------------------
-        /* the index itself */
         CREATE VIRTUAL TABLE IF NOT EXISTS entry_fts USING fts5(
             title, body, link,
             content='entry',
@@ -410,7 +404,6 @@ def init_db():
             tokenize = 'trigram'
         );
 
-        /* keep mirror in sync */
         CREATE TRIGGER IF NOT EXISTS entry_ai AFTER INSERT ON entry BEGIN
             INSERT INTO entry_fts(rowid,title,body,link)
                 VALUES (new.id,
@@ -420,11 +413,9 @@ def init_db():
         END;
 
         CREATE TRIGGER IF NOT EXISTS entry_au AFTER UPDATE ON entry BEGIN
-            /* ① drop the stale version */
             INSERT INTO entry_fts(entry_fts, rowid)
                 VALUES('delete', old.id);
 
-            /* ② add the fresh version */
             INSERT INTO entry_fts(rowid, title, body, link)
                 VALUES(
                     new.id,
@@ -434,7 +425,6 @@ def init_db():
                 );
         END;
 
-        /* AFTER DELETE: just remove it from the index */
         CREATE TRIGGER IF NOT EXISTS entry_ad AFTER DELETE ON entry BEGIN
             INSERT INTO entry_fts(entry_fts, rowid)
                 VALUES('delete', old.id);
@@ -445,13 +435,13 @@ def init_db():
         ------------------------------------------------------------
         CREATE TABLE IF NOT EXISTS item (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            uuid        TEXT UNIQUE NOT NULL,        -- canonical id (always)
-            slug        TEXT UNIQUE NOT NULL,        -- user-changeable
-            item_type   TEXT NOT NULL,               -- book / film / …
+            uuid        TEXT UNIQUE NOT NULL,        
+            slug        TEXT UNIQUE NOT NULL,        
+            item_type   TEXT NOT NULL,               
             title       TEXT NOT NULL
         );
 
-        CREATE TABLE IF NOT EXISTS item_meta (       -- arbitrary key/value
+        CREATE TABLE IF NOT EXISTS item_meta (       
             item_id INTEGER NOT NULL,
             k       TEXT NOT NULL,
             v       TEXT,
@@ -485,7 +475,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS passkey (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id       INTEGER NOT NULL,
-            cred_id       BLOB    UNIQUE NOT NULL,   -- raw bytes
+            cred_id       BLOB    UNIQUE NOT NULL,   
             pub_key       BLOB    NOT NULL,
             sign_count    INTEGER NOT NULL,
             nickname      TEXT,
@@ -709,8 +699,6 @@ def parse_trigger(text: str) -> tuple[str, list[dict]]:
             try:
                 blk = import_item_json(url, action=action)
             except ValueError as exc:
-                # Re-emit the original line so the user sees what failed,
-                # and record nothing.
                 new_lines.append(line + f"   ← {exc}")
                 i += 1
                 continue
@@ -745,25 +733,24 @@ def parse_trigger(text: str) -> tuple[str, list[dict]]:
                 "meta"      : {},
             }
 
-            # ── hoover up following '^key:value' lines ──────────────────
             j = i + 1
             while j < len(lines):
                 nxt = lines[j].strip()
                 if not nxt.startswith('^') or CARET_COMPACT_RE.match(nxt):
-                    break                       # stop on blank / non-caret / new block
+                    break                   
                 km = META_RE.match(nxt)
                 if km:
                     k, v = km.groups()
                     k = canon(k)
                     if k == "progress":
                         blk["progress"] = v
-                    elif k not in {          # core fields already set above
+                    elif k not in {          
                             "action", "verb", "item", "item_type",
                             "title", "uuid", "slug"}:
                         blk["meta"][k] = v
                 j += 1
 
-            i = j                              # skip the absorbed lines
+            i = j                              
             out_blocks.append(blk)
             new_lines.append(f'^{item_type}:$PENDING${len(out_blocks)-1}$')
             continue
@@ -824,7 +811,6 @@ def get_or_create_item(*, item_type, title, meta,
                        slug: str | None = None,
                        db,
                        update_meta: bool = True):
-    # ➊ look up by slug first (if given)  --------------------------
     if slug:
         row = db.execute("SELECT id, slug, uuid FROM item WHERE slug=?", (slug,)).fetchone()
         if row:
@@ -834,10 +820,6 @@ def get_or_create_item(*, item_type, title, meta,
             if row:
                 return row["id"], row["slug"], row["uuid"]
 
-    # ➋ no slug/uuid → **always** create a new item
-    #     (titles are allowed to repeat)
-
-    # ➌ …or create a fresh item ------------------------------------
     if title is None:
         raise ValueError("slug not found and no title given → cannot create item")
     
@@ -916,17 +898,14 @@ app.jinja_env.globals["csrf_token"] = _csrf_token
 app.jinja_env.globals['is_b64_image'] = is_b64_image
 
 def theme_color() -> str:
-    """Current theme colour (hex), falling back to the original green."""
-    return get_setting('theme_color', '#A5BA93')
+    """Current theme color (hex), falling back to the original green."""
+    return get_setting('theme_color', '#fda3a5')
 app.jinja_env.globals["theme_color"] = theme_color
 
 THEME_PRESETS = {
-    "Fern"   : "#A5BA93", 
-    "Ocean"  : "#70C0E8",
-    "Sunset" : "#F28C6B",
-    "Lavender": "#BC9CFF",
-    "Cherry" : "#EF476F",
-    "Gold"   : "#F0A202",
+    "萌木": "#9ccf70", "浅縹": "#95bbec", "退紅": "#fda3a5",
+    "薄色": "#c386c2", "浅緋": "#d3250c", "朱祓": "#f1884f",
+    "欽冬": "#fed410", "木蘭": "#b1a277",
 }
 app.jinja_env.globals["theme_presets"] = THEME_PRESETS
 
@@ -1378,8 +1357,8 @@ def webauthn_rename_passkey(pkid):
 ###############################################################################
 @app.route('/favicon.svg')
 def favicon():
-    """Return a 64 px SVG favicon whose colour follows the current theme."""
-    # ── background = theme colour ───────────────────────────────────────────
+    """Return a 64 px SVG favicon whose color follows the current theme."""
+    # ── background = theme color ───────────────────────────────────────────
     bg = theme_color().lstrip('#')
     if len(bg) == 3:                               # allow #abc shorthand
         bg = ''.join(c*2 for c in bg)
@@ -1396,7 +1375,7 @@ def favicon():
       <rect width="64" height="64" rx="8" ry="8" fill="#{bg}"/>
       <text x="32" y="46" text-anchor="middle"
             font-family="Arial,Helvetica,sans-serif"
-            font-size="48" font-weight="700"
+            font-size="42" font-weight="800"
             fill="{fg}">{letter}</text>
     </svg>'''
 
@@ -1478,7 +1457,7 @@ def settings():
                     col = '#' + col
                 set_setting('theme_color', col)
             else:
-                flash('Invalid colour – please use 6-digit hex.')
+                flash('Invalid color – please use 6-digit hex.')
 
         set_setting('slug_say',  request.form.get('slug_say',  '').strip() or 'say')
         set_setting('slug_post', request.form.get('slug_post', '').strip() or 'post')
@@ -1520,14 +1499,28 @@ TEMPL_SETTINGS = wrap("""
                 <span style="font-size:.8em; color:#aaa">Username</span><br>
                 <input name="username" value="{{ username }}" style="width:100%">
             </label>
-                      
-            <label style="display:block; margin:.5rem 0">
-                <span style="font-size:.8em; color:#aaa">Theme colour</span><br>
+            <label style="display:flex; margin:.5rem 0">
+                <span style="font-size:.8em; color:#aaa;margin-right:1rem">Theme color</span><br>
                 <input name="theme_color"
                     value="{{ get_setting('theme_color', '#A5BA93') }}"
                     placeholder="#A5BA93"
                     style="width:8rem">
             </label>
+            <details style="margin:.25rem 0 1rem 0;">
+                <summary style="font-size:1rem;color:#aaa;">
+                    Presets
+                </summary>
+                <div style="display:flex;flex-wrap:wrap;gap:.6rem 1.2rem;align-items:center;margin:.75rem 0 0 0;font-size:.8em;">
+                    {% for name, col in theme_presets.items() %}
+                        <span style="display:flex;align-items:center;gap:.4rem;">
+                            <span style="width:1.25rem; height:1.25rem;border:1px solid #555;border-radius:.15rem;background:{{ col }};">
+                            </span>
+                            <code>{{ col }}</code>
+                            <small style="color:#888;">{{ name }}</small>
+                        </span>
+                    {% endfor %}
+                </div>
+            </details>
         </fieldset>
 
         <!-- ──────────── slugs ──────────── -->
@@ -1628,7 +1621,6 @@ TEMPL_SETTINGS = wrap("""
         {% else %}
         <li>No passkeys yet.</li>
         {% endfor %}
-
 
     <button id="add-pk">Add&nbsp;Passkey</button>
 
@@ -1756,8 +1748,6 @@ TEMPL_SETTINGS = wrap("""
     });
     })();
     </script>
-
-
     <br>
     <hr style="margin:2rem 0">
     <!-- logout link, vertically centered -->
@@ -1767,7 +1757,6 @@ TEMPL_SETTINGS = wrap("""
         ⎋ Log&nbsp;out
         </a>
     </div>
-    
     {% endblock %}
 """)
 
@@ -2743,7 +2732,7 @@ def tags(tag_list: str):
                          ORDER BY LOWER(t.name)""")
     rows = [dict(r) for r in cur]           # make mutable dicts
 
-    # ---------- who is currently selected? ----------------------------------
+    # ---------- which is currently selected? ----------------------------------
     selected = {t.lower() for t in tag_list.split('+') if t}
 
     # ---------- scale counts → font-size (same as before) -------------------
