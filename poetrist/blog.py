@@ -81,6 +81,7 @@ ALIASES = {
     "i"    : "item_type", "it"   : "item_type",
     "a"    : "action",    "at"   : "action",
     "v"    : "verb",      "vb"   : "verb",
+    "t"    : "title",     "tt"  : "title",
 }
 def canon(k: str) -> str:        # helper: ^pg → progress
     return ALIASES.get(k.lower(), k.lower())
@@ -156,11 +157,28 @@ def md_filter(text: str | None) -> Markup:
     theme_col = theme_color()  # get the current theme color
 
     # -- drop every line that starts with ^something:   (= caret meta)
-    clean = "\n".join(
-        ln for ln in (text or "").splitlines()
-        if not ln.lstrip().startswith("^")
-    )
+    def _drop_caret_meta(text: str) -> str:
+        """
+        Remove ^meta lines **except** when they are inside a fenced
+        code-block (``` … ``` or ~~~ … ~~~).
+        """
+        out, in_code, fence = [], False, ""
+        for ln in (text or "").splitlines():
+            m = _CODE_FENCE_RE.match(ln)
+            if m:                                    # toggle fence status
+                tok = m.group(1)
+                if not in_code:
+                    in_code, fence = True, tok
+                elif tok == fence:                   # matching closer
+                    in_code, fence = False, ""
+                out.append(ln)
+                continue
 
+            if in_code or not ln.lstrip().startswith("^"):
+                out.append(ln)                       # keep line
+        return "\n".join(out)
+
+    clean = _drop_caret_meta(text)
     html = md.reset().convert(clean)
 
     # -- Hashtag `#tag` -------------------------------------------------
@@ -682,13 +700,35 @@ IMPORT_RE = re.compile(r'''
     :
     (https?://\S+)                   # absolute URL (grp3)
 ''', re.X | re.I)
+_CODE_FENCE_RE = re.compile(r'^\s*(```|~~~)')
 
 def parse_trigger(text: str) -> tuple[str, list[dict]]:
     out_blocks, new_lines = [], []
     lines = text.splitlines()
+    in_code = False
+    fence   = ""
     i = 0
     while i < len(lines):
-        line = lines[i].strip()
+        ln = lines[i]
+
+        # ── enter / leave fenced code ───────────────────────────────
+        m_f = _CODE_FENCE_RE.match(ln)
+        if m_f:
+            tok = m_f.group(1)
+            if not in_code:                # start of a fence
+                in_code, fence = True, tok
+            elif tok == fence:             # matching closing fence
+                in_code, fence = False, ""
+            new_lines.append(ln)
+            i += 1
+            continue
+
+        if in_code:
+            new_lines.append(ln)           # inside a code block → leave untouched
+            i += 1
+            continue
+
+        line = ln.strip()
 
         # ───────────────────────── 1) import block  (NEW) ──────────────────
         m = IMPORT_RE.match(line)
