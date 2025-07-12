@@ -178,7 +178,7 @@ def md_filter(text: str | None) -> Markup:
                 out.append(ln)                       # keep line
         return "\n".join(out)
 
-    clean = _drop_caret_meta(text)
+    clean = _drop_caret_meta((text or ""))
     html = md.reset().convert(clean)
 
     # -- Hashtag `#tag` -------------------------------------------------
