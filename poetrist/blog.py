@@ -2,10 +2,8 @@
 """
 A single-file minimal blog.
 """
-import os
 import re
 import secrets
-import shlex
 import sqlite3
 import uuid
 from collections import defaultdict, deque
