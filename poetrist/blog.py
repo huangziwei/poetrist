@@ -905,7 +905,7 @@ app.jinja_env.globals["theme_color"] = theme_color
 THEME_PRESETS = {
     "萌木": "#9ccf70", "浅縹": "#95bbec", "退紅": "#fda3a5",
     "薄色": "#c386c2", "浅緋": "#d3250c", "朱祓": "#f1884f",
-    "欽冬": "#fed410", "木蘭": "#b1a277",
+    "欵冬": "#fed410", "木蘭": "#b1a277",
 }
 app.jinja_env.globals["theme_presets"] = THEME_PRESETS
 
