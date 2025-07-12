@@ -51,7 +51,8 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 from werkzeug.middleware.proxy_fix import ProxyFix
-from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.security import check_password_hash as verify_token
+from werkzeug.security import generate_password_hash as hash_token
 
 ################################################################################
 # Imports & constants
@@ -345,7 +346,6 @@ def init_db():
         CREATE TABLE IF NOT EXISTS user (
             id          INTEGER PRIMARY KEY,
             username    TEXT UNIQUE NOT NULL,
-            pwd_hash    TEXT NOT NULL,
             token_hash  TEXT NOT NULL
         );
 
@@ -509,29 +509,12 @@ def utc_now() -> datetime:
 ###############################################################################
 # CLI – create admin + token
 ###############################################################################
-def load_simple_env(path=".env"):
-    p = Path(path)
-    if not p.exists():        # ── silently ignore if the file is absent
-        return
-
-    for line in p.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        os.environ.setdefault(k, shlex.split(v)[0])   # unquote if needed
-
-load_simple_env()
-
-def _create_admin(db, *, username: str, password: str) -> str:
-    """Insert admin user and return the one-time token."""
-    handle = secrets.token_urlsafe(TOKEN_LEN)          # random payload
-    token  = signer.sign(handle).decode()              # handle.timestamp.sig
+def _create_admin(db, *, username: str) -> str:
+    handle = secrets.token_urlsafe(TOKEN_LEN)
+    token  = signer.sign(handle).decode()
     db.execute(
-        "INSERT INTO user (username, pwd_hash, token_hash) VALUES (?,?,?)",
-        (username,
-         generate_password_hash(password),
-         generate_password_hash(handle))
+        "INSERT INTO user (username, token_hash) VALUES (?,?)",
+        (username, hash_token(handle)),
     )
     db.commit()
     return token
@@ -543,24 +526,19 @@ def _rotate_token(db) -> str:
     token  = signer.sign(handle).decode()
     db.execute(
         "UPDATE user SET token_hash=? WHERE id=1",
-        (generate_password_hash(handle),)
+        (hash_token(handle),)
     )
     db.commit()
     return token
 
 @app.cli.command("init")
-@click.option("--username", envvar="ADMIN_USERNAME", prompt=True,
+@click.option("--username", prompt=True,
               help="Admin username (will be created if DB empty)")
-@click.option("--password", envvar="ADMIN_PASSWORD", prompt=True, hide_input=True,
-              confirmation_prompt=True,
-              help="Admin password")
-def cli_init(username: str, password: str):
+def cli_init(username: str):
     """Initialise DB *and* create the first admin account."""
     init_db()                           # no-op if already there
     db = get_db()
-    token = _create_admin(db,
-                          username=username.strip(),
-                          password=password.strip())
+    token = _create_admin(db, username=username.strip())
 
     click.secho("\n✅  Admin created.", fg="green")
     click.echo(f"\nOne-time login token:\n\n{token}\n")
@@ -1083,7 +1061,7 @@ def validate_token(token: str, max_age: int = 60) -> bool:
 
     row = get_db().execute(
             'SELECT token_hash FROM user LIMIT 1').fetchone()
-    return row and check_password_hash(row['token_hash'], handle)
+    return row and verify_token(row['token_hash'], handle)
 
 def login_required() -> None:         
     if not session.get("logged_in"):
@@ -1127,7 +1105,7 @@ def login():
         db = get_db()
         db.execute(
             'UPDATE user SET token_hash=? WHERE id=1',
-            (generate_password_hash(secrets.token_hex(16)),)
+            (hash_token(secrets.token_hex(16)),)
         )
         db.commit()
 

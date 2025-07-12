@@ -21,12 +21,6 @@ log()       { printf '%s · %s\n' "$(timestamp)" "$*"; }
 
 # ───── constants ───────────────────────────────────────────────────────────────
 APP="poetrist"
-remote_db_path() {
-  fly ssh console -a "$APP" -C "/app/.venv/bin/python -c 'import pathlib, poetrist.blog, sys; \
-  print(pathlib.Path(poetrist.blog.DB_FILE).resolve())'"
-}
-
-REMOTE_DB=$(remote_db_path)
 
 LOCAL_DB="poetrist/blog.sqlite3.backup"     # backup copy pulled from Fly
 RESTORED_DB="poetrist/blog.sqlite3"
@@ -75,9 +69,20 @@ check_secret() {
 
 pull_db() {
   log "⬇️   Checking if remote database changed…"
+  remote_db_path() {
+    fly ssh console -a "$APP" -C "/app/.venv/bin/python -c 'import pathlib, poetrist.blog, sys; \
+    print(pathlib.Path(poetrist.blog.DB_FILE).resolve())'"
+  }
+  
+  local remote_hash local_hash remote_db
 
-  local remote_hash local_hash
-  remote_hash=$(hash_db "$REMOTE_DB") || true
+  remote_db=$(remote_db_path)
+  if [[ -z "$remote_db" ]]; then
+    log "❌  Could not determine remote DB path – aborting."
+    return 1
+  fi
+
+  remote_hash=$(hash_db "$remote_db") || true
   local_hash=$(hash_db "$LOCAL_DB")   || true
 
   if [[ -z "$remote_hash" ]]; then
@@ -89,7 +94,7 @@ pull_db() {
     log "🔄  Hashes differ – downloading new copy…"
   fi
 
-  if fly ssh sftp get "$REMOTE_DB" "$TMP_DB" -a "$APP" 2>/dev/null; then
+  if fly ssh sftp get "$remote_db" "$TMP_DB" -a "$APP" 2>/dev/null; then
     mv -f "$TMP_DB" "$LOCAL_DB"
     log "pulled → $LOCAL_DB"
   else
