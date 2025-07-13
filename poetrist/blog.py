@@ -68,20 +68,19 @@ signer = TimestampSigner(SECRET_KEY, salt='login-token')
 
 SLUG_DEFAULTS = {"say": "says", "post": "posts", "pin": "pins"}
 VERB_MAP = {
-    "read"   : ["to-read", "to read", "reading", "read", "rereading", "reread", "finished reading", "reflect"],
-    "watch"  : ["to-watch", "to watch" , "watching", "watched", "rewatching", "rewatched", "reflect"],
-    "listen" : ["to-listen", "to listen", "listening", "listened", "relistening", "relistened", "reflect"],
-    "play"   : ["to-play", "to play", "playing", "played", "replaying", "replayed", "reflect"],
-    "visit"  : ["to-visit", "to visit", "visiting", "visited", "revisiting", "revisited", "reflect"],
-    "use": ["to-use", "to use", "using", "used", "reusing", "reused", "reflect"],
-    "buy": ["to-buy", "to buy", "buying", "bought", "rebuying", "rebought", "reflect"],
+    "read"   : ["to-read", "to read", "reading", "read", "to reread", "rereading", "reread", "finished reading", "reflect", "skimmed", "abandoned"],
+    "watch"  : ["to-watch", "to watch" , "watching", "watched", "to rewatch", "rewatching", "rewatched", "reflect", "abandoned"],
+    "listen" : ["to-listen", "to listen", "listening", "listened","to relisten", "relistening", "relistened", "reflect", "abandoned"],
+    "play"   : ["to-play", "to play", "playing", "played", "to replay", "replaying", "replayed", "reflect", "abandoned"],
+    "visit"  : ["to-visit", "to visit", "visiting", "visited", "to revisit", "revisiting", "revisited", "reflect", "regular"],
+    "use"    : ["to-use", "to use", "using", "used", "to reuse", "reusing", "reused", "reflect", "retired", "replaced"],
 }
 ALIASES = {
-    "p"    : "progress",  "pg"   : "progress",
-    "i"    : "item_type", "it"   : "item_type",
-    "a"    : "action",    "at"   : "action",
-    "v"    : "verb",      "vb"   : "verb",
-    "t"    : "title",     "tt"  : "title",
+    "p": "progress",  "pg": "progress",
+    "i": "item_type", "it": "item_type",
+    "a": "action",    "at": "action",
+    "v": "verb",      "vb": "verb",
+    "t": "title",     "tt": "title",
 }
 def canon(k: str) -> str:        # helper: ^pg → progress
     return ALIASES.get(k.lower(), k.lower())
