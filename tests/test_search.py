@@ -4,6 +4,7 @@ tests/test_search.py
 from __future__ import annotations
 
 import re
+import uuid
 
 import poetrist.blog as blog
 from poetrist.blog import extract_tags, get_db, sync_tags
@@ -85,3 +86,90 @@ def test_sort_new_vs_old(client):
     assert hits_new[0] == slug_new
     # oldest first
     assert hits_old[0] == slug_old
+
+def _add_item(
+    *,
+    item_type: str = "book",
+    title: str,
+    meta: dict[str, str] | None = None,
+    verb: str = "read",
+) -> str:
+    """
+    • create one `item` + some `item_meta`
+    • add a single “check-in” entry so the item actually shows up
+      in the ranked list (the query orders by #check-ins).
+    Returns the item’s slug so tests can look for it in the HTML.
+    """
+    db = get_db()
+    slug = title.lower().replace(" ", "-")
+    uuid_ = str(uuid.uuid4())
+
+    db.execute(
+        "INSERT INTO item (uuid, slug, item_type, title) VALUES (?,?,?,?)",
+        (uuid_, slug, item_type, title),
+    )
+    item_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    if meta:
+        for ord_, (k, v) in enumerate(meta.items(), 1):
+            db.execute(
+                "INSERT INTO item_meta (item_id,k,v,ord) VALUES (?,?,?,?)",
+                (item_id, k, v, ord_),
+            )
+
+    # one tiny entry that links to the item
+    now_dt = blog.utc_now()
+    ent_slug = now_dt.strftime("%Y%m%d%H%M%S")
+    db.execute(
+        "INSERT INTO entry (body, created_at, slug, kind) VALUES (?,?,?,?)",
+        (f"{verb.title()}ing *{title}*", now_dt.isoformat(timespec='seconds'), ent_slug, verb),
+    )
+    entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    db.execute(
+        "INSERT INTO entry_item (entry_id,item_id,verb,action,progress) "
+        "VALUES (?,?,?,?,?)",
+        (entry_id, item_id, verb, f"{verb}ing", None),
+    )
+    db.commit()
+    return slug
+
+
+def _item_slugs(html: str) -> list[str]:
+    """
+    Extract every `/verb/<type>/<slug>` occurrence from the item-search page.
+    """
+    return re.findall(r'/[a-z]+/[a-z0-9_-]+/([a-z0-9_-]+)"', html, flags=re.I)
+
+
+# ───────────────────────── actual tests ────────────────────────────────
+def test_item_search_by_title(client):
+    """
+    `book:"Trial"` should match the item whose *title* contains “Trial”.
+    """
+    slug = _add_item(item_type="book", title="The Trial", meta={"author": "Franz Kafka"})
+
+    rv = client.get('/search?q=book:"Trial"')
+    assert rv.status_code == 200
+    html = rv.data.decode()
+
+    assert slug in _item_slugs(html)
+    assert "The Trial" in html
+
+
+def test_item_search_by_specific_field(client):
+    """
+    `book:author:kafka` should hit items where meta.author LIKE "%kafka%".
+    """
+    slug_ok = _add_item(
+        item_type="book",
+        title="Metamorphosis",
+        meta={"author": "Franz Kafka"},
+    )
+    _add_item(item_type="book", title="The Iliad", meta={"author": "Homer"})  # distractor
+
+    html = client.get("/search?q=book:author:kafka").data.decode()
+
+    assert slug_ok in _item_slugs(html)
+    assert "Metamorphosis" in html
+    # ensure the Iliad is NOT in the result set
+    assert "iliad" not in html.lower()
