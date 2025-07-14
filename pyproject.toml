@@ -22,4 +22,7 @@ dependencies = [
 dev = [
     "ruff",
     "pytest",
+    "pytest-flask",
+    "pytest-cov",
+    "coverage[toml]",
 ]
