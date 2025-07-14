@@ -1048,6 +1048,13 @@ TEMPL_EPILOG = """
 
         <!-- right-hand side – extra pages -->
         <nav style="display:inline-block;">
+            {% if has_today() %}
+                <a href="{{ url_for('today') }}"
+                {% if request.endpoint == 'today' %}
+                    style="text-decoration:none;border-bottom:.33rem solid #aaa;"
+                {% endif %}>
+                Today</a>&nbsp;
+            {% endif %}
             {% for p in nav_pages() %}
                 <a href="{{ '/' ~ p['slug'] }}"
                 {% if request.path|trim('/') == p['slug'] %}
@@ -3971,6 +3978,242 @@ TEMPL_SEARCH_ITEMS = wrap("""
   {% else %}
       <p>No items.</p>
   {% endif %}
+{% endblock %}
+""")
+
+###############################################################################
+# On This Day
+###############################################################################
+def _today_md() -> tuple[str, str]:
+    """Return ('MM', 'DD') for the current day in Europe/Berlin."""
+    now = datetime.now(ZoneInfo("Europe/Berlin"))
+    return now.strftime("%m"), now.strftime("%d")
+
+def _today_stats(*, db):
+    """
+    Return a list of dicts [{y:'2023', cnt:4}, …] for today’s month-day,
+    ordered newest-year first.
+    """
+    mm, dd = _today_md()
+    rows = db.execute(
+        """
+        SELECT substr(created_at,1,4) AS y,
+               COUNT(*)               AS cnt
+          FROM entry
+         WHERE substr(created_at,6,2)=?
+           AND substr(created_at,9,2)=?
+           AND kind!='page'
+         GROUP BY y
+         ORDER BY y DESC
+        """,
+        (mm, dd),
+    ).fetchall()
+    # sqlite Row supports attribute access – convert to regular dict for safety
+    return [dict(r) for r in rows]
+
+def today_years(*, db) -> list[str]:
+    """Helper so other parts of the code (or templates) can reuse the years list."""
+    return [r["y"] for r in _today_stats(db=db)]
+
+
+def has_today() -> bool:
+    """Show the link only when ≥ 2 different years match today."""
+    return len(today_years(db=get_db())) >= 2
+
+app.jinja_env.globals.update(has_today=has_today)
+
+@app.route("/today", defaults={"year": None})
+@app.route("/today/<int:year>")
+def today(year):
+    db        = get_db()
+    stats     = _today_stats(db=db)               # [{y, cnt}, …]
+    years     = [r["y"] for r in stats]           # plain list for convenience
+    counts    = {r["y"]: r["cnt"] for r in stats} # {'2024':3, …}
+    total_cnt = sum(counts.values())
+    selected = str(year) if year else ""
+    mm, dd   = _today_md()
+
+    cond   = ""
+    params = [mm, dd]
+    if year:
+        cond = " AND substr(e.created_at,1,4)=?"
+        params.append(f"{year:04d}")
+
+    BASE_SQL = f"""
+        SELECT  e.*,
+                ei.action,
+                ei.progress,
+                i.title       AS item_title,
+                i.slug        AS item_slug,
+                i.item_type   AS item_type,
+                MIN(CASE
+                        WHEN im.k='date' AND LENGTH(im.v)>=4
+                        THEN SUBSTR(im.v,1,4)
+                    END)      AS item_year
+        FROM entry e
+        LEFT JOIN entry_item ei ON ei.entry_id = e.id
+        LEFT JOIN item       i  ON i.id        = ei.item_id
+        LEFT JOIN item_meta  im ON im.item_id  = i.id
+        WHERE substr(e.created_at,6,2)=? AND substr(e.created_at,9,2)=? {cond}
+          AND e.kind!='page'
+        GROUP BY e.id
+        ORDER BY e.created_at DESC
+    """
+
+    page             = max(int(request.args.get("page", 1)), 1)
+    per_page         = page_size()
+    entries, pages_t = paginate(BASE_SQL, tuple(params),
+                                page=page, per_page=per_page, db=db)
+    pages = list(range(1, pages_t + 1))
+
+    return render_template_string(
+        TEMPL_TODAY,
+        rows       = entries,
+        stats      = stats,          # [{y, cnt}, …] for pills
+        years      = years,          # simple list if you still need it
+        total_cnt  = total_cnt,
+        selected   = selected,
+        page       = page,
+        pages      = pages,
+        title      = get_setting("site_name", "po.etr.ist"),
+        kind       = "today",
+        username   = current_username(),
+    )
+
+
+TEMPL_TODAY = wrap("""
+{% block body %}
+<hr>
+
+<!-- —— Year-pills ———————————————————————————————————————— -->
+<div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
+  <!-- All-years pill -->
+  <a href="{{ url_for('today') }}"
+     style="text-decoration:none;border-bottom:none;
+            display:inline-flex;margin:.15rem 0;padding:.15rem .6rem;
+            border-radius:1rem;font-size:.8em;
+            {% if not selected %}
+              background:{{ theme_color() }};color:#000;
+            {% else %}
+              background:#444;color:{{ theme_color() }};
+            {% endif %}">
+     All
+     <sup style="font-size:.5em;">{{ total_cnt }}</sup>
+  </a>
+
+  <!-- One pill per year -->
+  {% for y in stats %}
+    <a href="{{ url_for('today', year=y.y) }}"
+       style="text-decoration:none;border-bottom:none;
+              display:inline-flex;margin:.15rem 0;padding:.15rem .6rem;
+              border-radius:1rem;font-size:.8em;
+              {% if selected == y.y %}
+                background:{{ theme_color() }};color:#000;
+              {% else %}
+                background:#444;color:{{ theme_color() }};
+              {% endif %}">
+       {{ y.y }}
+       <sup style="font-size:.5em;">{{ y.cnt }}</sup>
+    </a>
+  {% endfor %}
+</div>
+
+<!-- —— Entry list ———————————————————————————————————————— -->
+{% if rows %}
+  <hr>
+  {% for e in rows %}
+    <article style="padding-bottom:1.5rem;
+                    {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
+      {% if e.title %}
+        <h3 style="margin:.4rem 0;">{{ e.title }}</h3>
+      {% endif %}
+      <p>{{ e.body|md }}</p>
+      <small style="color:#aaa;">
+
+        {# —— Item-related pills & link (if any) ———————————————— #}
+        {% if e.item_title %}
+          <span style="display:inline-block;padding:.1em .6em;margin-right:.4em;
+                       background:#444;color:#fff;border-radius:1em;font-size:.75em;
+                       text-transform:capitalize;vertical-align:middle;">
+            {{ e.action|smartcap }}
+          </span>
+
+          {% if e.item_type %}
+            <span style="display:inline-block;padding:.1em .6em;margin-right:.4em;
+                         background:#444;color:#fff;border-radius:1em;font-size:.75em;
+                         vertical-align:middle;">
+              {{ e.item_type|smartcap }}
+            </span>
+          {% endif %}
+
+          {% if e.progress %}
+            <span style="display:inline-block;padding:.1em .6em;margin-right:.4em;
+                         background:#444;color:#fff;border-radius:1em;font-size:.75em;
+                         vertical-align:middle;">
+              {{ e.progress }}
+            </span>
+          {% endif %}
+
+          <a href="{{ url_for('item_detail',
+                              verb=e.kind,
+                              item_type=e.item_type,
+                              slug=e.item_slug) }}"
+             style="text-decoration:none;margin-right:.4em;
+                    color:{{ theme_color() }};vertical-align:middle;">
+             {{ e.item_title }}{% if e.item_year %} ({{ e.item_year }}){% endif %}
+          </a><br>
+        {% endif %}
+
+        {# —— Kind pill ———————————————————————————————— #}
+        <span style="display:inline-block;padding:.1em .6em;margin-right:.4em;
+                     background:#444;color:#fff;border-radius:1em;font-size:.75em;
+                     text-transform:capitalize;vertical-align:middle;">
+          {{ e.kind }}
+        </span>
+
+        {# —— Timestamp ———————————————————————————————— #}
+        <a href="{{ url_for('entry_detail',
+                             kind_slug=kind_to_slug(e.kind),
+                             entry_slug=e.slug) }}"
+           style="text-decoration:none;color:inherit;vertical-align:middle;font-variant-numeric:tabular-nums;">
+           {{ e.created_at|ts }}
+        </a>
+
+        {# —— Admin links ———————————————————————————————— #}
+        {% if session.get('logged_in') %}
+          &nbsp;
+          <a href="{{ url_for('edit_entry',
+                               kind_slug=kind_to_slug(e.kind),
+                               entry_slug=e.slug) }}"
+             style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
+          <a href="{{ url_for('delete_entry',
+                               kind_slug=kind_to_slug(e.kind),
+                               entry_slug=e.slug) }}"
+             style="vertical-align:middle;">Delete</a>
+        {% endif %}
+
+      </small>
+    </article>
+  {% endfor %}
+
+  {% if pages|length > 1 %}
+    <nav style="margin-top:1rem;font-size:.75em;">
+      {% for p in pages %}
+        {% if p == page %}
+          <span style="border-bottom:.33rem solid #aaa;">{{ p }}</span>
+        {% else %}
+          <a href="{{ url_for('today',
+                              year=selected if selected else None,
+                              page=p) }}">{{ p }}</a>
+        {% endif %}
+        {% if not loop.last %}&nbsp;{% endif %}
+      {% endfor %}
+    </nav>
+  {% endif %}
+{% else %}
+  <hr>
+  <p>No entries for today yet.</p>
+{% endif %}
 {% endblock %}
 """)
 
