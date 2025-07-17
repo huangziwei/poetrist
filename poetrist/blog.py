@@ -1432,16 +1432,21 @@ def favicon():
 @app.route('/robots.txt')
 def robots():
     """
-    Block every crawler – search engines, AI spiders, everything.
+    Allow selected well-behaved crawlers, nudge everyone else away.
     """
     rules = (
+        "User-agent: GPTBot\n"
+        "Allow: /\n\n"
+        "User-agent: Googlebot\n"
+        "Allow: /\n\n"
+        "User-agent: Bingbot\n"
+        "Allow: /\n\n"
+        "User-agent: Applebot\n"
+        "Allow: /\n\n"
         "User-agent: *\n"
         "Disallow: /\n"
     )
-    # Cache it for a year – the file never changes
-    return Response(rules, mimetype='text/plain', direct_passthrough=True), 200, {
-        "Cache-Control": "public, max-age=31536000"
-    }
+    return Response(rules, mimetype="text/plain", direct_passthrough=True), 200, {"Cache-Control": "public, max-age=86400"}  # 1 day cache
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
 
