@@ -10,8 +10,8 @@ REMOTE="/Root/${STAMP}.sqlite3"    # MEGA destination
 
 megaput --path "$REMOTE" "$DB_SRC"
 
-megals /Root/ | \
-  grep -E '\.sqlite3$' | sort | head -n -30 | \
-  while read -r old ; do
-      megarm "/Root/$old"
-  done
+KEEP=30                                    
+megals /Root/ | grep '\.sqlite3$' | sort -r |      # newest → oldest
+awk -v keep="$KEEP" 'NR>keep' | while read -r old; do
+    megarm "$old"
+done
