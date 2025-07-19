@@ -2412,6 +2412,22 @@ TEMPL_ITEM_LIST = wrap("""
 ###############################################################################
 # Entries (Say, Post, Pin)
 ###############################################################################
+def backlinks(entry_id: int, slug: str, *, db, limit: int = 30):
+    """
+    Entries that reference *slug*, newest first, excluding the entry itself.
+    Uses the existing entry_fts trigram index ➜ O(log N) lookup.
+    """
+    sql = """
+        SELECT e.id, e.slug, e.kind, e.title, e.created_at
+          FROM entry_fts
+          JOIN entry e ON e.id = entry_fts.rowid
+         WHERE entry_fts MATCH ?
+           AND e.id != ?
+         ORDER BY e.created_at ASC
+         LIMIT ?
+    """
+    return db.execute(sql, (slug, entry_id, limit)).fetchall()
+
 
 @app.route('/<kind_slug>/<entry_slug>')
 def entry_detail(kind_slug, entry_slug):
@@ -2449,6 +2465,7 @@ def entry_detail(kind_slug, entry_slug):
     return render_template_string(
         TEMPL_ENTRY_DETAIL,
         e=row,
+        backlinks=backlinks(row['id'], row['slug'], db=db),
         title=get_setting('site_name', 'po.etr.ist'),
         username=current_username(),
         kind=row['kind'],
@@ -2471,7 +2488,28 @@ TEMPL_ENTRY_DETAIL = wrap("""
                 <h2>{{ e['title'] }}</h2>
             {% endif %}
 
-            <p>{{ e['body']|md }}</p>                
+            <p>{{ e['body']|md }}</p>    
+            {% if backlinks %}
+            <p>
+                <details class="backlinks" style="margin-top:1.5rem;font-size:1rem;">
+                    <summary style="cursor:pointer;font-weight:bold;">
+                    Backlinks&nbsp;({{ backlinks|length }})
+                    </summary>
+                    <ol style="margin:1rem 0 0 1.5rem;">
+                    {% for b in backlinks %}
+                        <li>
+                        <a href="{{ url_for('entry_detail',
+                                            kind_slug=kind_to_slug(b.kind),
+                                            entry_slug=b.slug) }}">
+                            {{ b.title or b.slug }}
+                        </a>
+                        – {{ b.created_at|ts }}
+                        </li>
+                    {% endfor %}
+                    </ol>
+                </details>
+            </p>
+            {% endif %}            
             <small style="color:#aaa;">
 
             {# —— item info (if any) ———————————————————————— #}
