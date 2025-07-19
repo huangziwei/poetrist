@@ -86,8 +86,11 @@ def test_kind_rss_only_shows_that_kind(client):
 def test_tags_rss_filters_by_tag(client):
     tag = "rsstag"
     tag_title = "Tag-RSS-Entry"
-    _add_entry(kind="say", body=f"This is a #{tag} test titled {tag_title}")
-
+    _add_entry(
+        kind="say",
+        title=tag_title,                              # ← add a proper title
+        body=f"This is a #{tag} test titled {tag_title}",
+    )
     root = _xml(client.get(f"/tags/{tag}/rss"))
 
     titles = _item_titles(root)

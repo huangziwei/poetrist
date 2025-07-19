@@ -14,7 +14,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from time import time
 from typing import DefaultDict
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 from zoneinfo import ZoneInfo
 
 import click
@@ -85,20 +85,17 @@ def canon(k: str) -> str:        # helper: ^pg → progress
     return ALIASES.get(k.lower(), k.lower())
 KINDS = ("say", "post", "pin") + tuple(VERB_MAP.keys()) + ("page",)
 PAGE_DEFAULT = 100
-TAG_RE = re.compile(r'(?<!\w)#([\w\-]+)')
 RFC2822_FMT = "%a, %d %b %Y %H:%M:%S %z"
 _TOKEN_CHARS = r"0-9A-Za-z\u0080-\uFFFF_"
 TOKEN_RE     = re.compile(f"[{_TOKEN_CHARS}]+")
-HASH_LINK_RE = re.compile(
-    r'''
-    (?<![A-Za-z0-9_="'&])        # no word char, quote, = or & right before
-    \#                           # literal “#”
-    (?!x?[0-9A-Fa-f]+;)          # NOT an HTML entity  (e.g. &#x1F60A;)
-    (?![0-9A-Fa-f]{3,8}\b)       # ★ NEW: NOT a 3- to 8-digit hex color
-    ([\w\-]+)                    # the actual tag
-    ''',
-    re.X
-)
+TAG_CHARS = r'[\w./-]+'
+TAG_RE = re.compile(rf'(?<!\w)#({TAG_CHARS})')
+HASH_LINK_RE = re.compile(rf'''
+    (?<![A-Za-z0-9_="'&]) \#
+    (?!x?[0-9A-Fa-f]+;)
+    (?![0-9A-Fa-f]{{3,8}}\b)
+    ({TAG_CHARS})
+''', re.X)
 ARITH_RE = re.compile(
     r'<(?P<tag>span|div) class="arithmatex">(.*?)</(?P=tag)>',
     re.S,
@@ -183,7 +180,7 @@ def md_filter(text: str | None) -> Markup:
     def _hashtag_repl(match):
         orig_tag = match.group(1)
         tag_lc   = orig_tag.lower() 
-        href     = url_for("tags", tag_list=tag_lc)
+        href = url_for("tags", tag_list=quote_plus(tag_lc, safe='/'))
         return f'<a href="{href}" style="text-decoration:none;color:{ theme_col };border-bottom:0.1px dotted currentColor;">#{orig_tag}</a>'
 
     html = HASH_LINK_RE.sub(_hashtag_repl, html)
