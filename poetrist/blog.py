@@ -944,6 +944,49 @@ THEME_PRESETS = {
 }
 app.jinja_env.globals["theme_presets"] = THEME_PRESETS
 
+def backlinks(entries, *, db) -> dict[int, list]:
+    """
+    Accepts *one sqlite Row* or *an iterable of rows* that each have
+    `id` and `slug`.  
+    Returns {entry_id: [backlink rows …]}.
+
+    • One SQL MATCH that covers all slugs.  
+    • Results are sorted oldest → newest.
+    """
+    # ── normalise to a list --------------------------------------------------
+    if entries is None:
+        return {}
+    if not isinstance(entries, (list, tuple, set)):
+        entries = [entries]                      # single Row → list of 1
+
+    if not entries:
+        return {}
+
+    slug_to_id = {e["slug"]: e["id"] for e in entries}
+    q_marks    = ",".join("?" * len(slug_to_id))
+
+    sql = f"""
+        SELECT target.slug      AS target_slug,
+               src.id, src.slug, src.kind,
+               src.title, src.created_at
+          FROM entry_fts                      -- trigram index
+          JOIN entry src    ON src.id = entry_fts.rowid
+          JOIN entry target ON target.slug IN ({q_marks})
+         WHERE entry_fts MATCH target.slug
+           AND src.id != target.id
+    """
+    rows = db.execute(sql, tuple(slug_to_id)).fetchall()
+
+    out: dict[int, list] = {e["id"]: [] for e in entries}
+    for r in rows:
+        out[slug_to_id[r["target_slug"]]].append(r)
+
+    # sort each bucket oldest → newest
+    for lst in out.values():
+        lst.sort(key=lambda r: r["created_at"])
+    return out
+
+
 ###############################################################################
 # Templates + Views 
 ###############################################################################
@@ -966,6 +1009,28 @@ TEMPL_PROLOG = """
 <style>
 html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif}body{font-size:1.8rem;line-height:1.618;max-width:38em;margin:auto;color:#c9c9c9;background-color:#222222;padding:13px}@media (max-width:684px){body{font-size:1.75rem}}@media (max-width:382px)@media (max-width:560px){.meta {flex:0 0 100%;order:1;margin-left:0;text-align:left;}}{body{font-size:1.35rem}}h1,h2,h3,h4,h5,h6{line-height:1.1;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;font-weight:700;margin-top:3rem;margin-bottom:1.5rem;overflow-wrap:break-word;word-wrap:break-word;-ms-word-break:break-all;word-break:break-word}h1{font-size:2.35em}h2{font-size:1.7em}h3{font-size:1.55em}h4{font-size:1.4em}h5{font-size:1.25em}h6{font-size:1.1em}p{margin-top:0px;margin-bottom:2.5rem}small,sub,sup{font-size:75%}hr{border-color:#ffffff}a{text-decoration:none;color:#ffffff}a:visited{color:#e6e6e6}a:hover{color:#c9c9c9;border-bottom:2px solid #c9c9c9}p>a{text-decoration:none;border-bottom:0.1px dotted #ffffff}ul{padding-left:1.4em;margin-top:0px;margin-bottom:2.5rem}li{margin-bottom:0.4em}blockquote{margin-left:0px;margin-right:0px;padding-left:1em;padding-top:0.8em;padding-bottom:0.8em;padding-right:0.8em;border-left:5px solid #ffffff;margin-bottom:2.5rem;background-color:#4a4a4a}blockquote p{margin-bottom:0}img,video{height:auto;max-width:100%;margin-top:0px;margin-bottom:0px}pre{background-color:#4a4a4a;display:block;padding:1em;overflow-x:auto;margin-top:0px;margin-bottom:2.5rem;font-size:0.9em}code,kbd,samp{font-size:0.9em;padding:0 0.5em;background-color:#4a4a4a;white-space:pre-wrap}pre>code{padding:0;background-color:transparent;white-space:pre;font-size:1em}table{text-align:justify;width:100%;border-collapse:collapse;margin-bottom:2rem}td,th{padding:0.5em;border-bottom:1px solid #4a4a4a}input,textarea{border:1px solid #c9c9c9}input:focus,textarea:focus{border:1px solid #ffffff}textarea{width:100%}.button,button,input[type=submit],input[type=reset],input[type=button],input[type=file]::file-selector-button{display:inline-block;padding:5px 10px;text-align:center;text-decoration:none;white-space:nowrap;background-color:#ffffff;color:#222222;border-radius:1px;border:1px solid #ffffff;cursor:pointer;box-sizing:border-box}.button[disabled],button[disabled],input[type=submit][disabled],input[type=reset][disabled],input[type=button][disabled],input[type=file]::file-selector-button[disabled]{cursor:default;opacity:0.5}.button:hover,button:hover,input[type=submit]:hover,input[type=reset]:hover,input[type=button]:hover,input[type=file]::file-selector-button:hover{background-color:#c9c9c9;color:#222222;outline:0}.button:focus-visible,button:focus-visible,input[type=submit]:focus-visible,input[type=reset]:focus-visible,input[type=button]:focus-visible,input[type=file]::file-selector-button:focus-visible{outline-style:solid;outline-width:2px}textarea,select,input{color:#c9c9c9;padding:6px 10px;margin-bottom:10px;background-color:#4a4a4a;border:1px solid #4a4a4a;border-radius:4px;box-shadow:none;box-sizing:border-box}textarea:focus,select:focus,input:focus{border:1px solid #ffffff;outline:0}input[type=checkbox]:focus{outline:1px dotted #ffffff}label,legend,fieldset{display:block;margin-bottom:0.5rem;font-weight:600}p>math[display="block"]{display: block;margin: 1em 0}math[display="block"]:not(:first-child){margin-top: 1.2em}sup.fn{position:relative;display:inline-block;}sup.fn>.fn-ref{position:relative;z-index:2500;display:inline-flex;align-items:center;justify-content:center;width:1.5em; height:1.5em;margin:0 0.25em;vertical-align:top;border-radius:50%;background:var(--fn-badge-bg,#666); color:#fff;font-size:.65em;line-height:1;cursor:pointer;transition:background .2s ease;}sup.fn>.fn-ref:hover{background:var(--fn-badge-bg-hover,#888);}.fn-popup{position:fixed;left:50%; bottom:0;transform:translate(-50%,100%);width:90vw;max-width:60rem; z-index:3000;max-height:40vh; overflow:auto;background:#222; color:#fff; line-height:1.45;padding:1rem 1.25rem;border:1px solid #444;transition:transform .25s ease;will-change:transform;}.fn-overlay{position:fixed; inset:0;background:transparent;opacity:0; visibility:hidden; pointer-events:none;transition:opacity .25s ease;touch-action:none;-webkit-tap-highlight-color:transparent;z-index:2000}sup.fn .fn-toggle:checked + .fn-ref + .fn-popup{transform:translate(-50%,0);box-shadow:0 -4px 12px rgba(0,0,0,.4);}sup.fn .fn-toggle:checked ~ .fn-overlay{opacity:1; visibility:visible; pointer-events:auto}.math-scroll{overflow-x:auto;overflow-y:hidden;max-width:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}
 </style>
+{% macro backlinks_panel(blist) -%}
+    {% if blist %}
+    <p>
+        <details class="backlinks" style="margin-top:1.5rem;font-size:1rem;">
+        <summary style="cursor:pointer;font-weight:bold;">
+            Backlinks&nbsp;({{ blist|length }})
+        </summary>
+        <ol style="margin:1rem 0 0 1.5rem;">
+            {%- for b in blist %}
+            <li>
+                <a href="{{ url_for('entry_detail',
+                                    kind_slug=kind_to_slug(b.kind),
+                                    entry_slug=b.slug) }}">
+                {{ b.title or b.slug }}
+                </a>
+            </li>
+            {%- endfor %}
+        </ol>
+        </details>
+    </p>
+    {% endif %}
+{%- endmacro %}
 <a href="#page-bottom" aria-label="Jump to footer"
    style="position:fixed;bottom:1.25rem;right:1.25rem;width:3rem; height:3rem;display:flex; align-items:center; justify-content:center;font-size:1.5rem; line-height:1;text-decoration:none;border-bottom:none;border-radius:50%;background:#aaa;color:#000;box-shadow:0 2px 6px rgba(0,0,0,.3);z-index:1000;opacity:.15;">↓
 </a>
@@ -1895,12 +1960,13 @@ def index():
     entries, total_pages = paginate(BASE_SQL, (), page=page, per_page=ps, db=db)
 
     pages = list(range(1, total_pages+1))
-
+    back_map = backlinks(entries, db=db)
     return render_template_string(
         TEMPL_INDEX,
         entries = entries,
         page    = page,
-        pages   = pages,         
+        pages   = pages,
+        backlinks = back_map,
         title   = get_setting('site_name', 'po.etr.ist'), 
         username= current_username(),
     )
@@ -1938,6 +2004,8 @@ TEMPL_INDEX = wrap("""{% block body %}
             <h2>{{e['title']}}</h2>
         {% endif %}
         <p>{{e['body']|md}}</p>
+                   
+        {{ backlinks_panel(backlinks[e.id]) }}
 
         <small style="color:#aaa;">
             {% if e.item_title %} 
@@ -2172,6 +2240,7 @@ def by_kind(slug):
     entries, total_pages = paginate(BASE_SQL, (kind,), page=page, per_page=ps, db=db)
     pages = list(range(1, total_pages+1))
 
+    back_map = backlinks(entries, db=db)
     return render_template_string(
         TEMPL_LIST,
         rows     = entries,
@@ -2181,6 +2250,7 @@ def by_kind(slug):
         kind     = kind,
         username = current_username(),
         title    = get_setting('site_name', 'po.etr.ist'),
+        backlinks = back_map,
     )
 
 TEMPL_LIST = wrap("""
@@ -2227,6 +2297,7 @@ TEMPL_LIST = wrap("""
                 <h2>{{ e['title'] }}</h2>
             {% endif %}
             <p>{{ e['body']|md }}</p>
+            {{ backlinks_panel(backlinks[e.id]) }}
             {% if e['link'] and e['kind'] != 'pin' %}
                 <p>🔗 <a href="{{ e['link'] }}" target="_blank" rel="noopener">{{ e['link'] }}</a></p>
             {% endif %}
@@ -2412,23 +2483,6 @@ TEMPL_ITEM_LIST = wrap("""
 ###############################################################################
 # Entries (Say, Post, Pin)
 ###############################################################################
-def backlinks(entry_id: int, slug: str, *, db, limit: int = 30):
-    """
-    Entries that reference *slug*, newest first, excluding the entry itself.
-    Uses the existing entry_fts trigram index ➜ O(log N) lookup.
-    """
-    sql = """
-        SELECT e.id, e.slug, e.kind, e.title, e.created_at
-          FROM entry_fts
-          JOIN entry e ON e.id = entry_fts.rowid
-         WHERE entry_fts MATCH ?
-           AND e.id != ?
-         ORDER BY e.created_at ASC
-         LIMIT ?
-    """
-    return db.execute(sql, (slug, entry_id, limit)).fetchall()
-
-
 @app.route('/<kind_slug>/<entry_slug>')
 def entry_detail(kind_slug, entry_slug):
     kind = slug_to_kind(kind_slug)
@@ -2462,10 +2516,11 @@ def entry_detail(kind_slug, entry_slug):
     if kind not in (*KINDS, *VERB_KINDS) or row is None:
         abort(404)
 
+    backs = backlinks(row, db=db)[row["id"]]
     return render_template_string(
         TEMPL_ENTRY_DETAIL,
         e=row,
-        backlinks=backlinks(row['id'], row['slug'], db=db),
+        backlinks=backs,
         title=get_setting('site_name', 'po.etr.ist'),
         username=current_username(),
         kind=row['kind'],
@@ -2489,27 +2544,8 @@ TEMPL_ENTRY_DETAIL = wrap("""
             {% endif %}
 
             <p>{{ e['body']|md }}</p>    
-            {% if backlinks %}
-            <p>
-                <details class="backlinks" style="margin-top:1.5rem;font-size:1rem;">
-                    <summary style="cursor:pointer;font-weight:bold;">
-                    Backlinks&nbsp;({{ backlinks|length }})
-                    </summary>
-                    <ol style="margin:1rem 0 0 1.5rem;">
-                    {% for b in backlinks %}
-                        <li>
-                        <a href="{{ url_for('entry_detail',
-                                            kind_slug=kind_to_slug(b.kind),
-                                            entry_slug=b.slug) }}">
-                            {{ b.title or b.slug }}
-                        </a>
-                        – {{ b.created_at|ts }}
-                        </li>
-                    {% endfor %}
-                    </ol>
-                </details>
-            </p>
-            {% endif %}            
+            {{ backlinks_panel(backlinks) }}
+                                     
             <small style="color:#aaa;">
 
             {# —— item info (if any) ———————————————————————— #}
@@ -2869,6 +2905,8 @@ def tags(tag_list: str):
     else:
         entries, pages = None, []                       # nothing selected → no list
 
+    back_map = backlinks(entries, db=db)
+
     return render_template_string(
         TEMPL_TAGS,
         tags     = rows,
@@ -2880,6 +2918,7 @@ def tags(tag_list: str):
         kind     = 'tags',
         username = current_username(),
         title    = get_setting('site_name', 'po.etr.ist'),
+        backlinks = back_map,
     )
 
 TEMPL_TAGS = wrap("""
@@ -2948,6 +2987,7 @@ TEMPL_TAGS = wrap("""
                 <h3 style="margin:.25rem 0 .5rem 0;">{{ e['title'] }}</h3>
             {% endif %}
             <p>{{ e['body']|md }}</p>
+            {{ backlinks_panel(backlinks[e.id]) }}
             <small style="color:#aaa;">
                 {# —— item info (if any) ———————————————————————— #}
                 {% if e.item_title %}
@@ -3257,6 +3297,8 @@ def item_detail(verb, item_type, slug):
              WHERE ei.item_id=? AND ei.verb=?
              ORDER BY {order_sql}
         """, (itm["id"], verb)).fetchall()
+    
+    back_map = backlinks(rows, db=db)
 
     return render_template_string(TEMPL_ITEM_DETAIL, 
                                   item   = itm,
@@ -3265,7 +3307,10 @@ def item_detail(verb, item_type, slug):
                                   verb   = verb,
                                   sort   = sort,
                                   username=current_username(),
-                                  title  = get_setting('site_name', 'po.etr.ist'))
+                                  title  = get_setting('site_name', 'po.etr.ist'),
+                                  backlinks = back_map,
+                                )
+
 
 TEMPL_ITEM_DETAIL = wrap("""
 {% block body %}
@@ -3363,6 +3408,7 @@ TEMPL_ITEM_DETAIL = wrap("""
 {% for e in entries %}    
 <article style="padding-bottom:1rem; {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
     <p>{{ e['body']|md }}</p>
+    {{ backlinks_panel(backlinks[e.id]) }}
     <small style="color:#aaa;">
 
         {# —— action pill ——————————————————————————————— #}
