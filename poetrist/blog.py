@@ -1034,7 +1034,7 @@ html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Rob
 <a href="#page-bottom" aria-label="Jump to footer"
    style="position:fixed;bottom:1.25rem;right:1.25rem;width:3rem; height:3rem;display:flex; align-items:center; justify-content:center;font-size:1.5rem; line-height:1;text-decoration:none;border-bottom:none;border-radius:50%;background:#aaa;color:#000;box-shadow:0 2px 6px rgba(0,0,0,.3);z-index:1000;opacity:.15;">↓
 </a>
-<div class="container" style="max-width: 60rem; margin: 3rem auto;">
+<div class="container h-feed" style="max-width: 60rem; margin: 3rem auto;">
     <h1 style="margin-top:0;"><a href="{{ url_for('index') }}" style="color:{{ theme_color() }};">{{title or 'po.etr.ist'}}</a></h1>
     <nav style="margin-bottom:1rem;display:flex;align-items:flex-end;font-size:.9em;">
         <!-- LEFT : two stacked rows -->
@@ -1086,6 +1086,7 @@ html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Rob
             </div>
         </div>
     </nav>
+    <span class="p-author h-card u-url" style="display:none;">{{ username }}</span>
     {% with msgs = get_flashed_messages() %}
     {% if msgs %}
         {# --- toast ----------------------------------------------------------- #}
@@ -1097,7 +1098,7 @@ html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Rob
 """
 
 TEMPL_EPILOG = """
-    <footer id="page-bottom" style="margin-top:1rem;padding-top:1rem;font-size:.8em;color:#888;display:flex;align-items:center;justify-content:space-between;border-top:1px solid #444;">
+    <footer id="page-bottom" style="margin-top:1.5em;padding-top:1.5em;;font-size:.8em;color:#888;display:flex;align-items:center;justify-content:space-between;border-top:1px solid #444;">
         <!-- left-hand side -->
         <span style="font-weight:normal;color:#aaa;">
             Built with
@@ -1992,19 +1993,19 @@ TEMPL_INDEX = wrap("""{% block body %}
     {% endif %}
     <hr>
     {% for e in entries %}
-    <article style="padding-bottom:1.5rem; {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
+    <article class="h-entry" style="padding-bottom:1.5em; {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
         {% if e['kind']=='pin' %}
             <h2>
-                <a href="{{ e['link'] }}" target="_blank" rel="noopener">
+                <a class="u-bookmark-of p-name" href="{{ e['link'] }}" target="_blank" rel="noopener">
                     {{ e['title'] }}
                 </a>
                 {{ external_icon() }} 
             </h2>
         {% elif e['kind']=='post' and e['title'] %}
-            <h2>{{e['title']}}</h2>
+            <h2 class="p-name">{{e['title']}}</h2>
         {% endif %}
-        <p>{{e['body']|md}}</p>
-                   
+        <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md }}</div>
+
         {{ backlinks_panel(backlinks[e.id]) }}
 
         <small style="color:#aaa;">
@@ -2066,7 +2067,7 @@ TEMPL_INDEX = wrap("""{% block body %}
     {% endfor %}
 
     {% if pages|length > 1 %}
-    <nav style="margin-top:1rem;font-size:.75em;">
+    <nav style="padding-top:1.5em;font-size:.75em;border-top:1px solid #444;">
         {% for p in pages %}
             {% if p == page %}
                 <span style="border-bottom:0.33rem solid #aaa;">{{ p }}</span>
@@ -2285,18 +2286,18 @@ TEMPL_LIST = wrap("""
         {% endif %}
         <hr>
         {% for e in rows %}
-        <article style="padding-bottom:1.5rem; {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
+        <article class="h-entry" style="padding-bottom:1.5em; {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
             {% if e['kind'] == 'pin' %}
                 <h2>
-                    <a href="{{ e['link'] }}" target="_blank" rel="noopener">
+                    <a class="u-bookmark-of p-name" href="{{ e['link'] }}" target="_blank" rel="noopener">
                         {{ e['title'] }}
                     </a>
                     {{ external_icon() }} 
                 </h2>            
             {% elif e['title'] %}
-                <h2>{{ e['title'] }}</h2>
+                <h2 class="p-name">{{ e['title'] }}</h2>
             {% endif %}
-            <p>{{ e['body']|md }}</p>
+            <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md }}</div>
             {{ backlinks_panel(backlinks[e.id]) }}
             {% if e['link'] and e['kind'] != 'pin' %}
                 <p>🔗 <a href="{{ e['link'] }}" target="_blank" rel="noopener">{{ e['link'] }}</a></p>
@@ -2333,7 +2334,7 @@ TEMPL_LIST = wrap("""
         {% endfor %}
 
         {% if pages|length > 1 %}
-            <nav style="margin-top:1rem;font-size:.75em;">
+            <nav style="padding-top:1.5em;font-size:.75em;border-top:1px solid #444;">
                 {% for p in pages %}
                     {% if p == page %}
                         <span style="border-bottom:0.33rem solid #aaa;">{{ p }}</span>
@@ -2353,7 +2354,7 @@ TEMPL_PAGE = wrap("""
 {% block body %}
 <hr>
 <article>
-  <p>{{ e['body']|md }}</p>
+  <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md }}</div>
   {% if session.get('logged_in') %}
       <small>
         <a href="{{ url_for('edit_entry',
@@ -2460,9 +2461,8 @@ TEMPL_ITEM_LIST = wrap("""
   {% endfor %}
   </ul>
 
-  {# — pagination unchanged — #}
   {% if pages|length > 1 %}
-    <nav style="margin-top:1rem; font-size:.75em;">
+    <nav style="padding-top:1.5em;font-size:.75em;border-top:1px solid #444;">
       {% for p in pages %}
         {% if p == page %}
           <span style="border-bottom:.33rem solid #aaa;">{{ p }}</span>
@@ -2529,21 +2529,20 @@ def entry_detail(kind_slug, entry_slug):
 TEMPL_ENTRY_DETAIL = wrap("""
     {% block body %}
         <hr>
-        <article style="padding-bottom:1.5rem;">
+        <article class="h-entry">
             {% if e['kind']=='pin' %}
                 <h2 style="margin-top:0">
-                    <a href="{{ e['link'] }}" target="_blank" rel="noopener" title="{{ e['link'] }}"
+                    <a class="u-bookmark-of p-name" href="{{ e['link'] }}" target="_blank" rel="noopener" title="{{ e['link'] }}"
                     style="word-break:break-all; overflow-wrap:anywhere;">
                     {{ e['title'] }} 
                     </a>
                     {{ external_icon() }}
                 </h2>
-
             {% elif e['title'] %}
-                <h2>{{ e['title'] }}</h2>
+                <h2 class="p-name">{{ e['title'] }}</h2>
             {% endif %}
 
-            <p>{{ e['body']|md }}</p>    
+            <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md }}</div>    
             {{ backlinks_panel(backlinks) }}
                                      
             <small style="color:#aaa;">
@@ -2819,7 +2818,7 @@ TEMPL_DELETE_ENTRY = wrap("""
     <h2>Delete entry?</h2>
     <article style="border-left:3px solid #c00; padding-left:1rem;">
         {% if e['title'] %}<h3>{{ e['title'] }}</h3>{% endif %}
-        <p>{{ e['body']|md }}</p>
+        <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md }}</div>
         <small style="color:#aaa;">{{ e['created_at']|ts }}</small>
     </article>
     <form method="post" style="margin-top:1rem;">
@@ -2981,12 +2980,12 @@ TEMPL_TAGS = wrap("""
     </div>
     {% endif %}
     {% for e in entries %}
-        <article style="padding-bottom:1.5rem;
+        <article class="h-entry" style="padding-bottom:1.5em;
                         {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
             {% if e['title'] %}
                 <h3 style="margin:.25rem 0 .5rem 0;">{{ e['title'] }}</h3>
             {% endif %}
-            <p>{{ e['body']|md }}</p>
+            <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md }}</div>
             {{ backlinks_panel(backlinks[e.id]) }}
             <small style="color:#aaa;">
                 {# —— item info (if any) ———————————————————————— #}
@@ -3051,7 +3050,7 @@ TEMPL_TAGS = wrap("""
     {% endfor %}
                   
     {% if pages|length > 1 %}
-        <nav style="margin-top:1rem;font-size:.75em;">
+        <nav style="padding-top:1.5em;font-size:.75em;border-top:1px solid #444;">
             {% for p in pages %}
                 {% if p == page %}
                     <span style="border-bottom:0.33rem solid #aaa;">{{ p }}</span>
@@ -3407,7 +3406,7 @@ TEMPL_ITEM_DETAIL = wrap("""
 {% endif %}
 {% for e in entries %}    
 <article style="padding-bottom:1rem; {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
-    <p>{{ e['body']|md }}</p>
+    <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md }}</div>
     {{ backlinks_panel(backlinks[e.id]) }}
     <small style="color:#aaa;">
 
@@ -3955,7 +3954,7 @@ TEMPL_SEARCH_ENTRIES = wrap("""
     {% endif %}
 
     {% for e in rows %}
-        <article style="padding-bottom:1.5rem;
+        <article style="padding-bottom:1.5em;
                         {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
             {% if e['title'] %}
                 <h3 style="margin:.4rem 0;">{{ e['title'] }}</h3>
@@ -4013,7 +4012,7 @@ TEMPL_SEARCH_ENTRIES = wrap("""
     {% endfor %}
                     
     {% if pages|length > 1 %}
-    <nav style="margin-top:1rem;font-size:.75em;">
+    <nav style="padding-top:1.5em;font-size:.75em;border-top:1px solid #444;">
         {% for p in pages %}
             {% if p == page %}
                 <span style="border-bottom:0.33rem solid #aaa;">{{ p }}</span>
@@ -4049,7 +4048,7 @@ TEMPL_SEARCH_ITEMS = wrap("""
     </ul>
 
     {% if pages|length > 1 %}
-      <nav style="margin-top:1rem;font-size:.75em;">
+      <nav style="padding-top:1.5em;font-size:.75em;border-top:1px solid #444;">
         {% for p in pages %}
           {% if p == page %}
             <span style="border-bottom:.33rem solid #aaa;">{{ p }}</span>
@@ -4207,7 +4206,7 @@ TEMPL_TODAY = wrap("""
 {% if rows %}
   <hr>
   {% for e in rows %}
-    <article style="padding-bottom:1.5rem;
+    <article style="padding-bottom:1.5em;
                     {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
       {% if e.title %}
         <h3 style="margin:.4rem 0;">{{ e.title }}</h3>
@@ -4282,7 +4281,7 @@ TEMPL_TODAY = wrap("""
   {% endfor %}
 
   {% if pages|length > 1 %}
-    <nav style="margin-top:1rem;font-size:.75em;">
+    <nav style="padding-top:1.5em;font-size:.75em;border-top:1px solid #444;">
       {% for p in pages %}
         {% if p == page %}
           <span style="border-bottom:.33rem solid #aaa;">{{ p }}</span>
