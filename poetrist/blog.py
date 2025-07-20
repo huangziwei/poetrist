@@ -1098,7 +1098,7 @@ html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Rob
 """
 
 TEMPL_EPILOG = """
-    <footer id="page-bottom" style="margin-top:1.5em;padding-top:1.5em;;font-size:.8em;color:#888;display:flex;align-items:center;justify-content:space-between;border-top:1px solid #444;">
+    <footer id="page-bottom" style="margin-top:1.875em;padding-top:1.5em;font-size:.8em;color:#888;display:flex;align-items:center;justify-content:space-between;border-top:1px solid #444;">
         <!-- left-hand side -->
         <span style="font-weight:normal;color:#aaa;">
             Built with
@@ -1993,7 +1993,7 @@ TEMPL_INDEX = wrap("""{% block body %}
     {% endif %}
     <hr>
     {% for e in entries %}
-    <article class="h-entry" style="padding-bottom:1.5em; {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
+    <article class="h-entry" {% if not loop.last %}style="padding-bottom:1.5em; border-bottom:1px solid #444;"{% endif %}>
         {% if e['kind']=='pin' %}
             <h2>
                 <a class="u-bookmark-of p-name" href="{{ e['link'] }}" target="_blank" rel="noopener">
@@ -2067,7 +2067,7 @@ TEMPL_INDEX = wrap("""{% block body %}
     {% endfor %}
 
     {% if pages|length > 1 %}
-    <nav style="padding-top:1.5em;font-size:.75em;border-top:1px solid #444;">
+    <nav style="margin-top:2em;padding-top:2em;font-size:.75em;border-top:1px solid #444;">
         {% for p in pages %}
             {% if p == page %}
                 <span style="border-bottom:0.33rem solid #aaa;">{{ p }}</span>
@@ -2286,7 +2286,7 @@ TEMPL_LIST = wrap("""
         {% endif %}
         <hr>
         {% for e in rows %}
-        <article class="h-entry" style="padding-bottom:1.5em; {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
+        <article class="h-entry" style="{% if not loop.last %}padding-bottom:1.5em; border-bottom:1px solid #444;{% endif %}">
             {% if e['kind'] == 'pin' %}
                 <h2>
                     <a class="u-bookmark-of p-name" href="{{ e['link'] }}" target="_blank" rel="noopener">
@@ -2334,7 +2334,7 @@ TEMPL_LIST = wrap("""
         {% endfor %}
 
         {% if pages|length > 1 %}
-            <nav style="padding-top:1.5em;font-size:.75em;border-top:1px solid #444;">
+            <nav style="margin-top:2em;padding-top:2em;font-size:.75em;border-top:1px solid #444;">
                 {% for p in pages %}
                     {% if p == page %}
                         <span style="border-bottom:0.33rem solid #aaa;">{{ p }}</span>
@@ -2423,7 +2423,7 @@ TEMPL_ITEM_LIST = wrap("""
   <hr>
   <ul style="list-style:none; padding:0; margin:0;">
   {% for r in rows %}
-    <li style="margin:1.5rem 0;">
+    <li style="margin:1em 0;">
 
       {# ─────────── ROW 1 – title ─────────── #}
       <a href="{{ url_for('item_detail',
@@ -2462,7 +2462,7 @@ TEMPL_ITEM_LIST = wrap("""
   </ul>
 
   {% if pages|length > 1 %}
-    <nav style="padding-top:1.5em;font-size:.75em;border-top:1px solid #444;">
+    <nav style="margin-top:2em;padding-top:2em;font-size:.75em;border-top:1px solid #444;">
       {% for p in pages %}
         {% if p == page %}
           <span style="border-bottom:.33rem solid #aaa;">{{ p }}</span>
@@ -2980,8 +2980,7 @@ TEMPL_TAGS = wrap("""
     </div>
     {% endif %}
     {% for e in entries %}
-        <article class="h-entry" style="padding-bottom:1.5em;
-                        {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
+        <article class="h-entry" {% if not loop.last %}style="padding-bottom:1.5em;border-bottom:1px solid #444;"{% endif %}>
             {% if e['title'] %}
                 <h3 style="margin:.25rem 0 .5rem 0;">{{ e['title'] }}</h3>
             {% endif %}
@@ -3050,7 +3049,7 @@ TEMPL_TAGS = wrap("""
     {% endfor %}
                   
     {% if pages|length > 1 %}
-        <nav style="padding-top:1.5em;font-size:.75em;border-top:1px solid #444;">
+        <nav style="margin-top:2em;padding-top:2em;font-size:.75em;border-top:1px solid #444;">
             {% for p in pages %}
                 {% if p == page %}
                     <span style="border-bottom:0.33rem solid #aaa;">{{ p }}</span>
@@ -4012,7 +4011,7 @@ TEMPL_SEARCH_ENTRIES = wrap("""
     {% endfor %}
                     
     {% if pages|length > 1 %}
-    <nav style="padding-top:1.5em;font-size:.75em;border-top:1px solid #444;">
+    <nav style="margin-top:2em;padding-top:2em;font-size:.75em;border-top:1px solid #444;">
         {% for p in pages %}
             {% if p == page %}
                 <span style="border-bottom:0.33rem solid #aaa;">{{ p }}</span>
@@ -4048,7 +4047,7 @@ TEMPL_SEARCH_ITEMS = wrap("""
     </ul>
 
     {% if pages|length > 1 %}
-      <nav style="padding-top:1.5em;font-size:.75em;border-top:1px solid #444;">
+      <nav style="margin-top:2em;padding-top:2em;font-size:.75em;border-top:1px solid #444;">
         {% for p in pages %}
           {% if p == page %}
             <span style="border-bottom:.33rem solid #aaa;">{{ p }}</span>
@@ -4281,7 +4280,7 @@ TEMPL_TODAY = wrap("""
   {% endfor %}
 
   {% if pages|length > 1 %}
-    <nav style="padding-top:1.5em;font-size:.75em;border-top:1px solid #444;">
+    <nav style="margin-top:2em;padding-top:2em;font-size:.75em;border-top:1px solid #444;">
       {% for p in pages %}
         {% if p == page %}
           <span style="border-bottom:.33rem solid #aaa;">{{ p }}</span>
