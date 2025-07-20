@@ -1086,7 +1086,7 @@ html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Rob
             </div>
         </div>
     </nav>
-    <span class="p-author h-card u-url" style="display:none;">{{ username }}</span>
+    <span class="p-author h-card" style="display:none;">{{ username }}</span>
     {% with msgs = get_flashed_messages() %}
     {% if msgs %}
         {# --- toast ----------------------------------------------------------- #}
@@ -2054,7 +2054,7 @@ TEMPL_INDEX = wrap("""{% block body %}
             </span>
             <a class="u-url" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
                 style="text-decoration:none; color:inherit;vertical-align:middle;font-variant-numeric:tabular-nums;white-space:nowrap;">
-                {{ e['created_at']|ts }}
+                <time class="dt-published" datetime="{{ e['created_at'] }}">{{ e['created_at']|ts }}</time>
             </a>&nbsp;
             {% if session.get('logged_in') %}
                 <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
@@ -2321,7 +2321,7 @@ TEMPL_LIST = wrap("""
                 </span>
                 <a class="u-url" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
                     style="text-decoration:none; color:inherit;vertical-align:middle;font-variant-numeric:tabular-nums;white-space:nowrap;">
-                    {{ e['created_at']|ts }}
+                    <time class="dt-published" datetime="{{ e['created_at'] }}">{{ e['created_at']|ts }}</time>
                 </a>&nbsp;
                 {% if session.get('logged_in') %}
                     <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
@@ -2593,11 +2593,11 @@ TEMPL_ENTRY_DETAIL = wrap("""
             </span>
 
             {# —— timestamp & author ———————————————————————— #}
-            <a href="{{ url_for('entry_detail',
+            <a class="u-url" href="{{ url_for('entry_detail',
                                  kind_slug=kind_to_slug(e['kind']),
                                  entry_slug=e['slug']) }}"
                style="text-decoration:none; color:inherit;vertical-align:middle;font-variant-numeric:tabular-nums;white-space:nowrap;">
-               {{ e['created_at']|ts }}
+               <time class="dt-published" datetime="{{ e['created_at'] }}">{{ e['created_at']|ts }}</time>
             </a>
             <span style="vertical-align:middle;">&nbsp;by&nbsp;{{ username }}</span>&nbsp;&nbsp;
 
@@ -3037,7 +3037,7 @@ TEMPL_TAGS = wrap("""
                 </span>
                 <a class="u-url" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
                     style="text-decoration:none; color:inherit;vertical-align:middle;">
-                    {{ e['created_at']|ts }}
+                    <time class="dt-published" datetime="{{ e['created_at'] }}">{{ e['created_at']|ts }}</time>
                 </a>&nbsp;
                 {% if session.get('logged_in') %}
                     <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
@@ -3429,11 +3429,11 @@ TEMPL_ITEM_DETAIL = wrap("""
         {% endif %}
 
         {# —— timestamp & author ———————————————————————— #}
-        <a href="{{ url_for('entry_detail',
+        <a class="u-url" href="{{ url_for('entry_detail',
                                 kind_slug=kind_to_slug(e['kind']),
                                 entry_slug=e['slug']) }}"
             style="text-decoration:none;color:inherit;vertical-align:middle;">
-            {{ e['created_at']|ts }}
+            <time class="dt-published" datetime="{{ e['created_at'] }}">{{ e['created_at']|ts }}</time>
         </a>&nbsp;
 
         {# —— admin links ———————————————————————————————— #}
@@ -3991,14 +3991,14 @@ TEMPL_SEARCH_ENTRIES = wrap("""
                     {{ e['kind'] | smartcap }}
                 </span>
                 {% if e['kind'] == 'page' %}
-                    <a href="{{ '/' ~ e['slug'] }}"
+                    <a class="u-url" href="{{ '/' ~ e['slug'] }}"
                         style="text-decoration:none; color:inherit;vertical-align:middle;">
-                        {{ e['created_at']|ts }}
+                        <time class="dt-published" datetime="{{ e['created_at'] }}">{{ e['created_at']|ts }}</time>
                     </a>&nbsp;
                 {% else %}
                 <a class="u-url" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
                     style="text-decoration:none; color:inherit;vertical-align:middle;">
-                    {{ e['created_at']|ts }}
+                    <time class="dt-published" datetime="{{ e['created_at'] }}">{{ e['created_at']|ts }}</time>
                 </a>&nbsp;
                 {% endif %}
                 {% if session.get('logged_in') %}
