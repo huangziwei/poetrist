@@ -2052,7 +2052,7 @@ TEMPL_INDEX = wrap("""{% block body %}
                    {{ e['kind'] }}
                 </a>
             </span>
-            <a href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
+            <a class="u-url" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
                 style="text-decoration:none; color:inherit;vertical-align:middle;font-variant-numeric:tabular-nums;white-space:nowrap;">
                 {{ e['created_at']|ts }}
             </a>&nbsp;
@@ -2319,7 +2319,7 @@ TEMPL_LIST = wrap("""
                         {{ e['action'] or e['kind'] }}
                     </a>
                 </span>
-                <a href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
+                <a class="u-url" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
                     style="text-decoration:none; color:inherit;vertical-align:middle;font-variant-numeric:tabular-nums;white-space:nowrap;">
                     {{ e['created_at']|ts }}
                 </a>&nbsp;
@@ -3035,7 +3035,7 @@ TEMPL_TAGS = wrap("""
                 ">
                     {{ e['kind'] }}
                 </span>
-                <a href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
+                <a class="u-url" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
                     style="text-decoration:none; color:inherit;vertical-align:middle;">
                     {{ e['created_at']|ts }}
                 </a>&nbsp;
@@ -3996,7 +3996,7 @@ TEMPL_SEARCH_ENTRIES = wrap("""
                         {{ e['created_at']|ts }}
                     </a>&nbsp;
                 {% else %}
-                <a href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
+                <a class="u-url" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
                     style="text-decoration:none; color:inherit;vertical-align:middle;">
                     {{ e['created_at']|ts }}
                 </a>&nbsp;
