@@ -14,7 +14,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from time import time
 from typing import DefaultDict
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 import click
@@ -180,7 +180,7 @@ def md_filter(text: str | None) -> Markup:
     def _hashtag_repl(match):
         orig_tag = match.group(1)
         tag_lc   = orig_tag.lower() 
-        href = url_for("tags", tag_list=quote_plus(tag_lc, safe='/'))
+        href = url_for("tags", tag_list=tag_lc)
         return f'<a href="{href}" style="text-decoration:none;color:{ theme_col };border-bottom:0.1px dotted currentColor;">#{orig_tag}</a>'
 
     html = HASH_LINK_RE.sub(_hashtag_repl, html)
