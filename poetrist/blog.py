@@ -266,6 +266,12 @@ def md_filter(text: str | None) -> Markup:
 
     html = _popup_footnotes(html)
 
+    def _add_u_photo(m):
+        tag = m.group(0)
+        return tag if 'u-photo' in tag else tag.replace('<img', '<img class="u-photo"', 1)
+
+    html = re.sub(r'<img\b[^>]*>', _add_u_photo, html)
+
     return Markup(html)
 
 @app.template_filter("mdinline")
