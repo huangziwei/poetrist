@@ -67,7 +67,7 @@ signer = TimestampSigner(SECRET_KEY, salt='login-token')
 
 SLUG_DEFAULTS = {"say": "says", "post": "posts", "pin": "pins"}
 VERB_MAP = {
-    "read"   : ["to-read", "to read", "reading", "read", "to reread", "rereading", "reread", "finished reading", "reflect", "skimmed", "abandoned"],
+    "read"   : ["to-read", "to read", "reading", "read", "to reread", "rereading", "reread", "finished", "reflect", "skimmed", "abandoned"],
     "watch"  : ["to-watch", "to watch" , "watching", "watched", "to rewatch", "rewatching", "rewatched", "reflect", "abandoned"],
     "listen" : ["to-listen", "to listen", "listening", "listened","to relisten", "relistening", "relistened", "reflect", "abandoned"],
     "play"   : ["to-play", "to play", "playing", "played", "to replay", "replaying", "replayed", "reflect", "abandoned"],
@@ -3280,7 +3280,7 @@ def item_detail(verb, item_type, slug):
         """, (itm['id'],)).fetchall()
 
 
-    sort = request.args.get("sort", "new")          # ➊  new | old 
+    sort = request.args.get("sort", "old")          # ➊  new | old 
 
     if sort == "old":
         order_sql = "e.created_at ASC"
@@ -3383,8 +3383,7 @@ TEMPL_ITEM_DETAIL = wrap("""
                 border-radius:4px;
                 overflow:hidden;
                 font-size:.8em;">
-        {% for val, label in [('new','Newest'),
-                            ('old','Oldest')] %}
+        {% for val, label in [('old','Oldest'), ('new','Newest')] %}
         <a href="{{ url_for('item_detail',
                             verb=verb,
                             item_type=item.item_type,
