@@ -253,7 +253,7 @@ def md_filter(text: str | None) -> Markup:
 
         all_notes = ''.join(f'<li id="fn:{k}">{v}</li>' for k, v in notes.items())
         html += (
-            '<details class="fn-all" style="margin-top:1.5rem;font-size:1rem;">'
+            '<details class="fn-all" style="margin-bottom:1.5rem;font-size:1rem;">'
             f'  <summary style="cursor:pointer;font-weight:bold;">'
             f'    Footnotes&nbsp;({len(notes)})'
             '  </summary>'
@@ -1017,24 +1017,22 @@ html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Rob
 </style>
 {% macro backlinks_panel(blist) -%}
     {% if blist %}
-    <p>
-        <details class="backlinks" style="margin-top:1.5rem;font-size:1rem;">
-        <summary style="cursor:pointer;font-weight:bold;">
-            Backlinks&nbsp;({{ blist|length }})
-        </summary>
-        <ol style="margin:1rem 0 0 1.5rem;">
-            {%- for b in blist %}
-            <li>
-                <a href="{{ url_for('entry_detail',
-                                    kind_slug=kind_to_slug(b.kind),
-                                    entry_slug=b.slug) }}">
-                {{ b.title or b.slug }}
-                </a>
-            </li>
-            {%- endfor %}
-        </ol>
-        </details>
-    </p>
+    <details class="backlinks" style="margin-bottom:1.5rem;font-size:1rem;">
+    <summary style="cursor:pointer;font-weight:bold;">
+        Backlinks&nbsp;({{ blist|length }})
+    </summary>
+    <ol style="margin:1rem 0 0 1.5rem;">
+        {%- for b in blist %}
+        <li>
+            <a href="{{ url_for('entry_detail',
+                                kind_slug=kind_to_slug(b.kind),
+                                entry_slug=b.slug) }}">
+            {{ b.title or b.slug }}
+            </a>
+        </li>
+        {%- endfor %}
+    </ol>
+    </details>
     {% endif %}
 {%- endmacro %}
 <div class="container h-feed" style="max-width: 60rem; margin: 3rem auto;">
