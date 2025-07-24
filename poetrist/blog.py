@@ -2,8 +2,11 @@
 """
 A single-file minimal blog.
 """
+import ipaddress
+import json
 import re
 import secrets
+import socket
 import sqlite3
 import uuid
 from collections import defaultdict, deque
@@ -4390,54 +4393,119 @@ def export_item_json(verb, item_type, slug):
         'meta'     : [{'k': m['k'], 'v': m['v'], 'ord': m['ord']} for m in meta]
     }
 
+_BAD_NETS = [
+    ipaddress.ip_network(n) for n in ("0.0.0.0/8","10.0.0.0/8","127.0.0.0/8","169.254.0.0/16","172.16.0.0/12","192.0.0.0/24","192.168.0.0/16","198.18.0.0/15","224.0.0.0/4","240.0.0.0/4","::/128", "::1/128","fc00::/7", "fe80::/10","ff00::/8",)
+]
+
+def _is_private(host: str) -> bool:
+    """True ⇢ *host* resolves **only** to private / reserved addresses."""
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        return True                             # unable to resolve ⇒ treat as bad
+    for fam, *_rest, sockaddr in infos:
+        ip = sockaddr[0]
+        try:
+            ip_obj = ipaddress.ip_address(ip)
+        except ValueError:
+            return True
+        if not any(ip_obj in net for net in _BAD_NETS):
+            return False                        # at least one public address
+    return True
+
+
 def import_item_json(url: str, *, action: str):
     """
-    • Appends '/json' if missing.
-    • Verifies that the verb in the URL matches the action/verb that the
-      user wrote (so we don't attach a ^reading: …/watch/… item, etc.).
-    • Returns a *block-dict* ready for get_or_create_item().
-    """
-    jurl = url if url.rstrip('/').endswith('/json') else url.rstrip('/') + '/json'
-    parsed = urlparse(jurl)
-    insecure_host = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
-    try:
-        r = requests.get(jurl, timeout=5, verify=not insecure_host)
-        r.raise_for_status()
-        data = r.json()
-    except Exception as exc:
-        raise ValueError(f"Cannot fetch remote item → {exc}") from None
+    Securely fetch another poetrist instance’s item-JSON.
 
-    # -------- sanity checks --------------------------------------------------
-    need = {'uuid', 'slug', 'item_type', 'title'}
-    if not need.issubset(data):
+    • HTTPS is mandatory unless the *remote* host is localhost / 127.0.0.1 / ::1
+    • Reject hosts that resolve only to private / reserved IP blocks
+      (prevents SSRF to internal services)
+    • Enforce < 1 MiB payload & `Content-Type: application/json`
+    • Keep the existing verb / action consistency check
+    """
+    # ------------------------------------------------------------------ #
+    # 0 . normalise URL and pull out components
+    # ------------------------------------------------------------------ #
+    parsed = urlparse(url)
+    host   = parsed.hostname or ""
+    scheme = parsed.scheme or "https"
+    if not host:
+        raise ValueError("Malformed URL – host missing")
+
+    # “/json” endpoint is canonical – append if caller omitted it
+    if not parsed.path.rstrip("/").endswith("/json"):
+        url = url.rstrip("/") + "/json"
+
+    # ------------------------------------------------------------------ #
+    # 1 . basic network-level guards
+    # ------------------------------------------------------------------ #
+    localhost_hosts = {"localhost", "127.0.0.1", "::1"}
+    if host not in localhost_hosts and _is_private(host):
+        raise ValueError("Refusing to fetch from a private/reserved address")
+
+    if scheme != "https" and host not in localhost_hosts:
+        raise ValueError("Remote imports must use HTTPS")
+
+    # ------------------------------------------------------------------ #
+    # 2 . HTTP fetch with tight limits
+    # ------------------------------------------------------------------ #
+    try:
+        with requests.get(
+            url,
+            timeout=5,
+            stream=True,                      # we want to cap download
+            verify=(host not in localhost_hosts),   # allow self-signed *only* for localhost
+            headers={"Accept": "application/json"},
+        ) as resp:
+            resp.raise_for_status()
+
+            ctype = resp.headers.get("Content-Type", "")
+            if "application/json" not in ctype:
+                raise ValueError(f"Unexpected Content-Type “{ctype}”")
+
+            raw = b""
+            max_bytes = 1 * 1024 * 1024       # 1 MiB should be plenty
+            for chunk in resp.iter_content(8192):
+                raw += chunk
+                if len(raw) > max_bytes:
+                    raise ValueError("Remote JSON too large (>1 MiB)")
+            data = json.loads(raw.decode(resp.encoding or "utf-8"))
+    except (requests.RequestException, json.JSONDecodeError) as exc:
+        raise ValueError(f"Cannot fetch remote item – {exc}") from None
+
+    # ------------------------------------------------------------------ #
+    # 3 . sanity-check payload
+    # ------------------------------------------------------------------ #
+    required = {"uuid", "slug", "item_type", "title"}
+    if not required.issubset(data):
         raise ValueError("Remote item is missing mandatory fields")
 
-    # -------- verb consistency ----------------------------------------------
-    # 1) derive verb from URL  → '/read/book/kafka'   → 'read'
-    path_parts = urlparse(url).path.strip('/').split('/')
+    # ---- verb consistency (unchanged) -------------------------------- #
+    path_parts = urlparse(url).path.strip("/").split("/")
     if len(path_parts) < 3:
         raise ValueError("Malformed URL")
 
-    verb_from_url = path_parts[0]         # 'read', 'watch', …
-
-    # 2) derive verb from action  ('reading' → 'read', 'to-read' → 'read', …)
-    verb_from_action = next((v for v, acts in VERB_MAP.items()
-                             if action.lower() in acts), action.lower())
-
+    verb_from_url = path_parts[0].lower()
+    verb_from_action = next(
+        (v for v, acts in VERB_MAP.items() if action.lower() in acts),
+        action.lower()
+    )
     if verb_from_url != verb_from_action:
         raise ValueError("Verb/action mismatch")
 
-    # -------- craft the block dict ------------------------------------------
+    # ------------------------------------------------------------------ #
+    # 4 . craft block-dict for caller
+    # ------------------------------------------------------------------ #
     return {
         "verb"      : verb_from_action,
         "action"    : action.lower(),
         "item_type" : data["item_type"],
         "title"     : data["title"],
-        "slug"      : data["slug"],       # keep their nice slug
+        "slug"      : data["slug"],
         "progress"  : None,
         "meta"      : {m["k"]: m["v"] for m in data.get("meta", [])},
     }
-
 
 ###############################################################################
 # main
