@@ -3097,6 +3097,12 @@ def _rss(entries, *, title, feed_url, site_url):
             _external=True,            # absolute URL
         )
 
+
+        # choose the most recent timestamp we have
+        ts_iso = e["updated_at"] or e["created_at"]
+        ts_rfc = _rfc2822(ts_iso)
+        guid = f"{link}#{ts_iso}"
+
         body_html = md.reset().convert(strip_caret(e["body"]) if e["body"] else "")
         rss_title = e["title"] if e["title"] else e["slug"]
         items.append(
@@ -3104,8 +3110,8 @@ def _rss(entries, *, title, feed_url, site_url):
         <item>
           <title>{escape(rss_title)}</title>
           <link>{link}</link>
-          <guid>{link}</guid>
-          <pubDate>{_rfc2822(e['created_at'])}</pubDate>
+          <guid isPermaLink="false">{guid}</guid>
+          <pubDate>{ts_rfc}</pubDate>
           <description><![CDATA[{body_html}]]></description>
         </item>"""
         )
