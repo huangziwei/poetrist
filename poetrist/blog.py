@@ -18,7 +18,7 @@ from pathlib import Path
 from time import time
 from typing import DefaultDict
 from urllib.parse import urlparse
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, available_timezones
 
 import click
 import latex2mathml.converter as _l2m
@@ -308,19 +308,13 @@ def smartcap(s: str | None) -> str:
 
 @app.template_filter("ts")
 def ts_filter(iso: str | None) -> str:
-    """
-    Convert an ISO-8601 string like '2025-06-24T09:22:20+00:00'
-    to '2025.06.24 09:22:20'.  Falls back to the original value
-    if parsing fails.
-    """
     if not iso:
         return ""
     try:
         dt = datetime.fromisoformat(iso)
     except ValueError:
         return iso
-
-    return dt.astimezone(ZoneInfo("Europe/Berlin")).strftime("%Y.%m.%d %H:%M:%S")
+    return dt.astimezone(ZoneInfo(tz_name())).strftime("%Y.%m.%d %H:%M:%S")
 
 @app.template_filter("url")
 def url_filter(url: str | None) -> str:
@@ -398,7 +392,8 @@ def init_db():
         );
         INSERT OR IGNORE INTO settings (key, value)
             VALUES ('site_name', 'po.etr.ist'),
-                   ('theme_color','#A5BA93');
+                   ('theme_color','#A5BA93'),
+                   ('timezone','{TZ_DFLT}');
 
         ------------------------------------------------------------
         -- 4.  Tags
@@ -941,17 +936,6 @@ app.jinja_env.globals.update(has_kind=has_kind,
 app.jinja_env.globals["csrf_token"] = _csrf_token
 app.jinja_env.globals['is_b64_image'] = is_b64_image
 
-def theme_color() -> str:
-    """Current theme color (hex), falling back to the original green."""
-    return get_setting('theme_color', '#fda3a5')
-app.jinja_env.globals["theme_color"] = theme_color
-
-THEME_PRESETS = {
-    "萌木": "#9ccf70", "浅縹": "#95bbec", "退紅": "#fda3a5",
-    "薄色": "#c386c2", "浅緋": "#d3250c", "朱祓": "#f1884f",
-    "欵冬": "#fed410", "木蘭": "#b1a277",
-}
-app.jinja_env.globals["theme_presets"] = THEME_PRESETS
 
 def backlinks(entries, *, db) -> dict[int, list]:
     """
@@ -995,6 +979,29 @@ def backlinks(entries, *, db) -> dict[int, list]:
         lst.sort(key=lambda r: r["created_at"])
     return out
 
+# ── Default settings ────────────────────────────────────────────────
+THEME_PRESETS = {
+    "萌木": "#9ccf70", "浅縹": "#95bbec", "退紅": "#fda3a5",
+    "薄色": "#c386c2", "浅緋": "#d3250c", "朱祓": "#f1884f",
+    "欵冬": "#fed410", "木蘭": "#b1a277",
+}
+
+
+def theme_color() -> str:
+    return get_setting('theme_color', THEME_PRESETS["浅縹"])  # default to 浅縹
+
+TZ_DFLT        = "Europe/Berlin"
+
+def tz_name() -> str:
+    tz = get_setting("timezone", TZ_DFLT)
+    return tz if tz in available_timezones() else TZ_DFLT
+
+app.jinja_env.globals.update({
+    "theme_color": theme_color,
+    "theme_presets": THEME_PRESETS,
+    "tz_name": tz_name,
+    "available_timezones": available_timezones,
+})
 
 ###############################################################################
 # Templates + Views 
@@ -1562,6 +1569,9 @@ def settings():
         site_name = request.form['site_name'].strip()
         username  = request.form['username'].strip()
         col = request.form['theme_color'].strip()
+        tz  = request.form.get("timezone","").strip()
+        if tz in available_timezones():            
+            set_setting("timezone", tz)
 
         if site_name:
             set_setting('site_name', site_name)
@@ -1618,6 +1628,13 @@ TEMPL_SETTINGS = wrap("""
                 <span style="font-size:.8em; color:#aaa">Username</span><br>
                 <input name="username" value="{{ username }}" style="width:100%">
             </label>
+                      
+            <label style="display:block;margin:.5rem 0">
+                <span style="font-size:.8em;color:#aaa">Timezone</span><br>
+                <input list="tz-list" name="timezone" value="{{ tz_name() }}"
+                    style="width:100%">
+            </label>
+                      
             <label style="display:flex; margin:.5rem 0">
                 <span style="font-size:.8em; color:#aaa;margin-right:1rem">Theme color</span><br>
                 <input name="theme_color"
@@ -4078,9 +4095,8 @@ TEMPL_SEARCH_ITEMS = wrap("""
 ###############################################################################
 # On This Day
 ###############################################################################
-def _today_md() -> tuple[str, str]:
-    """Return ('MM', 'DD') for the current day in Europe/Berlin."""
-    now = datetime.now(ZoneInfo("Europe/Berlin"))
+def _today_md() -> tuple[str,str]:
+    now = datetime.now(ZoneInfo(tz_name()))
     return now.strftime("%m"), now.strftime("%d")
 
 def _today_stats(*, db):
