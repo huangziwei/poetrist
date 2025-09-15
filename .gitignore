@@ -38,3 +38,6 @@ secrets/
 *.pem
 *.old
 *.log
+
+# Agents
+AGENTS.md

@@ -701,6 +701,34 @@ IMPORT_RE = re.compile(r'''
 _CODE_FENCE_RE = re.compile(r'^\s*(```|~~~)')
 
 def parse_trigger(text: str) -> tuple[str, list[dict]]:
+    """
+    Parse caret-trigger lines from free text and return a tuple of
+    (rewritten_body, blocks).
+
+    Invalid or incomplete caret snippets are treated as plain text and
+    ignored for block extraction. A valid block must include:
+    - item_type (non-empty)
+    - action and a verb that maps to one of VERB_KINDS
+    - either a title or a slug/uuid (so an item can be resolved/created)
+    """
+    def _is_valid_block(blk: dict) -> bool:
+        # item_type present
+        if not blk.get("item_type"):
+            return False
+
+        # action present → derive verb the same way parse does
+        action = (blk.get("action") or "").lower()
+        verb = blk.get("verb") or next(
+            (vb for vb, acts in VERB_MAP.items() if action in acts),
+            action,
+        )
+        if not verb or verb not in VERB_MAP:
+            return False
+
+        # need at least a title or an identifier
+        if not (blk.get("title") or blk.get("slug")):
+            return False
+        return True
     out_blocks, new_lines = [], []
     lines = text.splitlines()
     in_code = False
@@ -789,14 +817,22 @@ def parse_trigger(text: str) -> tuple[str, list[dict]]:
                 j += 1
 
             i = j                              
-            out_blocks.append(blk)
-            new_lines.append(f'^{item_type}:$PENDING${len(out_blocks)-1}$')
+            if _is_valid_block(blk):
+                out_blocks.append(blk)
+                new_lines.append(f'^{item_type}:$PENDING${len(out_blocks)-1}$')
+            else:
+                # treat as plain text if incomplete/invalid
+                new_lines.append(lines[i])
+                i += 1
+                continue
+            
             continue
 
         # ── otherwise: collect verbose caret-meta lines ───────────
         if line.startswith('^'):
             tmp = {"verb":None,"action":None,"item_type":None,
                    "title":None,"slug":None,"progress":None,"meta":{}}
+            start = i
             while i < len(lines) and lines[i].lstrip().startswith('^'):
                 ln = lines[i].strip()
                 m2 = META_RE.match(ln)
@@ -835,8 +871,12 @@ def parse_trigger(text: str) -> tuple[str, list[dict]]:
                     (vb for vb, acts in VERB_MAP.items() if action_lc in acts),
                     action_lc
                 )
-            out_blocks.append(tmp)
-            new_lines.append(f'^{tmp["item_type"]}:$PENDING${len(out_blocks)-1}$')
+            if _is_valid_block(tmp):
+                out_blocks.append(tmp)
+                new_lines.append(f'^{tmp["item_type"]}:$PENDING${len(out_blocks)-1}$')
+            else:
+                # put the original caret lines back unchanged
+                new_lines.extend(lines[start:i])
             continue
 
         # ── a normal, non-caret line ──────────────────────────────

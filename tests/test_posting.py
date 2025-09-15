@@ -115,3 +115,32 @@ def test_caret_checkin_creates_item(client):
     db = get_db()
     rows = db.execute("SELECT COUNT(*) AS c FROM item WHERE slug=?", (item_slug,)).fetchone()
     assert rows["c"] == 1
+
+
+def test_invalid_caret_is_ignored_no_item_or_link(client):
+    """
+    Posting an invalid caret snippet like '^watched:"The Matrix"' should not
+    crash, and must not create items or entry_item links.
+    """
+    _login(client)
+
+    db = get_db()
+    items_before = db.execute("SELECT COUNT(*) AS c FROM item").fetchone()["c"]
+    links_before = db.execute("SELECT COUNT(*) AS c FROM entry_item").fetchone()["c"]
+    entries_before = db.execute("SELECT COUNT(*) AS c FROM entry").fetchone()["c"]
+
+    rv = client.post("/", data={"body": '^watched:"The Matrix"', "csrf": CSRF}, follow_redirects=True)
+    assert rv.status_code == 200, rv.data.decode()
+
+    items_after = db.execute("SELECT COUNT(*) AS c FROM item").fetchone()["c"]
+    links_after = db.execute("SELECT COUNT(*) AS c FROM entry_item").fetchone()["c"]
+    entries_after = db.execute("SELECT COUNT(*) AS c FROM entry").fetchone()["c"]
+
+    # no items or links created by invalid caret
+    assert items_after == items_before
+    assert links_after == links_before
+
+    # ensure the last entry (if a new one was created) has a non-empty kind
+    if entries_after > entries_before:
+        last = db.execute("SELECT kind FROM entry ORDER BY id DESC LIMIT 1").fetchone()
+        assert last["kind"]
