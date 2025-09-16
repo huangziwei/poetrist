@@ -700,35 +700,40 @@ IMPORT_RE = re.compile(r'''
 ''', re.X | re.I)
 _CODE_FENCE_RE = re.compile(r'^\s*(```|~~~)')
 
-def parse_trigger(text: str) -> tuple[str, list[dict]]:
+def parse_trigger(text: str) -> tuple[str, list[dict], list[str]]:
     """
     Parse caret-trigger lines from free text and return a tuple of
-    (rewritten_body, blocks).
+    (rewritten_body, blocks, errors).
 
     Invalid or incomplete caret snippets are treated as plain text and
-    ignored for block extraction. A valid block must include:
+    ignored for block extraction, but a message noting the validation
+    error is collected so callers can surface it to the user. A valid
+    block must include:
     - item_type (non-empty)
     - action and a verb that maps to one of VERB_KINDS
     - either a title or a slug/uuid (so an item can be resolved/created)
     """
-    def _is_valid_block(blk: dict) -> bool:
+    errors: list[str] = []
+
+    def _block_error(blk: dict) -> str | None:
         # item_type present
         if not blk.get("item_type"):
-            return False
+            return "caret block is missing an item type"
 
         # action present → derive verb the same way parse does
-        action = (blk.get("action") or "").lower()
-        verb = blk.get("verb") or next(
-            (vb for vb, acts in VERB_MAP.items() if action in acts),
-            action,
+        action_lc = (blk.get("action") or "").lower()
+        verb = (blk.get("verb") or "").lower() or next(
+            (vb for vb, acts in VERB_MAP.items() if action_lc in acts),
+            action_lc,
         )
         if not verb or verb not in VERB_MAP:
-            return False
+            return "caret block has an unknown action/verb"
 
         # need at least a title or an identifier
         if not (blk.get("title") or blk.get("slug")):
-            return False
-        return True
+            return "caret block needs a title or identifier"
+        return None
+
     out_blocks, new_lines = [], []
     lines = text.splitlines()
     in_code = False
@@ -778,6 +783,7 @@ def parse_trigger(text: str) -> tuple[str, list[dict]]:
         # ── try compact form first ────────────────────────────────
         m = CARET_COMPACT_RE.match(line)
         if m:
+            start_idx = i
             action    = m.group(1) or m.group(2)
             item_type = m.group(3) or m.group(4)
             title = m.group(5) or m.group(6)      # quoted OR un-quoted
@@ -817,13 +823,14 @@ def parse_trigger(text: str) -> tuple[str, list[dict]]:
                 j += 1
 
             i = j                              
-            if _is_valid_block(blk):
+            err = _block_error(blk)
+            if not err:
                 out_blocks.append(blk)
                 new_lines.append(f'^{item_type}:$PENDING${len(out_blocks)-1}$')
             else:
+                errors.append(f"{err} (line {start_idx+1})")
                 # treat as plain text if incomplete/invalid
-                new_lines.append(lines[i])
-                i += 1
+                new_lines.extend(lines[start_idx:i])
                 continue
             
             continue
@@ -871,11 +878,13 @@ def parse_trigger(text: str) -> tuple[str, list[dict]]:
                     (vb for vb, acts in VERB_MAP.items() if action_lc in acts),
                     action_lc
                 )
-            if _is_valid_block(tmp):
+            err = _block_error(tmp)
+            if not err:
                 out_blocks.append(tmp)
                 new_lines.append(f'^{tmp["item_type"]}:$PENDING${len(out_blocks)-1}$')
             else:
                 # put the original caret lines back unchanged
+                errors.append(f"{err} (line {start+1})")
                 new_lines.extend(lines[start:i])
             continue
 
@@ -883,7 +892,7 @@ def parse_trigger(text: str) -> tuple[str, list[dict]]:
         new_lines.append(lines[i])
         i += 1
 
-    return '\n'.join(new_lines), out_blocks
+    return '\n'.join(new_lines), out_blocks, errors
 
 def get_or_create_item(*, item_type, title, meta,
                        slug: str | None = None,
@@ -1943,54 +1952,59 @@ def index():
     db = get_db()
 
     # Quick-add “Say” for logged-in admin
+    form_body = ''
     if request.method == 'POST':
         login_required()
-        body = request.form['body'].strip()
+        form_body = request.form.get('body', '')
+        body_input = form_body.strip()
 
-        if not body:
+        if not body_input:
             flash('Text is required.')
-            return redirect(request.url)
+        else:
+            body_parsed, blocks, errors = parse_trigger(body_input)
+            if errors:
+                flash('Errors in caret blocks found. Entry was not saved.')
+                for err in errors:
+                    flash(err)
+            else:
+                kind  = blocks[0]['verb'] if blocks else infer_kind('', '')
+                now_dt  = utc_now()
+                now = now_dt.isoformat(timespec='seconds')
+                slug = now_dt.strftime("%Y%m%d%H%M%S")
 
-        if body:
-            body, blocks = parse_trigger(body)
-            kind  = blocks[0]['verb'] if blocks else infer_kind('', '')
-            now_dt  = utc_now()
-            now = now_dt.isoformat(timespec='seconds')
-            slug = now_dt.strftime("%Y%m%d%H%M%S")
+                db.execute("""INSERT INTO entry (body, created_at, slug, kind)
+                              VALUES (?,?,?,?)""",
+                           (body_parsed, now, slug, kind))
+                entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-            db.execute("""INSERT INTO entry (body, created_at, slug, kind)
-                          VALUES (?,?,?,?)""",
-                       (body, now, slug, kind))
-            entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+                sync_tags(entry_id, extract_tags(body_parsed), db=db)
 
-            sync_tags(entry_id, extract_tags(body), db=db)
+                for idx, blk in enumerate(blocks):
+                    item_id, slug_i, uuid_i = get_or_create_item(
+                        item_type = blk['item_type'],
+                        title     = blk['title'],
+                        meta      = blk['meta'],
+                        slug      = blk['slug'],
+                        db        = db,
+                        update_meta=True        # only on creation
+                    )
 
-            for idx, blk in enumerate(blocks):
-                item_id, slug_i, uuid_i = get_or_create_item(
-                    item_type = blk['item_type'],
-                    title     = blk['title'],
-                    meta      = blk['meta'],
-                    slug      = blk['slug'],
-                    db        = db,
-                    update_meta=True        # only on creation
-                )
+                    db.execute("""INSERT OR IGNORE INTO entry_item
+                                    (entry_id, item_id, verb, action, progress)
+                                VALUES (?,?,?,?,?)""",
+                            (entry_id, item_id,
+                                blk['verb'], blk['action'], blk['progress']))
 
-                db.execute("""INSERT OR IGNORE INTO entry_item
-                                (entry_id, item_id, verb, action, progress)
-                            VALUES (?,?,?,?,?)""",
-                        (entry_id, item_id,
-                            blk['verb'], blk['action'], blk['progress']))
+                    # patch placeholder in the *local* variable
+                    body_parsed = body_parsed.replace(
+                        f'^{blk["item_type"]}:$PENDING${idx}$',
+                        _verbose_block(blk, uuid_i)
+                    )
 
-                # patch placeholder in the *local* variable
-                body = body.replace(
-                    f'^{blk["item_type"]}:$PENDING${idx}$',
-                    _verbose_block(blk, uuid_i)
-                )
-
-            # 🔑  NOW write the patched body back ↓↓↓
-            db.execute("UPDATE entry SET body=? WHERE id=?", (body, entry_id))
-            db.commit()
-            return redirect(url_for('index'))
+                # 🔑  NOW write the patched body back ↓↓↓
+                db.execute("UPDATE entry SET body=? WHERE id=?", (body_parsed, entry_id))
+                db.commit()
+                return redirect(url_for('index'))
 
 
     # pagination
@@ -2032,6 +2046,7 @@ def index():
         backlinks = back_map,
         title   = get_setting('site_name', 'po.etr.ist'), 
         username= current_username(),
+        form_body = form_body,
     )
 
 
@@ -2049,7 +2064,7 @@ TEMPL_INDEX = wrap("""{% block body %}
             <textarea name="body"
                       rows="3"
                       style="width:100%;margin:0"
-                      placeholder="What's on your mind?"></textarea>
+                      placeholder="What's on your mind?">{{ form_body or '' }}</textarea>
             <button>Add&nbsp;Say</button>
         </form>
     {% endif %}
@@ -2164,59 +2179,96 @@ def by_kind(slug):
         abort(404)
 
     # ---------- create new entry when the admin submits the inline form ----
+    form_title = ''
+    form_link  = ''
+    form_body  = ''
     if request.method == 'POST':
         login_required()
 
-        title = request.form.get('title', '').strip()
-        body  = request.form.get('body',  '').strip()
-        link  = request.form.get('link',  '').strip()
+        form_title = request.form.get('title', '').strip()
+        form_link  = request.form.get('link',  '').strip()
+        form_body  = request.form.get('body',  '')
+        body_input = form_body.strip()
 
-        body, blocks = parse_trigger(body)
+        body_parsed, blocks, errors = parse_trigger(body_input)
 
-        # final kind:  1st verb if any caret block, otherwise the URL kind
+        # final kind used for insertion: caret verb wins, then explicit page
+        entry_kind = kind
         if request.form.get("is_page") == "1":
-            kind = "page"
+            entry_kind = "page"
         elif blocks:
-            kind = blocks[0]['verb'] if blocks else kind
+            entry_kind = blocks[0]['verb']
 
-        missing = []
+        if errors:
+            flash('Errors in caret blocks found. Entry was not saved.')
+            for err in errors:
+                flash(err)
+        else:
+            missing = []
 
-        if kind == 'say':
-            if not body:
-                missing.append('body')
+            if entry_kind == 'say':
+                if not body_input:
+                    missing.append('body')
 
-        elif kind == 'post':
-            if not title:
-                missing.append('title')
-            if not body:
-                missing.append('body')
+            elif entry_kind == 'post':
+                if not form_title:
+                    missing.append('title')
+                if not body_input:
+                    missing.append('body')
 
-        elif kind == 'pin':                # body is OPTIONAL here
-            if not title:
-                missing.append('title')
-            if not link:
-                missing.append('link')
+            elif entry_kind == 'pin':                # body is OPTIONAL here
+                if not form_title:
+                    missing.append('title')
+                if not form_link:
+                    missing.append('link')
 
-        if missing:
-            nice = ' and '.join(missing)
-            flash(f'{nice.capitalize()} {"is" if len(missing)==1 else "are"} required.')
-            return redirect(url_for('by_kind', slug=kind_to_slug(kind or "")))
+            if missing:
+                nice = ' and '.join(missing)
+                flash(f'{nice.capitalize()} {"is" if len(missing)==1 else "are"} required.')
+            else:
+                now_dt = utc_now()
+                now = now_dt.isoformat(timespec='seconds')
+                entry_slug = now_dt.strftime("%Y%m%d%H%M%S")
+                db.execute("""INSERT INTO entry
+                                (title, body, link, created_at, slug, kind)
+                             VALUES (?,?,?,?,?,?)""",
+                           (form_title or None,
+                            body_parsed,
+                            form_link or None,
+                            now,
+                            entry_slug,
+                            entry_kind))
+                entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+                sync_tags(entry_id, extract_tags(body_parsed), db=db)
 
-        now_dt = utc_now()
-        now = now_dt.isoformat(timespec='seconds')
-        slug = now_dt.strftime("%Y%m%d%H%M%S")
-        db.execute("""INSERT INTO entry
-                        (title, body, link, created_at, slug, kind)
-                     VALUES (?,?,?,?,?,?)""",
-                   (title or None, body, link or None, now, slug, kind))
-        entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-        sync_tags(entry_id, extract_tags(body), db=db)
-        db.commit()
-        
-        if kind == "page":
-            return redirect(url_for("by_kind", slug=slug))
+                for idx, blk in enumerate(blocks):
+                    item_id, slug_i, uuid_i = get_or_create_item(
+                        item_type = blk['item_type'],
+                        title     = blk['title'],
+                        meta      = blk['meta'],
+                        slug      = blk['slug'],
+                        db        = db,
+                        update_meta=True        # only on creation
+                    )
 
-        return redirect(url_for('by_kind', slug=kind_to_slug(kind or "")))
+                    db.execute("""INSERT OR IGNORE INTO entry_item
+                                    (entry_id, item_id, verb, action, progress)
+                                VALUES (?,?,?,?,?)""",
+                            (entry_id, item_id,
+                                blk['verb'], blk['action'], blk['progress']))
+
+                    body_parsed = body_parsed.replace(
+                        f'^{blk["item_type"]}:$PENDING${idx}$',
+                        _verbose_block(blk, uuid_i)
+                    )
+
+                db.execute("UPDATE entry SET body=? WHERE id=?", (body_parsed, entry_id))
+                db.commit()
+
+                if entry_kind == "page":
+                    return redirect(url_for("by_kind", slug=entry_slug))
+
+                return redirect(url_for('by_kind', slug=kind_to_slug(entry_kind or "")))
 
     # --- pagination -------------------------------------------------------
     page = max(int(request.args.get('page', 1)), 1)
@@ -2313,6 +2365,9 @@ def by_kind(slug):
         kind     = kind,
         username = current_username(),
         title    = get_setting('site_name', 'po.etr.ist'),
+        form_title = form_title,
+        form_link  = form_link,
+        form_body  = form_body,
         backlinks = back_map,
     )
 
@@ -2327,13 +2382,13 @@ TEMPL_LIST = wrap("""
             {% endif %}
             {# Title field for Posts & Pins #}
             {% if kind in ('post', 'pin') %}
-                <input name="title" style="width:100%;margin:0" placeholder="Title">
+                <input name="title" style="width:100%;margin:0" placeholder="Title" value="{{ form_title or '' }}">
             {% endif %}
             {# Link field only for Pins #}
             {% if kind == 'pin' %}
-                <input name="link" style="width:100%;margin:0" placeholder="Link">
+                <input name="link" style="width:100%;margin:0" placeholder="Link" value="{{ form_link or '' }}">
             {% endif %}
-            <textarea name="body" rows="3" style="width:100%;margin:0" placeholder="What's on your mind?"></textarea>
+            <textarea name="body" rows="3" style="width:100%;margin:0" placeholder="What's on your mind?">{{ form_body or '' }}</textarea>
             
             <div style="display:flex;gap:.75rem;justify-content:space-between;width:100%;">
                 <button style="width:">Add&nbsp;{{ kind.capitalize() }}</button>      
@@ -2693,12 +2748,30 @@ def edit_entry(kind_slug, entry_slug):
 
     if request.method == 'POST':
         title = request.form.get('title','').strip() or None
-        body  = request.form['body'].strip()
+        raw_body = request.form['body']
+        body_trimmed = raw_body.strip()
         link  = request.form.get('link','').strip() or None
         new_slug = request.form.get('slug','').strip() or row['slug']
 
         # ── single pass ───────────────────────────────────────────────
-        body, blocks = parse_trigger(body)            # ← only call once
+        body_parsed, blocks, errors = parse_trigger(body_trimmed)            # ← only call once
+
+        if errors:
+            flash('Errors in caret blocks found. Entry was not saved.')
+            for err in errors:
+                flash(err)
+            filled = dict(row)
+            filled.update({
+                'title': request.form.get('title', ''),
+                'body': raw_body,
+                'link': request.form.get('link', ''),
+                'slug': new_slug,
+            })
+            return render_template_string(
+                TEMPL_EDIT_ENTRY,
+                e=filled,
+                title=get_setting('site_name', 'po.etr.ist')
+            )
 
         # decide the final kind
         is_page_flag = request.form.get('is_page')   # None, '1' or '0'
@@ -2713,9 +2786,21 @@ def edit_entry(kind_slug, entry_slug):
             # normal post / pin / say workflow
             new_kind = blocks[0]['verb'] if blocks else infer_kind(title, link)
 
-        if not body:
+        if not body_parsed:
             flash('Body is required.')
-            return redirect(request.url)
+            filled = dict(row)
+            filled.update({
+                'title': request.form.get('title', ''),
+                'body': raw_body,
+                'link': request.form.get('link', ''),
+                'slug': new_slug,
+                'kind': new_kind,
+            })
+            return render_template_string(
+                TEMPL_EDIT_ENTRY,
+                e=filled,
+                title=get_setting('site_name', 'po.etr.ist')
+            )
 
         # 2️⃣  Synchronise entry_item & item_meta
         db.execute("DELETE FROM entry_item WHERE entry_id=?", (row['id'],))
@@ -2734,7 +2819,7 @@ def edit_entry(kind_slug, entry_slug):
                        (row['id'], item_id,
                         blk['verb'], blk['action'], blk['progress']))
 
-            body = body.replace(
+            body_parsed = body_parsed.replace(
                 f'^{blk["item_type"]}:$PENDING${idx}$',
                 _verbose_block(blk, uuid_i)
             )
@@ -2743,12 +2828,12 @@ def edit_entry(kind_slug, entry_slug):
         db.execute("""UPDATE entry
                          SET title=?, body=?, link=?, slug=?, kind=?, updated_at=?
                        WHERE id=?""",
-                   (title, body, link, new_slug, new_kind,
+                   (title, body_parsed, link, new_slug, new_kind,
                     utc_now().isoformat(timespec='seconds'),
                     row['id']))
 
         # 4️⃣  Tags
-        sync_tags(row['id'], extract_tags(body), db=db)
+        sync_tags(row['id'], extract_tags(body_parsed), db=db)
         db.commit()
 
         if new_kind == "page":
@@ -3309,7 +3394,9 @@ def item_detail(verb, item_type, slug):
 
         body_raw = '\n'.join(caret_lines)
 
-        body, blocks = parse_trigger(body_raw)        # normal pipeline
+        body, blocks, errors = parse_trigger(body_raw)        # normal pipeline
+        if errors:
+            raise ValueError(f"Generated caret block invalid: {errors}")
 
         now_dt   = utc_now()
         now_iso  = now_dt.isoformat(timespec='seconds')

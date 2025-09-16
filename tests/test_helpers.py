@@ -34,13 +34,14 @@ def test_infer_kind(title, link, kind):
 
 def test_parse_compact_trigger():
     txt = '^reading:book:"The Hobbit":42%'
-    body, blocks = parse_trigger(txt)
+    body, blocks, errors = parse_trigger(txt)
     assert body == '^book:$PENDING$0$'
     blk = blocks[0]
     assert blk["verb"] == "read"
     assert blk["item_type"] == "book"
     assert blk["title"] == "The Hobbit"
     assert blk["progress"] == "42%"
+    assert errors == []
 
 
 # ──────────────────────────────────────────────────────────────
