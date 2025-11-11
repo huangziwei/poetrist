@@ -2311,7 +2311,7 @@ def by_kind(slug):
         cur_actions = db.execute(f"""
             WITH latest AS (
                 SELECT i.id,
-                       (
+                       LOWER((
                            SELECT ei2.action
                              FROM entry_item ei2
                              JOIN entry      e2 ON e2.id = ei2.entry_id
@@ -2319,7 +2319,7 @@ def by_kind(slug):
                               AND ei2.verb    = ?
                             ORDER BY e2.created_at DESC
                             LIMIT 1
-                       ) AS last_action
+                       )) AS last_action
                   FROM item i
                   JOIN entry_item ei ON ei.item_id = i.id
                  WHERE ei.verb = ?{action_type_sql}
@@ -2352,13 +2352,13 @@ def by_kind(slug):
                                     THEN SUBSTR(im.v,1,4) END)         AS year,
                         COUNT(DISTINCT e.id)                           AS cnt,
                         MAX(e.created_at)                              AS last_at,
-                        (SELECT ei2.action
+                        LOWER((SELECT ei2.action
                             FROM entry_item ei2
                             JOIN entry      e2 ON e2.id = ei2.entry_id
                             WHERE ei2.item_id = i.id
                             AND ei2.verb    = ?
                             ORDER BY e2.created_at DESC
-                            LIMIT 1)                                   AS last_action
+                            LIMIT 1))                                   AS last_action
                     FROM item        i
                     LEFT JOIN item_meta  im ON im.item_id = i.id
                     JOIN  entry_item  ei ON ei.item_id  = i.id
