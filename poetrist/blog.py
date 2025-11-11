@@ -2291,56 +2291,110 @@ def by_kind(slug):
         sel_type = request.args.get('type', '').strip()      # e.g. “book”
         selected = sel_type.lower() if sel_type else ''      # empty → “All”
 
+        type_total_cnt = sum(r['cnt'] for r in type_rows)
+        if selected:
+            filtered_total_cnt = next(
+                (r['cnt'] for r in type_rows if r['item_type'] == selected),
+                0
+            )
+        else:
+            filtered_total_cnt = type_total_cnt
+
+        action_type_sql = ""
+        if selected:
+            action_type_sql = " AND i.item_type = ?"
+
+        params_actions = [kind, kind]
+        if selected:
+            params_actions.append(selected)
+
+        cur_actions = db.execute(f"""
+            WITH latest AS (
+                SELECT i.id,
+                       (
+                           SELECT ei2.action
+                             FROM entry_item ei2
+                             JOIN entry      e2 ON e2.id = ei2.entry_id
+                            WHERE ei2.item_id = i.id
+                              AND ei2.verb    = ?
+                            ORDER BY e2.created_at DESC
+                            LIMIT 1
+                       ) AS last_action
+                  FROM item i
+                  JOIN entry_item ei ON ei.item_id = i.id
+                 WHERE ei.verb = ?{action_type_sql}
+                 GROUP BY i.id
+            )
+            SELECT last_action, COUNT(*) AS cnt
+              FROM latest
+             WHERE last_action IS NOT NULL AND last_action <> ''
+             GROUP BY last_action
+             ORDER BY cnt DESC
+        """, tuple(params_actions))
+        action_rows = [dict(r) for r in cur_actions]
+
+        sel_action = request.args.get('action', '').strip()
+        selected_action = sel_action.lower() if sel_action else ''
+
         def items_for_verb(verb: str, *, item_type: str | None,
-                        page: int, per: int, db):
-            base_sql = """
-                SELECT i.id, i.title, i.item_type, i.slug,
-                    MIN(CASE WHEN im.k='date' AND LENGTH(im.v)>=4
-                                THEN SUBSTR(im.v,1,4) END)         AS year,
-                    COUNT(DISTINCT e.id)                           AS cnt,
-                    MAX(e.created_at)                              AS last_at,
-                    (SELECT ei2.action
-                        FROM entry_item ei2
-                        JOIN entry      e2 ON e2.id = ei2.entry_id
-                        WHERE ei2.item_id = i.id
-                        AND ei2.verb    = ?
-                        ORDER BY e2.created_at DESC
-                        LIMIT 1)                                   AS last_action
-                FROM item        i
-                LEFT JOIN item_meta  im ON im.item_id = i.id
-                JOIN  entry_item  ei ON ei.item_id  = i.id
-                JOIN  entry       e  ON e.id        = ei.entry_id
-                WHERE ei.verb = ?
-            """
+                           last_action: str | None,
+                           page: int, per: int, db):
             params = [verb, verb]
+            type_filter_sql = ""
             if item_type:
-                base_sql += " AND i.item_type = ?"
+                type_filter_sql = " AND i.item_type = ?"
                 params.append(item_type)
 
-            base_sql += """
-                GROUP BY i.id
-                ORDER BY last_at DESC
+            base_sql = f"""
+                WITH item_rows AS (
+                    SELECT i.id, i.title, i.item_type, i.slug,
+                        MIN(CASE WHEN im.k='date' AND LENGTH(im.v)>=4
+                                    THEN SUBSTR(im.v,1,4) END)         AS year,
+                        COUNT(DISTINCT e.id)                           AS cnt,
+                        MAX(e.created_at)                              AS last_at,
+                        (SELECT ei2.action
+                            FROM entry_item ei2
+                            JOIN entry      e2 ON e2.id = ei2.entry_id
+                            WHERE ei2.item_id = i.id
+                            AND ei2.verb    = ?
+                            ORDER BY e2.created_at DESC
+                            LIMIT 1)                                   AS last_action
+                    FROM item        i
+                    LEFT JOIN item_meta  im ON im.item_id = i.id
+                    JOIN  entry_item  ei ON ei.item_id  = i.id
+                    JOIN  entry       e  ON e.id        = ei.entry_id
+                    WHERE ei.verb = ?{type_filter_sql}
+                    GROUP BY i.id
+                )
+                SELECT * FROM item_rows
             """
+            if last_action:
+                base_sql += " WHERE last_action = ?"
+                params.append(last_action)
+
+            base_sql += " ORDER BY last_at DESC"
             return paginate(base_sql, tuple(params),
                             page=page, per_page=per, db=db)
 
         rows, total_pages = items_for_verb(kind,
                                         item_type=selected or None,
+                                        last_action=selected_action or None,
                                         page=page, per=ps, db=db)
         pages = list(range(1, total_pages + 1))
-        total_cnt = sum(r['cnt'] for r in type_rows)
-
         return render_template_string(
             TEMPL_ITEM_LIST,
-            rows     = rows,
-            pages    = pages,
-            page     = page,
-            verb     = kind,
-            types    = type_rows,        
-            selected = selected,  
-            total_cnt= total_cnt,
-            username = current_username(),
-            title    = get_setting('site_name', 'po.etr.ist'),
+            rows      = rows,
+            pages     = pages,
+            page      = page,
+            verb      = kind,
+            types     = type_rows,        
+            selected  = selected,  
+            actions   = action_rows,
+            selected_action = selected_action,
+            type_total_cnt   = type_total_cnt,
+            filtered_total_cnt = filtered_total_cnt,
+            username  = current_username(),
+            title     = get_setting('site_name', 'po.etr.ist'),
         )
 
 
@@ -2495,7 +2549,9 @@ TEMPL_ITEM_LIST = wrap("""
 <div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
 
     <!-- “All” pill -->
-    <a href="{{ url_for('by_kind', slug=kind_to_slug(verb)) }}"
+    <a href="{{ url_for('by_kind',
+                        slug=kind_to_slug(verb),
+                        action=selected_action or None) }}"
        style="text-decoration:none !important;
               border-bottom:none!important;
               display:inline-flex;
@@ -2510,12 +2566,15 @@ TEMPL_ITEM_LIST = wrap("""
                   background:#444;   color:{{ theme_color() }};
               {% endif %}">
         All
-        <sup style="font-size:.5em;">{{ total_cnt }}</sup>
+        <sup style="font-size:.5em;">{{ type_total_cnt }}</sup>
     </a>
 
     <!-- one pill per item_type -->
     {% for t in types %}
-    <a href="{{ url_for('by_kind', slug=kind_to_slug(verb), type=t.item_type) }}"
+    <a href="{{ url_for('by_kind',
+                        slug=kind_to_slug(verb),
+                        type=t.item_type,
+                        action=selected_action or None) }}"
        style="text-decoration:none !important;
               border-bottom:none!important;
               display:inline-flex;
@@ -2534,6 +2593,58 @@ TEMPL_ITEM_LIST = wrap("""
     </a>
     {% endfor %}
 </div>
+
+{% if actions %}
+<hr style="border-color:#444;opacity:.35;margin:.3rem 0;">
+
+<!-- —— Action pills ——————————————————————————————— -->
+<div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
+
+    <!-- “All” pill for actions -->
+    <a href="{{ url_for('by_kind',
+                        slug=kind_to_slug(verb),
+                        type=selected or None) }}"
+       style="text-decoration:none !important;
+              border-bottom:none!important;
+              display:inline-flex;
+              margin:.15rem 0;
+              padding:.15rem .6rem;
+              border-radius:1rem;
+              white-space:nowrap;
+              font-size:.8em;
+              {% if not selected_action %}
+                  background:{{ theme_color() }}; color:#000;
+              {% else %}
+                  background:#444;   color:{{ theme_color() }};
+              {% endif %}">
+        All
+        <sup style="font-size:.5em;">{{ filtered_total_cnt }}</sup>
+    </a>
+
+    {% for a in actions %}
+    <a href="{{ url_for('by_kind',
+                        slug=kind_to_slug(verb),
+                        type=selected or None,
+                        action=a.last_action) }}"
+       style="text-decoration:none !important;
+              border-bottom:none!important;
+              display:inline-flex;
+              margin:.15rem 0;
+              padding:.15rem .6rem;
+              border-radius:1rem;
+              white-space:nowrap;
+              font-size:.8em;
+              {% if selected_action == a.last_action %}
+                  background:{{ theme_color() }}; color:#000;
+              {% else %}
+                  background:#444;   color:{{ theme_color() }};
+              {% endif %}">
+        {{ a.last_action | smartcap }}
+        <sup style="font-size:.5em;">{{ a.cnt }}</sup>
+    </a>
+    {% endfor %}
+</div>
+{% endif %}
 
 <!-- —— Item list ——————————————————————————————— -->
 {% if rows %}
@@ -2584,7 +2695,11 @@ TEMPL_ITEM_LIST = wrap("""
         {% if p == page %}
           <span style="border-bottom:.33rem solid #aaa;">{{ p }}</span>
         {% else %}
-          <a href="{{ request.path }}?{% if selected %}type={{ selected }}&{% endif %}page={{ p }}">{{ p }}</a>
+          <a href="{{ url_for('by_kind',
+                               slug=kind_to_slug(verb),
+                               type=selected or None,
+                               action=selected_action or None,
+                               page=p) }}">{{ p }}</a>
         {% endif %}
         {% if not loop.last %}&nbsp;{% endif %}
       {% endfor %}
