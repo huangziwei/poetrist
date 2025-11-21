@@ -2363,7 +2363,7 @@ TEMPL_INDEX = wrap("""{% block body %}
                     {{ e.progress }}
                 </span>
                 {% endif %}
-                <a href="{{ url_for('item_detail', verb=e.kind, item_type=e.item_type, slug=e.item_slug) }}"
+                <a href="{{ url_for('item_detail', verb=kind_to_slug(e.kind), item_type=e.item_type, slug=e.item_slug) }}"
                     style="text-decoration:none;margin-right:.4em;color:{{ theme_color() }};vertical-align:middle;">
                     {{ e.item_title }}{% if e.item_year %} ({{ e.item_year }}){% endif %}
                 </a>
@@ -2953,7 +2953,7 @@ TEMPL_ITEM_LIST = wrap("""
 
       {# ─────────── ROW 1 – title ─────────── #}
       <a href="{{ url_for('item_detail',
-                          verb=verb,
+                          verb=kind_to_slug(verb),
                           item_type=r.item_type,
                           slug=r.slug) }}"
          style="display:inline-block;               
@@ -3106,7 +3106,7 @@ TEMPL_ENTRY_DETAIL = wrap("""
                     </span>
                 {% endif %}
                 <a href="{{ url_for('item_detail',
-                                    verb=e.kind,
+                                    verb=kind_to_slug(e.kind),
                                     item_type=e.item_type,
                                     slug=e.item_slug) }}"
                    style="text-decoration:none;margin-right:.4em;
@@ -3596,7 +3596,7 @@ TEMPL_TAGS = wrap("""
                         </span>
                     {% endif %}
                     <a href="{{ url_for('item_detail',
-                                        verb=e.kind,
+                                        verb=kind_to_slug(e.kind),
                                         item_type=e.item_type,
                                         slug=e.item_slug) }}"
                     style="text-decoration:none;margin-right:.4em;
@@ -3782,6 +3782,9 @@ def tags_rss(tag_list):
 ###############################################################################
 @app.route("/<verb>/<item_type>/<slug>", methods=["GET", "POST"])
 def item_detail(verb, item_type, slug):
+    verb = slug_to_kind(verb)
+    if verb not in VERB_KINDS:
+        abort(404)
     db = get_db()
     itm = db.execute(
         "SELECT id, uuid, slug, item_type, title "
@@ -3920,6 +3923,7 @@ def item_detail(verb, item_type, slug):
         meta=meta,
         entries=rows,
         verb=verb,
+        verb_slug=kind_to_slug(verb),
         sort=sort,
         username=current_username(),
         title=get_setting("site_name", "po.etr.ist"),
@@ -3967,9 +3971,9 @@ TEMPL_ITEM_DETAIL = wrap("""
 
 {% if session.get('logged_in') %}
 <a href="{{ url_for('edit_item',
-                verb=verb, item_type=item['item_type'], slug=item['slug']) }}">Edit</a>   
+                verb=verb_slug, item_type=item['item_type'], slug=item['slug']) }}">Edit</a>   
 <a href="{{ url_for('delete_item',
-                verb=verb, item_type=item['item_type'], slug=item['slug']) }}">&nbsp;&nbsp;Delete</a>   
+                verb=verb_slug, item_type=item['item_type'], slug=item['slug']) }}">&nbsp;&nbsp;Delete</a>   
 {% endif %}
            
 
@@ -3995,15 +3999,15 @@ TEMPL_ITEM_DETAIL = wrap("""
 {% if entries|length > 1 %}                
 <div style="padding:1rem 0;font-size:.8em;color:#888;
                          display:flex;align-items:center;justify-content:space-between;">
-    {# ─── sort pills ────────────────────────────────────────────── #}
-    <span style="display:inline-flex;
-                border:1px solid #555;
-                border-radius:4px;
-                overflow:hidden;
-                font-size:.8em;">
-        {% for val, label in [('old','Oldest'), ('new','Newest')] %}
-        <a href="{{ url_for('item_detail',
-                            verb=verb,
+        {# ─── sort pills ────────────────────────────────────────────── #}
+        <span style="display:inline-flex;
+                    border:1px solid #555;
+                    border-radius:4px;
+                    overflow:hidden;
+                    font-size:.8em;">
+            {% for val, label in [('old','Oldest'), ('new','Newest')] %}
+            <a href="{{ url_for('item_detail',
+                            verb=verb_slug,
                             item_type=item.item_type,
                             slug=item.slug,
                             sort=val) }}"
@@ -4073,6 +4077,9 @@ TEMPL_ITEM_DETAIL = wrap("""
 
 @app.route("/<verb>/<item_type>/<slug>/edit", methods=["GET", "POST"])
 def edit_item(verb, item_type, slug):
+    verb = slug_to_kind(verb)
+    if verb not in VERB_KINDS:
+        abort(404)
     login_required()
     db = get_db()
     itm = db.execute(
@@ -4113,7 +4120,12 @@ def edit_item(verb, item_type, slug):
         db.commit()
         flash("Item saved.")
         return redirect(
-            url_for("item_detail", verb=verb, item_type=new_type, slug=new_slug)
+            url_for(
+                "item_detail",
+                verb=kind_to_slug(verb),
+                item_type=new_type,
+                slug=new_slug,
+            )
         )
 
     # → GET – render form -----------------------------------------------------
@@ -4189,7 +4201,7 @@ TEMPL_EDIT_ITEM = wrap("""
 
   <div>
     <button>Save</button>
-    <a href="{{ url_for('item_detail', verb=verb,
+    <a href="{{ url_for('item_detail', verb=kind_to_slug(verb),
                          item_type=item['item_type'], slug=item['slug']) }}"
        style="margin-left:1rem;">Cancel</a>
   </div>
@@ -4200,6 +4212,9 @@ TEMPL_EDIT_ITEM = wrap("""
 
 @app.route("/<verb>/<item_type>/<slug>/delete", methods=["GET", "POST"])
 def delete_item(verb, item_type, slug):
+    verb = slug_to_kind(verb)
+    if verb not in VERB_KINDS:
+        abort(404)
     login_required()
     db = get_db()
     itm = db.execute(
@@ -4234,7 +4249,7 @@ TEMPL_DELETE_ITEM = wrap("""
             {% endif %}
     <button style="background:#c00;color:#fff;">Yes – delete it</button>
     <a href="{{ url_for('item_detail',
-                        verb=verb,
+                        verb=kind_to_slug(verb),
                         item_type=item['item_type'],
                         slug=item['slug']) }}"
        style="margin-left:1rem;">Cancel</a>
@@ -4633,7 +4648,7 @@ TEMPL_SEARCH_ENTRIES = wrap("""
                         {{ e.progress }}
                     </span>
                     {% endif %}
-                    <a href="{{ url_for('item_detail', verb=e.kind, item_type=e.item_type, slug=e.item_slug) }}"
+                    <a href="{{ url_for('item_detail', verb=kind_to_slug(e.kind), item_type=e.item_type, slug=e.item_slug) }}"
                     style="text-decoration:none;margin-right:.4em;
                             color:{{ theme_color() }};vertical-align:middle;">
                     {{ e.item_title }}{% if e.item_year %} ({{ e.item_year }}){% endif %}
@@ -4689,7 +4704,7 @@ TEMPL_SEARCH_ITEMS = wrap("""
     <ul style="list-style:none;padding:0;">
     {% for r in rows %}
       <li style="margin:.6rem 0;">
-        <a href="{{ url_for('item_detail', verb=r.verb, item_type=r.item_type, slug=r.slug) }}">
+        <a href="{{ url_for('item_detail', verb=kind_to_slug(r.verb), item_type=r.item_type, slug=r.slug) }}">
           {{ r.title|safe }}
         </a>
         {% if r.year %}<small style="color:#888;">({{ r.year }})</small>{% endif %}
@@ -4896,7 +4911,7 @@ TEMPL_TODAY = wrap("""
           {% endif %}
 
           <a href="{{ url_for('item_detail',
-                              verb=e.kind,
+                              verb=kind_to_slug(e.kind),
                               item_type=e.item_type,
                               slug=e.item_slug) }}"
              style="text-decoration:none;margin-right:.4em;
@@ -5026,6 +5041,9 @@ TEMPL_500 = wrap("""
 @app.route("/<verb>/<item_type>/<slug>/json")
 @rate_limit(max_requests=30, window=60)
 def export_item_json(verb, item_type, slug):
+    verb = slug_to_kind(verb)
+    if verb not in VERB_KINDS:
+        abort(404)
     db = get_db()
     itm = db.execute(
         """SELECT id, uuid, slug, item_type, title
