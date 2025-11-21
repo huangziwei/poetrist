@@ -1854,10 +1854,12 @@ def settings():
             else:
                 flash("Invalid color – please use 6-digit hex.")
 
-        slug_defaults = {**SLUG_DEFAULTS, **{v: v for v in VERB_KINDS}}
-        for kind, default_slug in slug_defaults.items():
+        for kind, default_slug in SLUG_DEFAULTS.items():
             raw = request.form.get(f"slug_{kind}", "").strip()
             set_setting(f"slug_{kind}", raw or default_slug)
+        for verb in active_verbs():
+            raw = request.form.get(f"slug_{verb}", "").strip()
+            set_setting(f"slug_{verb}", raw or verb)
 
         size = (
             max(1, int(raw))
@@ -1873,8 +1875,9 @@ def settings():
     cur_username = db.execute("SELECT username FROM user LIMIT 1").fetchone()[
         "username"
     ]
+    active_verb_list = active_verbs()
     slug_settings = slug_map()
-    verb_slugs = [(v, slug_settings.get(v, v)) for v in VERB_KINDS]
+    verb_slugs = [(v, slug_settings.get(v, v)) for v in active_verb_list]
     return render_template_string(
         TEMPL_SETTINGS,
         site_name=get_setting("site_name", "po.etr.ist"),
@@ -1954,15 +1957,17 @@ TEMPL_SETTINGS = wrap("""
                     </label>
             </div>
             <div style="margin-top:1rem;">
-                <span style="font-size:.8em; color:#aaa">Verbs</span>
-                <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(10rem,1fr)); gap:.75rem; margin-top:.4rem;">
-                    {% for verb, slug in verb_slugs %}
-                    <label>
-                        <span style="font-size:.8em; color:#aaa">{{ verb|capitalize }}</span><br>
-                        <input name="slug_{{ verb }}" value="{{ slug }}" style="width:100%">
-                    </label>
-                    {% endfor %}
-                </div>
+                {% if verb_slugs %}
+                    <span style="font-size:.8em; color:#aaa">Verbs</span>
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(10rem,1fr)); gap:.75rem; margin-top:.4rem;">
+                        {% for verb, slug in verb_slugs %}
+                        <label>
+                            <span style="font-size:.8em; color:#aaa">{{ verb|capitalize }}</span><br>
+                            <input name="slug_{{ verb }}" value="{{ slug }}" style="width:100%">
+                        </label>
+                        {% endfor %}
+                    </div>
+                {% endif %}
             </div>
         </fieldset>
 
