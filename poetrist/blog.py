@@ -18,7 +18,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from time import time
 from typing import DefaultDict
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 from zoneinfo import ZoneInfo, available_timezones
 
 import click
@@ -718,6 +718,35 @@ def slug_to_kind(slug: str) -> str | None:
     return rev.get(slug, slug)
 
 
+def tags_slug() -> str:
+    """Current base slug for the tags view."""
+    s = (get_setting("slug_tags", "tags") or "tags").strip("/") or "tags"
+    return s
+
+
+def settings_slug() -> str:
+    """Current base slug for the settings page."""
+    s = (get_setting("slug_settings", "settings") or "settings").strip("/") or "settings"
+    return s
+
+
+def tags_href(tag_list: str = "", **params) -> str:
+    """
+    Build a path for the tags view that respects the custom slug.
+    Example: tags_href("foo+bar", sort="new") → /tags/foo+bar?sort=new
+    """
+    base = f"/{tags_slug()}"
+    path = f"{base}/{tag_list}" if tag_list else base
+    if params:
+        path += "?" + urlencode(params)
+    return path
+
+
+def settings_href() -> str:
+    """Path to the Settings page (customizable slug)."""
+    return f"/{settings_slug()}"
+
+
 # Pagination helpers
 def page_size() -> int:
     try:
@@ -1133,7 +1162,12 @@ app.jinja_env.globals["entry_tags"] = lambda eid: entry_tags(eid, db=get_db())
 app.jinja_env.globals["nav_pages"] = nav_pages
 app.jinja_env.globals["version"] = __version__
 app.jinja_env.globals.update(
-    has_kind=has_kind, active_verbs=active_verbs, verb_kinds=VERB_KINDS
+    has_kind=has_kind,
+    active_verbs=active_verbs,
+    verb_kinds=VERB_KINDS,
+    tags_slug=tags_slug,
+    tags_href=tags_href,
+    settings_href=settings_href,
 )
 app.jinja_env.globals["csrf_token"] = _csrf_token
 app.jinja_env.globals["is_b64_image"] = is_b64_image
@@ -1274,7 +1308,7 @@ html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Rob
                 <a href="{{ url_for('by_kind', slug=kind_to_slug('pin')) }}"
                 {% if kind=='pin' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
                 Pins</a>&nbsp;&nbsp;
-                <a href="{{ url_for('tags') }}"
+                <a href="{{ tags_href() }}"
                 {% if kind=='tags' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
                 Tags</a>&nbsp;&nbsp;
             </div>
@@ -1294,8 +1328,8 @@ html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Rob
         <div style="margin-left:auto; display:flex; flex-direction:column; gap:.25rem;align-items:flex-end;">
             <div style="white-space:nowrap;">
                 {% if session.get('logged_in') %}
-                    <a href="{{ url_for('settings') }}"
-                    {% if request.endpoint=='settings' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
+                    <a href="{{ settings_href() }}"
+                    {% if request.path==settings_href() %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
                     Settings</a>
                 {% else %}
                     <a href="{{ url_for('login') }}"
@@ -1698,7 +1732,7 @@ def webauthn_delete_passkey(pkid):
     db.commit()
 
     flash("Passkey deleted.")  # nice feedback for the toast
-    return redirect(url_for("settings"), code=303)  # PRG pattern
+    return redirect(settings_href(), code=303)  # PRG pattern
 
 
 @app.route("/webauthn/rename/<int:pkid>", methods=["POST"])
@@ -1828,7 +1862,7 @@ def settings():
     if request.method == "POST" and request.form.get("action") == "rotate_token":
         session["one_time_token"] = _rotate_token(db)  # store once
         return redirect(
-            url_for("settings") + "#new-token", code=303
+            settings_href() + "#new-token", code=303
         )  # PRG; 303 = “See Other”
 
     if request.method == "POST":
@@ -1860,6 +1894,10 @@ def settings():
         for verb in active_verbs():
             raw = request.form.get(f"slug_{verb}", "").strip()
             set_setting(f"slug_{verb}", raw or verb)
+        set_setting("slug_tags", request.form.get("slug_tags", "").strip() or "tags")
+        set_setting(
+            "slug_settings", request.form.get("slug_settings", "").strip() or "settings"
+        )
 
         size = (
             max(1, int(raw))
@@ -1869,7 +1907,7 @@ def settings():
         set_setting("page_size", size)
 
         flash("Settings saved.")
-        return redirect(url_for("settings"))
+        return redirect(settings_href())
 
     new_token = session.pop("one_time_token", None)  # use-and-forget
     cur_username = db.execute("SELECT username FROM user LIMIT 1").fetchone()[
@@ -1877,6 +1915,8 @@ def settings():
     ]
     active_verb_list = active_verbs()
     slug_settings = slug_map()
+    slug_settings["tags"] = tags_slug()
+    slug_settings["settings"] = settings_slug()
     verb_slugs = [(v, slug_settings.get(v, v)) for v in active_verb_list]
     return render_template_string(
         TEMPL_SETTINGS,
@@ -1955,6 +1995,19 @@ TEMPL_SETTINGS = wrap("""
                         <span style="font-size:.8em; color:#aaa">Pins</span><br>
                         <input name="slug_pin" value="{{ slug_settings['pin'] }}" style="width:100%">
                     </label>
+            </div>
+            <div style="margin-top:1rem;">
+                <span style="font-size:.8em; color:#aaa">Other</span>
+                <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(10rem,1fr)); gap:.75rem; margin-top:.4rem;">
+                    <label>
+                        <span style="font-size:.8em; color:#aaa">Tags</span><br>
+                        <input name="slug_tags" value="{{ slug_settings['tags'] }}" style="width:100%">
+                    </label>
+                    <label>
+                        <span style="font-size:.8em; color:#aaa">Settings</span><br>
+                        <input name="slug_settings" value="{{ slug_settings['settings'] }}" style="width:100%">
+                    </label>
+                </div>
             </div>
             <div style="margin-top:1rem;">
                 {% if verb_slugs %}
@@ -2417,6 +2470,12 @@ TEMPL_INDEX = wrap("""{% block body %}
 
 @app.route("/<slug>", methods=["GET", "POST"])
 def by_kind(slug):
+    # Special-case custom slugs for tags/settings before kind detection
+    if slug == tags_slug():
+        return tags("")  # base tags view
+    if slug == settings_slug():
+        return settings()
+
     db = get_db()
 
     page = db.execute(
@@ -3414,12 +3473,10 @@ TEMPL_DELETE_ENTRY = wrap("""
 ###############################################################################
 # Tags
 ###############################################################################
-@app.route("/tags", defaults={"tag_list": ""})
-@app.route("/tags/<path:tag_list>")
-def tags(tag_list: str):
+def _render_tags(tag_list: str):
     """
     Show a tag cloud.  Pills can be selected / deselected; the current
-    selection is encoded in the path as  /tags/foo+bar+baz
+    selection is encoded in the path as  /<tags_slug>/foo+bar+baz
     """
     db = get_db()
 
@@ -3446,9 +3503,7 @@ def tags(tag_list: str):
         # ── URL that would result from clicking the pill ────────────────────
         new_sel = (selected - {r["name"]}) if r["active"] else (selected | {r["name"]})
         r["href"] = (
-            url_for("tags", tag_list="+".join(sorted(new_sel)))
-            if new_sel
-            else url_for("tags")
+            tags_href("+".join(sorted(new_sel))) if new_sel else tags_href()
         )
 
     # ---------- fetch entries if something is selected ----------------------
@@ -3487,7 +3542,7 @@ def tags(tag_list: str):
     else:
         entries, pages = None, []  # nothing selected → no list
 
-    back_map = backlinks(entries, db=db)
+        back_map = backlinks(entries, db=db)
 
     return render_template_string(
         TEMPL_TAGS,
@@ -3502,6 +3557,19 @@ def tags(tag_list: str):
         title=get_setting("site_name", "po.etr.ist"),
         backlinks=back_map,
     )
+
+
+@app.route("/tags", defaults={"tag_list": ""})
+@app.route("/tags/<path:tag_list>")
+def tags(tag_list: str):
+    return _render_tags(tag_list)
+
+
+@app.route("/<custom_tags_slug>/<path:tag_list>")
+def tags_custom(custom_tags_slug: str, tag_list: str):
+    if custom_tags_slug != tags_slug():
+        abort(404)
+    return _render_tags(tag_list)
 
 
 TEMPL_TAGS = wrap("""
@@ -3546,9 +3614,7 @@ TEMPL_TAGS = wrap("""
                 overflow:hidden;
                 font-size:.8em;">
         {% for val,label in [('new','Newest'),('old','Oldest')] %}
-            <a href="{{ url_for('tags',
-                                tag_list='+'.join(selected),
-                                sort=val) }}"
+            <a href="{{ tags_href('+'.join(selected), sort=val) }}"
                style="display:flex;align-items:center;padding:.35em 1em;
                       text-decoration:none;border-bottom:none;
                       {% if not loop.first %}border-left:1px solid #555;{% endif %}
@@ -3638,9 +3704,7 @@ TEMPL_TAGS = wrap("""
                 {% if p == page %}
                     <span style="border-bottom:0.33rem solid #aaa;">{{ p }}</span>
                 {% else %}
-                    <a href="{{ url_for('tags',
-                                        tag_list='+'.join(selected),
-                                        page=p) }}">{{ p }}</a>
+                    <a href="{{ tags_href('+'.join(selected), page=p) }}">{{ p }}</a>
                 {% endif %}
                 {% if not loop.last %}&nbsp;{% endif %}
             {% endfor %}
@@ -3752,8 +3816,7 @@ def kind_rss(slug):
     return app.response_class(xml, mimetype="application/rss+xml")
 
 
-@app.route("/tags/<path:tag_list>/rss")
-def tags_rss(tag_list):
+def _render_tags_rss(tag_list: str):
     tags = [t.lower() for t in re.split(r"[,+/]", tag_list) if t]
     if not tags:
         abort(404)
@@ -3775,6 +3838,16 @@ def tags_rss(tag_list):
         site_url=request.url_root.rstrip("/"),
     )
     return app.response_class(xml, mimetype="application/rss+xml")
+@app.route("/tags/<path:tag_list>/rss")
+def tags_rss(tag_list):
+    return _render_tags_rss(tag_list)
+
+
+@app.route("/<custom_tags_slug>/<path:tag_list>/rss")
+def tags_rss_custom(custom_tags_slug: str, tag_list: str):
+    if custom_tags_slug != tags_slug():
+        abort(404)
+    return _render_tags_rss(tag_list)
 
 
 ###############################################################################
