@@ -2,6 +2,7 @@
 """
 A single-file minimal blog.
 """
+
 import ipaddress
 import json
 import re
@@ -58,56 +59,128 @@ from werkzeug.security import generate_password_hash as hash_token
 # Imports & constants
 ################################################################################
 
-ROOT        = Path(__file__).parent
-DB_FILE     = ROOT / "blog.sqlite3"
+ROOT = Path(__file__).parent
+DB_FILE = ROOT / "blog.sqlite3"
 
 SECRET_FILE = ROOT / ".secret_key"
-SECRET_KEY  = SECRET_FILE.read_text().strip() if SECRET_FILE.exists() \
-              else secrets.token_hex(32)
+SECRET_KEY = (
+    SECRET_FILE.read_text().strip() if SECRET_FILE.exists() else secrets.token_hex(32)
+)
 SECRET_FILE.write_text(SECRET_KEY)
 TOKEN_LEN = 48
-signer = TimestampSigner(SECRET_KEY, salt='login-token')
+signer = TimestampSigner(SECRET_KEY, salt="login-token")
 
 SLUG_DEFAULTS = {"say": "says", "post": "posts", "pin": "pins"}
 VERB_MAP = {
-    "read"   : ["to-read", "to read", "reading", "read", "to reread", "rereading", "reread", "finished", "reflect", "skimmed", "abandoned"],
-    "watch"  : ["to-watch", "to watch" , "watching", "watched", "to rewatch", "rewatching", "rewatched", "reflect", "abandoned"],
-    "listen" : ["to-listen", "to listen", "listening", "listened","to relisten", "relistening", "relistened", "reflect", "abandoned"],
-    "play"   : ["to-play", "to play", "playing", "played", "to replay", "replaying", "replayed", "reflect", "abandoned"],
-    "visit"  : ["to-visit", "to visit", "visiting", "visited", "to revisit", "revisiting", "revisited", "reflect", "regular"],
-    "use"    : ["to-use", "to use", "using", "used", "to reuse", "reusing", "reused", "reflect", "retired", "replaced"],
+    "read": [
+        "to-read",
+        "to read",
+        "reading",
+        "read",
+        "to reread",
+        "rereading",
+        "reread",
+        "finished",
+        "skimmed",
+        "abandoned",
+    ],
+    "watch": [
+        "to-watch",
+        "to watch",
+        "watching",
+        "watched",
+        "to rewatch",
+        "rewatching",
+        "rewatched",
+        "abandoned",
+    ],
+    "listen": [
+        "to-listen",
+        "to listen",
+        "listening",
+        "listened",
+        "to relisten",
+        "relistening",
+        "relistened",
+        "abandoned",
+    ],
+    "play": [
+        "to-play",
+        "to play",
+        "playing",
+        "played",
+        "to replay",
+        "replaying",
+        "replayed",
+        "abandoned",
+    ],
+    "visit": [
+        "to-visit",
+        "to visit",
+        "visiting",
+        "visited",
+        "to revisit",
+        "revisiting",
+        "revisited",
+        "regular",
+    ],
+    "use": [
+        "to-use",
+        "to use",
+        "using",
+        "used",
+        "to reuse",
+        "reusing",
+        "reused",
+        "retired",
+        "replaced",
+    ],
 }
 ALIASES = {
-    "p": "progress",  "pg": "progress",
-    "i": "item_type", "it": "item_type",
-    "a": "action",    "at": "action",
-    "v": "verb",      "vb": "verb",
-    "t": "title",     "tt": "title",
+    "p": "progress",
+    "pg": "progress",
+    "i": "item_type",
+    "it": "item_type",
+    "a": "action",
+    "at": "action",
+    "v": "verb",
+    "vb": "verb",
+    "t": "title",
+    "tt": "title",
 }
-def canon(k: str) -> str:        # helper: ^pg → progress
+
+
+def canon(k: str) -> str:  # helper: ^pg → progress
     return ALIASES.get(k.lower(), k.lower())
+
+
 KINDS = ("say", "post", "pin") + tuple(VERB_MAP.keys()) + ("page",)
 PAGE_DEFAULT = 100
 RFC2822_FMT = "%a, %d %b %Y %H:%M:%S %z"
 _TOKEN_CHARS = r"0-9A-Za-z\u0080-\uFFFF_"
-TOKEN_RE     = re.compile(f"[{_TOKEN_CHARS}]+")
-TAG_CHARS = r'[\w./-]+'
-TAG_RE = re.compile(rf'(?<!\w)#({TAG_CHARS})')
-HASH_LINK_RE = re.compile(rf'''
+TOKEN_RE = re.compile(f"[{_TOKEN_CHARS}]+")
+TAG_CHARS = r"[\w./-]+"
+TAG_RE = re.compile(rf"(?<!\w)#({TAG_CHARS})")
+HASH_LINK_RE = re.compile(
+    rf"""
     (?<![A-Za-z0-9_="'&]) \#
     (?!x?[0-9A-Fa-f]+;)
     (?![0-9A-Fa-f]{{3,8}}\b)
     ({TAG_CHARS})
-''', re.X)
+""",
+    re.X,
+)
 ARITH_RE = re.compile(
     r'<(?P<tag>span|div) class="arithmatex">(.*?)</(?P=tag)>',
     re.S,
 )
 _FOOTNOTE_DIV_RE = re.compile(r'<div class="footnote">.*?</div>', re.S)
 _FOOT_LI_RE = re.compile(r'<li id="fn:([^"]+)">(.*?)</li>', re.S)
-_PARA_RE = re.compile(r'<p[^>]*>(.*?)</p>', re.S)
-_BACKREF_RE = re.compile(r'<a[^>]+footnote-backref[^>]*>.*?</a>', re.S)
-_SUP_RE = re.compile(r'<sup id="fnref:([^"]+)"><a class="footnote-ref" href="#fn:[^"]+"[^>]*>.*?</a></sup>')
+_PARA_RE = re.compile(r"<p[^>]*>(.*?)</p>", re.S)
+_BACKREF_RE = re.compile(r"<a[^>]+footnote-backref[^>]*>.*?</a>", re.S)
+_SUP_RE = re.compile(
+    r'<sup id="fnref:([^"]+)"><a class="footnote-ref" href="#fn:[^"]+"[^>]*>.*?</a></sup>'
+)
 
 try:
     __version__ = version("poetrist")
@@ -122,9 +195,9 @@ app = Flask(__name__)
 app.url_map.strict_slashes = False
 app.config.update(SECRET_KEY=SECRET_KEY, DATABASE=str(DB_FILE))
 app.config.update(
-    SESSION_COOKIE_SAMESITE="Lax",   # blocks most CSRF on simple links
-    SESSION_COOKIE_HTTPONLY=True,    # mitigate XSS → cookie theft
-    SESSION_COOKIE_SECURE=True,      # only if you serve over HTTPS
+    SESSION_COOKIE_SAMESITE="Lax",  # blocks most CSRF on simple links
+    SESSION_COOKIE_HTTPONLY=True,  # mitigate XSS → cookie theft
+    SESSION_COOKIE_SECURE=True,  # only if you serve over HTTPS
 )
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
@@ -141,10 +214,15 @@ md = markdown.Markdown(
         "pymdownx.arithmatex",
     ],
     extension_configs={
-        "pymdownx.highlight": {"guess_lang": True, "noclasses": True, "pygments_style": "nord"},
+        "pymdownx.highlight": {
+            "guess_lang": True,
+            "noclasses": True,
+            "pygments_style": "nord",
+        },
         "pymdownx.arithmatex": {"generic": True},
     },
 )
+
 
 @app.template_filter("md")
 def md_filter(text: str | None) -> Markup:
@@ -163,17 +241,17 @@ def md_filter(text: str | None) -> Markup:
         out, in_code, fence = [], False, ""
         for ln in (text or "").splitlines():
             m = _CODE_FENCE_RE.match(ln)
-            if m:                                    # toggle fence status
+            if m:  # toggle fence status
                 tok = m.group(1)
                 if not in_code:
                     in_code, fence = True, tok
-                elif tok == fence:                   # matching closer
+                elif tok == fence:  # matching closer
                     in_code, fence = False, ""
                 out.append(ln)
                 continue
 
             if in_code or not ln.lstrip().startswith("^"):
-                out.append(ln)                       # keep line
+                out.append(ln)  # keep line
         return "\n".join(out)
 
     clean = _drop_caret_meta((text or ""))
@@ -182,17 +260,17 @@ def md_filter(text: str | None) -> Markup:
     # -- Hashtag `#tag` -------------------------------------------------
     def _hashtag_repl(match):
         orig_tag = match.group(1)
-        tag_lc   = orig_tag.lower() 
+        tag_lc = orig_tag.lower()
         href = url_for("tags", tag_list=tag_lc)
-        return f'<a href="{href}" style="text-decoration:none;color:{ theme_col };border-bottom:0.1px dotted currentColor;">#{orig_tag}</a>'
+        return f'<a href="{href}" style="text-decoration:none;color:{theme_col};border-bottom:0.1px dotted currentColor;">#{orig_tag}</a>'
 
     html = HASH_LINK_RE.sub(_hashtag_repl, html)
     html = re.sub(
-            r'(<mark)(>)',
-            rf'\1 style="background:{ theme_col };color:#000;padding:0 .15em;"\2',
-            html
-        )
-    
+        r"(<mark)(>)",
+        rf'\1 style="background:{theme_col};color:#000;padding:0 .15em;"\2',
+        html,
+    )
+
     # -- TeX → MathML ---------------------------------------------------
     _DELIMS = [("$$", "$$"), (r"\[", r"\]"), (r"\(", r"\)"), ("$", "$")]
 
@@ -200,16 +278,16 @@ def md_filter(text: str | None) -> Markup:
         tex = tex.strip()
         for left, right in _DELIMS:
             if tex.startswith(left) and tex.endswith(right):
-                return tex[len(left):-len(right)].strip()
+                return tex[len(left) : -len(right)].strip()
         return tex
 
     def _to_mathml(m: re.Match) -> str:
         try:
             mathml = _l2m.convert(
                 unescape(_undelimit(m.group(2))),
-                display="inline" if m.group("tag") == "span" else "block"
+                display="inline" if m.group("tag") == "span" else "block",
             )
-            if m.group("tag") == "div":                      
+            if m.group("tag") == "div":
                 return f'<div class="math-scroll" tabindex="0">{mathml}</div>'
             return mathml
         except Exception:
@@ -227,42 +305,48 @@ def md_filter(text: str | None) -> Markup:
         notes = {}
         for m in _FOOT_LI_RE.finditer(div_m.group(0)):
             num, raw = m.group(1), m.group(2)
-            raw   = _BACKREF_RE.sub('', raw)
+            raw = _BACKREF_RE.sub("", raw)
             paras = [p.strip() for p in _PARA_RE.findall(raw)]
-            notes[num] = '<br><br>'.join(paras)
-        html = html.replace(div_m.group(0), '')
+            notes[num] = "<br><br>".join(paras)
+        html = html.replace(div_m.group(0), "")
 
         # 2)  ensure the global “none” radio exists once per request
-        if 'fn_none_added' not in g:
+        if "fn_none_added" not in g:
             g.fn_none_added = True
-            html = ('<input type="radio" hidden id="fn-none" name="fn-set" '
-                    'class="fn-none" checked>') + html
+            html = (
+                '<input type="radio" hidden id="fn-none" name="fn-set" '
+                'class="fn-none" checked>'
+            ) + html
 
         # 3)  replace every superscript
         def repl(m: re.Match) -> str:
-            num  = m.group(1)
-            body = notes.get(num, '')
-            rid  = f'fn-{num}-{uuid.uuid4().hex[:4]}'
+            num = m.group(1)
+            body = notes.get(num, "")
+            rid = f"fn-{num}-{uuid.uuid4().hex[:4]}"
             return (
                 f'<sup class="fn" id="fnref:{num}">'
                 f'  <input hidden type="radio" id="{rid}" name="fn-set" '
                 f'         class="fn-toggle">'
                 f'  <label for="{rid}" class="fn-ref">{num}</label>'
                 f'  <span  class="fn-popup">{body}</span>'
-                f'  <label for="fn-none" class="fn-overlay"></label>'   # ← overlay here
-                f'</sup>'
+                f'  <label for="fn-none" class="fn-overlay"></label>'  # ← overlay here
+                f"</sup>"
             )
+
         html = _SUP_RE.sub(repl, html)
-        all_notes = ''.join(f'<li id="fn:{k}"><a href="#fnref:{k}" class="fn-badge" style="font-size:0.85rem;text-decoration:none;">{k}</a> {v}</li>' for k, v in notes.items())
+        all_notes = "".join(
+            f'<li id="fn:{k}"><a href="#fnref:{k}" class="fn-badge" style="font-size:0.85rem;text-decoration:none;">{k}</a> {v}</li>'
+            for k, v in notes.items()
+        )
         html += (
             '<details class="fn-all" style="margin-bottom:1.5rem;font-size:1rem;">'
             f'  <summary style="cursor:pointer;font-weight:bold;">'
-            f'    Footnotes&nbsp;({len(notes)})'
-            '  </summary>'
+            f"    Footnotes&nbsp;({len(notes)})"
+            "  </summary>"
             '  <ol style="list-style:none;margin:0.5rem 0">'
-            f'{all_notes}'
-            '  </ol>'
-            '</details>'
+            f"{all_notes}"
+            "  </ol>"
+            "</details>"
         )
         return html
 
@@ -270,11 +354,14 @@ def md_filter(text: str | None) -> Markup:
 
     def _add_u_photo(m):
         tag = m.group(0)
-        return tag if 'u-photo' in tag else tag.replace('<img', '<img class="u-photo"', 1)
+        return (
+            tag if "u-photo" in tag else tag.replace("<img", '<img class="u-photo"', 1)
+        )
 
-    html = re.sub(r'<img\b[^>]*>', _add_u_photo, html)
+    html = re.sub(r"<img\b[^>]*>", _add_u_photo, html)
 
     return Markup(html)
+
 
 @app.template_filter("mdinline")
 def md_inline_filter(text: str | None) -> Markup:
@@ -282,14 +369,15 @@ def md_inline_filter(text: str | None) -> Markup:
     Render Markdown like `md`, but if the result is exactly one
     <p>…</p> block, unwrap it so we get pure inline HTML.
     """
-    html = md_filter(text)          # reuse the existing logic
+    html = md_filter(text)  # reuse the existing logic
     # Markup -> str for inspection, but keep it safe afterwards
     s = str(html)
 
     if s.startswith("<p>") and s.endswith("</p>"):
-        s = s[3:-4].strip()         # drop the wrapper
+        s = s[3:-4].strip()  # drop the wrapper
 
     return Markup(s)
+
 
 @app.template_filter("smartcap")
 def smartcap(s: str | None) -> str:
@@ -315,6 +403,7 @@ def ts_filter(iso: str | None) -> str:
         return iso
     return dt.astimezone(ZoneInfo(tz_name())).strftime("%Y.%m.%d %H:%M:%S")
 
+
 @app.template_filter("url")
 def url_filter(url: str | None) -> str:
     if not url:
@@ -325,23 +414,24 @@ def url_filter(url: str | None) -> str:
     except Exception:
         return url
 
+
 ###############################################################################
 # Database helpers
 ###############################################################################
 def get_db():
-    if 'db' not in g:
-        g.db = sqlite3.connect(app.config['DATABASE'])
+    if "db" not in g:
+        g.db = sqlite3.connect(app.config["DATABASE"])
         g.db.execute("PRAGMA foreign_keys = ON;")
         g.db.row_factory = sqlite3.Row
         g.db.create_function("strip_caret", 1, strip_caret)
     return g.db
 
+
 @app.teardown_appcontext
 def close_db(error=None):
-    db = g.pop('db', None)
+    db = g.pop("db", None)
     if db is not None:
         db.close()
-
 
 
 def init_db():
@@ -502,6 +592,7 @@ def init_db():
     )
     db.commit()
 
+
 # -------------------------------------------------------------------------
 # Time helpers
 # -------------------------------------------------------------------------
@@ -515,7 +606,7 @@ def utc_now() -> datetime:
 ###############################################################################
 def _create_admin(db, *, username: str) -> str:
     handle = secrets.token_urlsafe(TOKEN_LEN)
-    token  = signer.sign(handle).decode()
+    token = signer.sign(handle).decode()
     db.execute(
         "INSERT INTO user (username, token_hash) VALUES (?,?)",
         (username, hash_token(handle)),
@@ -527,20 +618,19 @@ def _create_admin(db, *, username: str) -> str:
 def _rotate_token(db) -> str:
     """Generate + store a *new* one-time token, return it for display."""
     handle = secrets.token_urlsafe(TOKEN_LEN)
-    token  = signer.sign(handle).decode()
-    db.execute(
-        "UPDATE user SET token_hash=? WHERE id=1",
-        (hash_token(handle),)
-    )
+    token = signer.sign(handle).decode()
+    db.execute("UPDATE user SET token_hash=? WHERE id=1", (hash_token(handle),))
     db.commit()
     return token
 
+
 @app.cli.command("init")
-@click.option("--username", prompt=True,
-              help="Admin username (will be created if DB empty)")
+@click.option(
+    "--username", prompt=True, help="Admin username (will be created if DB empty)"
+)
 def cli_init(username: str):
     """Initialise DB *and* create the first admin account."""
-    init_db()                           # no-op if already there
+    init_db()  # no-op if already there
     db = get_db()
     token = _create_admin(db, username=username.strip())
 
@@ -565,70 +655,76 @@ def cli_token():
 ###############################################################################
 def strip_caret(text: str | None) -> str:
     """
-    Drop every line that starts with “^something:”  
+    Drop every line that starts with “^something:”
     (Used for both FTS indexing and LIKE-fallback searches.)
     """
     if not text:
         return ""
-    return "\n".join(
-        ln for ln in text.splitlines()
-        if not ln.lstrip().startswith("^")
-    )
+    return "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("^"))
+
 
 def infer_kind(title, link):
     if not title and not link:
-        return 'say'
+        return "say"
     if link and title:
-        return 'pin'
-    return 'post'
+        return "pin"
+    return "post"
+
 
 def current_username() -> str:
     """Return the (only) account’s username, falling back to 'admin'."""
-    row = get_db().execute('SELECT username FROM user LIMIT 1').fetchone()
-    return row['username'] if row else 'admin'
+    row = get_db().execute("SELECT username FROM user LIMIT 1").fetchone()
+    return row["username"] if row else "admin"
+
 
 def get_setting(key, default=None):
-    row = get_db().execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone()
-    return row['value'] if row else default
+    row = get_db().execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else default
 
 
 def set_setting(key, value):
     db = get_db()
     db.execute(
-        'INSERT INTO settings (key,value) VALUES (?,?) '
-        'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-        (key, value))
+        "INSERT INTO settings (key,value) VALUES (?,?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, value),
+    )
     db.commit()
+
 
 def is_b64_image(k: str, v: str) -> bool:
     return k.lower() in {"cover", "img", "poster"} and len(v) > 100
 
+
 # Slug helpers
 def slug_map() -> dict[str, str]:
     """Return {'say':'saying', 'post':'post', …} with fall-back defaults."""
-    return {
-        k: get_setting(f"slug_{k}", v) or v
-        for k, v in SLUG_DEFAULTS.items()
-    }
+    return {k: get_setting(f"slug_{k}", v) or v for k, v in SLUG_DEFAULTS.items()}
+
 
 def kind_to_slug(kind: str) -> str:
-    return slug_map().get(kind, kind)          
+    return slug_map().get(kind, kind)
+
 
 def slug_to_kind(slug: str) -> str | None:
     rev = {v: k for k, v in slug_map().items()}
-    return rev.get(slug, slug)      
+    return rev.get(slug, slug)
+
 
 # Pagination helpers
 def page_size() -> int:
     try:
-        return int(get_setting('page_size', PAGE_DEFAULT))
+        return int(get_setting("page_size", PAGE_DEFAULT))
     except (TypeError, ValueError):
         return PAGE_DEFAULT
-    
+
+
 def paginate(base_sql: str, params: tuple, *, page: int, per_page: int, db):
     total = db.execute(f"SELECT COUNT(*) FROM ({base_sql})", params).fetchone()[0]
     pages = (total + per_page - 1) // per_page
-    rows  = db.execute(f"{base_sql} LIMIT ? OFFSET ?", params + (per_page, (page-1)*per_page)).fetchall()
+    rows = db.execute(
+        f"{base_sql} LIMIT ? OFFSET ?", params + (per_page, (page - 1) * per_page)
+    ).fetchall()
     return rows, pages
 
 
@@ -636,39 +732,53 @@ def extract_tags(text: str) -> set[str]:
     """Return a **lower-cased** set of #tags found in *text*."""
     return {m.lower() for m in TAG_RE.findall(text or "")}
 
+
 def sync_tags(entry_id: int, tags: set[str], *, db):
     """
     Bring `entry_tag` + `tag` tables in sync with *tags* for *entry_id*.
     Removes orphaned tags automatically.
     """
     # current tags on that entry
-    cur = {r['name'] for r in db.execute(
-        "SELECT t.name FROM tag t JOIN entry_tag et ON t.id=et.tag_id "
-        "WHERE et.entry_id=?", (entry_id,))}
-    add    = tags - cur
+    cur = {
+        r["name"]
+        for r in db.execute(
+            "SELECT t.name FROM tag t JOIN entry_tag et ON t.id=et.tag_id "
+            "WHERE et.entry_id=?",
+            (entry_id,),
+        )
+    }
+    add = tags - cur
     remove = cur - tags
 
     # -- add new ones ------------------------------------------------------
     for t in add:
         db.execute("INSERT OR IGNORE INTO tag(name) VALUES(?)", (t,))
-        tag_id = db.execute("SELECT id FROM tag WHERE name=?", (t,)).fetchone()['id']
-        db.execute("INSERT OR IGNORE INTO entry_tag VALUES (?,?)",  (entry_id, tag_id))
-        
+        tag_id = db.execute("SELECT id FROM tag WHERE name=?", (t,)).fetchone()["id"]
+        db.execute("INSERT OR IGNORE INTO entry_tag VALUES (?,?)", (entry_id, tag_id))
+
     # -- drop unneeded -----------------------------------------------------
     for t in remove:
-        tag_id = db.execute("SELECT id FROM tag WHERE name=?", (t,)).fetchone()['id']
-        db.execute("DELETE FROM entry_tag WHERE entry_id=? AND tag_id=?", (entry_id, tag_id))
+        tag_id = db.execute("SELECT id FROM tag WHERE name=?", (t,)).fetchone()["id"]
+        db.execute(
+            "DELETE FROM entry_tag WHERE entry_id=? AND tag_id=?", (entry_id, tag_id)
+        )
 
     # -- garbage-collect unused tags --------------------------------------
-    db.execute("DELETE FROM tag WHERE id NOT IN (SELECT DISTINCT tag_id FROM entry_tag)")
+    db.execute(
+        "DELETE FROM tag WHERE id NOT IN (SELECT DISTINCT tag_id FROM entry_tag)"
+    )
     db.commit()
+
 
 def entry_tags(entry_id: int, *, db) -> list[str]:
     """Return a *sorted* list of tag names for one entry."""
     rows = db.execute(
         "SELECT t.name FROM tag t JOIN entry_tag et ON t.id=et.tag_id "
-        "WHERE et.entry_id=? ORDER BY LOWER(t.name)", (entry_id,))
-    return [r['name'] for r in rows]
+        "WHERE et.entry_id=? ORDER BY LOWER(t.name)",
+        (entry_id,),
+    )
+    return [r["name"] for r in rows]
+
 
 def nav_pages():
     """List of dicts: [{'title':'About', 'slug':'about'}, …] sorted A-Z."""
@@ -677,8 +787,10 @@ def nav_pages():
         "SELECT title, slug FROM entry WHERE kind='page' ORDER BY LOWER(title)"
     ).fetchall()
 
+
 # ── compact one-liner (verb:item:identifier[:progress]) ──────────────
-CARET_COMPACT_RE = re.compile(r'''
+CARET_COMPACT_RE = re.compile(
+    r"""
     ^\^
     (?:"([^"]+)"|([a-z0-9_-]+)) :      # ➊ action  (grp 1 if quoted, grp 2 plain)
     (?:"([^"]+)"|([a-z0-9_-]+)) :      # ➋ item_type (grp 3 or grp 4)
@@ -688,17 +800,25 @@ CARET_COMPACT_RE = re.compile(r'''
       | ([0-9a-f-]{36}|[a-z0-9_-]+)    #     slug/uuid             (grp 7)
     )
     (?:\s*:\s*(?:"([^"]+)"|([^":\s]+)))?  # ➍ progress (grp 8/9)
-''', re.X | re.I | re.U)
+""",
+    re.X | re.I | re.U,
+)
 # ── “long” meta lines ─────────────────────────
 META_RE = re.compile(r'^\^([^\s:]+):"?(.*?)"?$', re.U)
-UUID4_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$', re.I)
-IMPORT_RE = re.compile(r'''
+UUID4_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.I
+)
+IMPORT_RE = re.compile(
+    r"""
     ^\^
     (?:"([^"]+)"|([0-9A-Za-z_-]+))   # action (grp1 if quoted, else grp2)
     :
     (https?://\S+)                   # absolute URL (grp3)
-''', re.X | re.I)
-_CODE_FENCE_RE = re.compile(r'^\s*(```|~~~)')
+""",
+    re.X | re.I,
+)
+_CODE_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+
 
 def parse_trigger(text: str) -> tuple[str, list[dict], list[str]]:
     """
@@ -737,7 +857,7 @@ def parse_trigger(text: str) -> tuple[str, list[dict], list[str]]:
     out_blocks, new_lines = [], []
     lines = text.splitlines()
     in_code = False
-    fence   = ""
+    fence = ""
     i = 0
     while i < len(lines):
         ln = lines[i]
@@ -746,16 +866,16 @@ def parse_trigger(text: str) -> tuple[str, list[dict], list[str]]:
         m_f = _CODE_FENCE_RE.match(ln)
         if m_f:
             tok = m_f.group(1)
-            if not in_code:                # start of a fence
+            if not in_code:  # start of a fence
                 in_code, fence = True, tok
-            elif tok == fence:             # matching closing fence
+            elif tok == fence:  # matching closing fence
                 in_code, fence = False, ""
             new_lines.append(ln)
             i += 1
             continue
 
         if in_code:
-            new_lines.append(ln)           # inside a code block → leave untouched
+            new_lines.append(ln)  # inside a code block → leave untouched
             i += 1
             continue
 
@@ -765,7 +885,7 @@ def parse_trigger(text: str) -> tuple[str, list[dict], list[str]]:
         m = IMPORT_RE.match(line)
         if m:
             action = m.group(1) or m.group(2)
-            url    = m.group(3)
+            url = m.group(3)
 
             try:
                 blk = import_item_json(url, action=action)
@@ -775,72 +895,83 @@ def parse_trigger(text: str) -> tuple[str, list[dict], list[str]]:
                 continue
 
             out_blocks.append(blk)
-            new_lines.append(f'^{blk["item_type"]}:$PENDING${len(out_blocks)-1}$')
+            new_lines.append(f"^{blk['item_type']}:$PENDING${len(out_blocks) - 1}$")
             i += 1
             continue
-
 
         # ── try compact form first ────────────────────────────────
         m = CARET_COMPACT_RE.match(line)
         if m:
             start_idx = i
-            action    = m.group(1) or m.group(2)
+            action = m.group(1) or m.group(2)
             item_type = m.group(3) or m.group(4)
-            title = m.group(5) or m.group(6)      # quoted OR un-quoted
-            slug  = m.group(7)                    # stays the same meaning
-            prog  = m.group(8) or m.group(9)      # quoted OR un-quoted
+            title = m.group(5) or m.group(6)  # quoted OR un-quoted
+            slug = m.group(7)  # stays the same meaning
+            prog = m.group(8) or m.group(9)  # quoted OR un-quoted
 
             action_lc = (action or "").lower()
             verb = next(
-                (vb for vb, acts in VERB_MAP.items() if action_lc in acts),
-                action_lc
+                (vb for vb, acts in VERB_MAP.items() if action_lc in acts), action_lc
             )
             blk = {
-                "verb"      : verb,
-                "action"    : action_lc,
-                "item_type" : item_type,
-                "title"     : title,
-                "slug"      : slug,
-                "progress"  : prog,
-                "meta"      : {},
+                "verb": verb,
+                "action": action_lc,
+                "item_type": item_type,
+                "title": title,
+                "slug": slug,
+                "progress": prog,
+                "meta": {},
             }
 
             j = i + 1
             while j < len(lines):
                 nxt = lines[j].strip()
-                if not nxt.startswith('^') or CARET_COMPACT_RE.match(nxt):
-                    break                   
+                if not nxt.startswith("^") or CARET_COMPACT_RE.match(nxt):
+                    break
                 km = META_RE.match(nxt)
                 if km:
                     k, v = km.groups()
                     k = canon(k)
                     if k == "progress":
                         blk["progress"] = v
-                    elif k not in {          
-                            "action", "verb", "item", "item_type",
-                            "title", "uuid", "slug"}:
+                    elif k not in {
+                        "action",
+                        "verb",
+                        "item",
+                        "item_type",
+                        "title",
+                        "uuid",
+                        "slug",
+                    }:
                         blk["meta"][k] = v
                 j += 1
 
-            i = j                              
+            i = j
             err = _block_error(blk)
             if not err:
                 out_blocks.append(blk)
-                new_lines.append(f'^{item_type}:$PENDING${len(out_blocks)-1}$')
+                new_lines.append(f"^{item_type}:$PENDING${len(out_blocks) - 1}$")
             else:
-                errors.append(f"{err} (line {start_idx+1})")
+                errors.append(f"{err} (line {start_idx + 1})")
                 # treat as plain text if incomplete/invalid
                 new_lines.extend(lines[start_idx:i])
                 continue
-            
+
             continue
 
         # ── otherwise: collect verbose caret-meta lines ───────────
-        if line.startswith('^'):
-            tmp = {"verb":None,"action":None,"item_type":None,
-                   "title":None,"slug":None,"progress":None,"meta":{}}
+        if line.startswith("^"):
+            tmp = {
+                "verb": None,
+                "action": None,
+                "item_type": None,
+                "title": None,
+                "slug": None,
+                "progress": None,
+                "meta": {},
+            }
             start = i
-            while i < len(lines) and lines[i].lstrip().startswith('^'):
+            while i < len(lines) and lines[i].lstrip().startswith("^"):
                 ln = lines[i].strip()
                 m2 = META_RE.match(ln)
                 if not m2:
@@ -849,42 +980,42 @@ def parse_trigger(text: str) -> tuple[str, list[dict], list[str]]:
                     continue
                 k, v = m2.groups()
                 k = canon(k)
-                if k == "action":     
-                    tmp["action"]    = v
+                if k == "action":
+                    tmp["action"] = v
                 elif k == "verb":
-                    tmp["verb"]      = v
-                elif k in ("item", "item_type"): 
+                    tmp["verb"] = v
+                elif k in ("item", "item_type"):
                     tmp["item_type"] = v
-                elif k == "title":               
-                    tmp["title"]     = v
-                elif k in ("uuid","slug"):       
-                    tmp["slug"]      = v
-                elif k == "progress":            
-                    tmp["progress"]  = v
+                elif k == "title":
+                    tmp["title"] = v
+                elif k in ("uuid", "slug"):
+                    tmp["slug"] = v
+                elif k == "progress":
+                    tmp["progress"] = v
                 elif tmp["item_type"] is None:
-                    tmp["item_type"] = k               
+                    tmp["item_type"] = k
                     # decide whether the value is a slug/uuid or a title
                     if UUID4_RE.fullmatch(v) or TOKEN_RE.fullmatch(v):
                         tmp["slug"] = v
                     else:
                         tmp["title"] = v
-                else:                            
-                    tmp["meta"][k]   = v
+                else:
+                    tmp["meta"][k] = v
                 i += 1
 
             if "verb" not in tmp or not tmp["verb"]:
                 action_lc = (tmp["action"] or "").lower()
                 tmp["verb"] = next(
                     (vb for vb, acts in VERB_MAP.items() if action_lc in acts),
-                    action_lc
+                    action_lc,
                 )
             err = _block_error(tmp)
             if not err:
                 out_blocks.append(tmp)
-                new_lines.append(f'^{tmp["item_type"]}:$PENDING${len(out_blocks)-1}$')
+                new_lines.append(f"^{tmp['item_type']}:$PENDING${len(out_blocks) - 1}$")
             else:
                 # put the original caret lines back unchanged
-                errors.append(f"{err} (line {start+1})")
+                errors.append(f"{err} (line {start + 1})")
                 new_lines.extend(lines[start:i])
             continue
 
@@ -892,29 +1023,33 @@ def parse_trigger(text: str) -> tuple[str, list[dict], list[str]]:
         new_lines.append(lines[i])
         i += 1
 
-    return '\n'.join(new_lines), out_blocks, errors
+    return "\n".join(new_lines), out_blocks, errors
 
-def get_or_create_item(*, item_type, title, meta,
-                       slug: str | None = None,
-                       db,
-                       update_meta: bool = True):
+
+def get_or_create_item(
+    *, item_type, title, meta, slug: str | None = None, db, update_meta: bool = True
+):
     if slug:
-        row = db.execute("SELECT id, slug, uuid FROM item WHERE slug=?", (slug,)).fetchone()
+        row = db.execute(
+            "SELECT id, slug, uuid FROM item WHERE slug=?", (slug,)
+        ).fetchone()
         if row:
             return row["id"], row["slug"], row["uuid"]
         if UUID4_RE.fullmatch(slug):
-            row = db.execute("SELECT id, slug, uuid FROM item WHERE uuid=?", (slug,)).fetchone()
+            row = db.execute(
+                "SELECT id, slug, uuid FROM item WHERE uuid=?", (slug,)
+            ).fetchone()
             if row:
                 return row["id"], row["slug"], row["uuid"]
 
     if title is None:
         raise ValueError("slug not found and no title given → cannot create item")
-    
+
     uuid_ = str(uuid.uuid4())
-    slug  = slug or uuid_
+    slug = slug or uuid_
     db.execute(
         "INSERT INTO item (uuid, slug, item_type, title) VALUES (?,?,?,?)",
-        (uuid_, slug, item_type, title)
+        (uuid_, slug, item_type, title),
     )
     item_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -922,49 +1057,61 @@ def get_or_create_item(*, item_type, title, meta,
         for ord, (k, v) in enumerate(meta.items(), start=1):
             db.execute(
                 "INSERT OR REPLACE INTO item_meta (item_id,k,v,ord) VALUES (?,?,?,?)",
-                (item_id, k, v, ord)
+                (item_id, k, v, ord),
             )
     return item_id, slug, uuid_
 
+
 def has_kind(kind: str) -> bool:
     """True if at least one entry of this kind exists."""
-    row = get_db().execute(
-        "SELECT 1 FROM entry WHERE kind=? LIMIT 1", (kind,)
-    ).fetchone()
+    row = (
+        get_db().execute("SELECT 1 FROM entry WHERE kind=? LIMIT 1", (kind,)).fetchone()
+    )
     return bool(row)
 
+
 VERB_KINDS = tuple(VERB_MAP.keys())
+
+
 def active_verbs() -> list[str]:
     """All verbs that actually occur in the DB, in the declared order."""
-    rows = get_db().execute(
-        f"SELECT DISTINCT kind FROM entry "
-        f"WHERE kind IN ({','.join('?'*len(VERB_KINDS))})",
-        VERB_KINDS
-    ).fetchall()
-    present = {r['kind'] for r in rows}
+    rows = (
+        get_db()
+        .execute(
+            f"SELECT DISTINCT kind FROM entry "
+            f"WHERE kind IN ({','.join('?' * len(VERB_KINDS))})",
+            VERB_KINDS,
+        )
+        .fetchall()
+    )
+    present = {r["kind"] for r in rows}
     return [v for v in VERB_KINDS if v in present]
+
 
 def _verbose_block(blk, uuid_):
     """Return the 5-line caret block​ string for one check-in."""
+
     def q(s):
-        return f'"{s}"' if ' ' in s else s      # quote if it contains spaces
+        return f'"{s}"' if " " in s else s  # quote if it contains spaces
+
     parts = [
-        f'^uuid:{uuid_}',
-        f'^item_type:{blk["item_type"]}',
-        f'^title:{q(blk["title"])}'   if blk["title"] else '',
-        f'^action:{blk["action"]}',
-        f'^progress:{q(blk["progress"])}' if blk["progress"] else ''
+        f"^uuid:{uuid_}",
+        f"^item_type:{blk['item_type']}",
+        f"^title:{q(blk['title'])}" if blk["title"] else "",
+        f"^action:{blk['action']}",
+        f"^progress:{q(blk['progress'])}" if blk["progress"] else "",
     ]
-    return '\n'.join(p for p in parts if p)
+    return "\n".join(p for p in parts if p)
 
 
 def _csrf_token() -> str:
     """One token per session (rotates when the cookie does)."""
     return session.get("csrf", "")
 
+
 # Expose helpers to templates
 app.jinja_env.globals.update(kind_to_slug=kind_to_slug, get_setting=get_setting)
-app.jinja_env.globals['external_icon'] = lambda: Markup("""
+app.jinja_env.globals["external_icon"] = lambda: Markup("""
     <svg xmlns="http://www.w3.org/2000/svg"
         viewBox="0 0 20 20"
         width="11" height="11"
@@ -974,37 +1121,37 @@ app.jinja_env.globals['external_icon'] = lambda: Markup("""
     <path d="M15 9v7H4V4h7V2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2
             2 0 0 0 2-2V9h-3z"/>
     </svg>""")
-app.jinja_env.globals['PAGE_DEFAULT'] = PAGE_DEFAULT
-app.jinja_env.globals['entry_tags'] = lambda eid: entry_tags(eid, db=get_db())
-app.jinja_env.globals['nav_pages'] = nav_pages
-app.jinja_env.globals['version'] = __version__
-app.jinja_env.globals.update(has_kind=has_kind,
-                             active_verbs=active_verbs,
-                             verb_kinds=VERB_KINDS)
+app.jinja_env.globals["PAGE_DEFAULT"] = PAGE_DEFAULT
+app.jinja_env.globals["entry_tags"] = lambda eid: entry_tags(eid, db=get_db())
+app.jinja_env.globals["nav_pages"] = nav_pages
+app.jinja_env.globals["version"] = __version__
+app.jinja_env.globals.update(
+    has_kind=has_kind, active_verbs=active_verbs, verb_kinds=VERB_KINDS
+)
 app.jinja_env.globals["csrf_token"] = _csrf_token
-app.jinja_env.globals['is_b64_image'] = is_b64_image
+app.jinja_env.globals["is_b64_image"] = is_b64_image
 
 
 def backlinks(entries, *, db) -> dict[int, list]:
     """
     Accepts *one sqlite Row* or *an iterable of rows* that each have
-    `id` and `slug`.  
+    `id` and `slug`.
     Returns {entry_id: [backlink rows …]}.
 
-    • One SQL MATCH that covers all slugs.  
+    • One SQL MATCH that covers all slugs.
     • Results are sorted oldest → newest.
     """
     # ── normalise to a list --------------------------------------------------
     if entries is None:
         return {}
     if not isinstance(entries, (list, tuple, set)):
-        entries = [entries]                      # single Row → list of 1
+        entries = [entries]  # single Row → list of 1
 
     if not entries:
         return {}
 
     slug_to_id = {e["slug"]: e["id"] for e in entries}
-    q_marks    = ",".join("?" * len(slug_to_id))
+    q_marks = ",".join("?" * len(slug_to_id))
 
     sql = f"""
         SELECT target.slug      AS target_slug,
@@ -1027,33 +1174,45 @@ def backlinks(entries, *, db) -> dict[int, list]:
         lst.sort(key=lambda r: r["created_at"])
     return out
 
+
 # ── Default settings ────────────────────────────────────────────────
 THEME_PRESETS = {
-    "萌木": "#9ccf70", "浅縹": "#95bbec", "退紅": "#fda3a5",
-    "薄色": "#c386c2", "浅緋": "#d3250c", "朱祓": "#f1884f",
-    "欵冬": "#fed410", "木蘭": "#b1a277",
+    "萌木": "#9ccf70",
+    "浅縹": "#95bbec",
+    "退紅": "#fda3a5",
+    "薄色": "#c386c2",
+    "浅緋": "#d3250c",
+    "朱祓": "#f1884f",
+    "欵冬": "#fed410",
+    "木蘭": "#b1a277",
 }
 
 
 def theme_color() -> str:
-    return get_setting('theme_color', THEME_PRESETS["浅縹"])  # default to 浅縹
+    return get_setting("theme_color", THEME_PRESETS["浅縹"])  # default to 浅縹
 
-TZ_DFLT        = "Europe/Berlin"
+
+TZ_DFLT = "Europe/Berlin"
+
 
 def tz_name() -> str:
     tz = get_setting("timezone", TZ_DFLT)
     return tz if tz in available_timezones() else TZ_DFLT
 
-app.jinja_env.globals.update({
-    "theme_color": theme_color,
-    "theme_presets": THEME_PRESETS,
-    "tz_name": tz_name,
-    "available_timezones": available_timezones,
-})
+
+app.jinja_env.globals.update(
+    {
+        "theme_color": theme_color,
+        "theme_presets": THEME_PRESETS,
+        "tz_name": tz_name,
+        "available_timezones": available_timezones,
+    }
+)
 
 ###############################################################################
-# Templates + Views 
+# Templates + Views
 ###############################################################################
+
 
 def wrap(body: str) -> str:
     """Glue prolog + page-specific body + epilog."""
@@ -1190,6 +1349,7 @@ TEMPL_EPILOG = """
 </div> <!-- container -->
 """
 
+
 ###############################################################################
 # Authentication
 ###############################################################################
@@ -1201,17 +1361,18 @@ def validate_token(token: str, max_age: int = 60) -> bool:
     try:
         handle = signer.unsign(token, max_age=max_age).decode()
     except SignatureExpired:
-        return False                        # too old ➜ invalid
+        return False  # too old ➜ invalid
     except BadSignature:
-        return False                        # forged ➜ invalid
+        return False  # forged ➜ invalid
 
-    row = get_db().execute(
-            'SELECT token_hash FROM user LIMIT 1').fetchone()
-    return row and verify_token(row['token_hash'], handle)
+    row = get_db().execute("SELECT token_hash FROM user LIMIT 1").fetchone()
+    return row and verify_token(row["token_hash"], handle)
 
-def login_required() -> None:         
+
+def login_required() -> None:
     if not session.get("logged_in"):
         abort(403)
+
 
 def rate_limit(max_requests: int, window: int = 60):
     hits: DefaultDict[str, deque] = defaultdict(deque)
@@ -1221,7 +1382,9 @@ def rate_limit(max_requests: int, window: int = 60):
         def wrapped(*args, **kwargs):
             now = time()
             # left-most entry after ProxyFix = real client
-            ip = (request.access_route[0] if request.access_route else request.remote_addr) or "unknown"
+            ip = (
+                request.access_route[0] if request.access_route else request.remote_addr
+            ) or "unknown"
 
             dq = hits[ip]
             while dq and now - dq[0] > window:
@@ -1237,31 +1400,37 @@ def rate_limit(max_requests: int, window: int = 60):
 
             dq.append(now)
             return view(*args, **kwargs)
+
         return wrapped
+
     return decorator
 
-@app.route('/login', methods=['GET', 'POST'])
+
+@app.route("/login", methods=["GET", "POST"])
 @rate_limit(max_requests=5, window=60)  # 3 attempts per minute
 def login():
     # ── read token only from the form ──────────────────────────────
-    token = request.form.get('token', '').strip()
+    token = request.form.get("token", "").strip()
 
-    if request.method == 'POST' and token and validate_token(token):
+    if request.method == "POST" and token and validate_token(token):
         # ── token matched → burn it right away ─────────────────────
         db = get_db()
         db.execute(
-            'UPDATE user SET token_hash=? WHERE id=1',
-            (hash_token(secrets.token_hex(16)),)
+            "UPDATE user SET token_hash=? WHERE id=1",
+            (hash_token(secrets.token_hex(16)),),
         )
         db.commit()
 
         session.clear()
         session.permanent = True
-        session['logged_in'] = True
-        session['csrf'] = secrets.token_hex(16)
-        return redirect(url_for('index'))
+        session["logged_in"] = True
+        session["csrf"] = secrets.token_hex(16)
+        return redirect(url_for("index"))
 
-    return render_template_string(TEMPL_LOGIN, title = get_setting('site_name', 'po.etr.ist'))
+    return render_template_string(
+        TEMPL_LOGIN, title=get_setting("site_name", "po.etr.ist")
+    )
+
 
 TEMPL_LOGIN = wrap("""
 {% block body %}
@@ -1357,30 +1526,54 @@ TEMPL_LOGIN = wrap("""
 {% endblock %}
 """)
 
-@app.route('/logout')
+
+@app.route("/logout")
 def logout():
     session.clear()
-    return redirect(url_for('index'))
+    return redirect(url_for("index"))
+
 
 # ──── WebAuthn / Passkey constants ──────────────────────────────
 RP_NAME = "po.etr.ist"
 
+
 # ──── tiny utils ────────────────────────────────────────────────
-def _u(): return get_db().execute("SELECT id FROM user LIMIT 1").fetchone()["id"]
+def _u():
+    return get_db().execute("SELECT id FROM user LIMIT 1").fetchone()["id"]
+
 
 def _passkeys():
-    return get_db().execute("""SELECT id, cred_id, nickname, created_at
-                               FROM passkey WHERE user_id=?""", (_u(),)).fetchall()
-app.jinja_env.globals['_passkeys'] = _passkeys
+    return (
+        get_db()
+        .execute(
+            """SELECT id, cred_id, nickname, created_at
+                               FROM passkey WHERE user_id=?""",
+            (_u(),),
+        )
+        .fetchall()
+    )
+
+
+app.jinja_env.globals["_passkeys"] = _passkeys
+
 
 def _add_passkey(cred_id, pub_key, sign_count, nick):
     db = get_db()
-    db.execute("""INSERT INTO passkey
+    db.execute(
+        """INSERT INTO passkey
                   (user_id, cred_id, pub_key, sign_count, nickname, created_at)
                   VALUES (?,?,?,?,?,?)""",
-               (_u(), cred_id, pub_key, sign_count, nick,
-                utc_now().isoformat(timespec="seconds")))
+        (
+            _u(),
+            cred_id,
+            pub_key,
+            sign_count,
+            nick,
+            utc_now().isoformat(timespec="seconds"),
+        ),
+    )
     db.commit()
+
 
 def _rp_id() -> str:
     return request.host.partition(":")[0]
@@ -1389,7 +1582,7 @@ def _rp_id() -> str:
 @app.route("/webauthn/begin_login")
 def webauthn_begin_login():
     # 1. pull the raw bytes straight from the DB
-    cred_bytes = [r["cred_id"] for r in _passkeys()]     #  <-- changed line
+    cred_bytes = [r["cred_id"] for r in _passkeys()]  #  <-- changed line
     if not cred_bytes:
         return {"allowCredentials": []}
 
@@ -1398,33 +1591,37 @@ def webauthn_begin_login():
 
     # 3. generate options with the **current** host as rp_id
     opts = generate_authentication_options(
-        rp_id             = _rp_id(),
-        allow_credentials = allow,
-        user_verification = UserVerificationRequirement.PREFERRED,
+        rp_id=_rp_id(),
+        allow_credentials=allow,
+        user_verification=UserVerificationRequirement.PREFERRED,
     )
     session["wa_chal"] = opts.challenge
     return options_to_json(opts)
+
 
 @app.route("/webauthn/complete_login", methods=["POST"])
 def webauthn_complete_login():
     data = request.get_json(force=True)
     cred_id = base64url_to_bytes(data["id"])
-    pk      = get_db().execute("SELECT * FROM passkey WHERE cred_id=?", (cred_id,)).fetchone()
+    pk = (
+        get_db().execute("SELECT * FROM passkey WHERE cred_id=?", (cred_id,)).fetchone()
+    )
     if not pk:
         abort(400)
     try:
         ver = verify_authentication_response(
-            credential                       = data,
-            expected_challenge               = session.pop("wa_chal", ""),
-            expected_rp_id                   = _rp_id(),                      # "localhost"
-            expected_origin                  = f"{request.scheme}://{request.host}",
-            credential_public_key            = pk["pub_key"],
-            credential_current_sign_count    = pk["sign_count"],
-            require_user_verification        = True,
+            credential=data,
+            expected_challenge=session.pop("wa_chal", ""),
+            expected_rp_id=_rp_id(),  # "localhost"
+            expected_origin=f"{request.scheme}://{request.host}",
+            credential_public_key=pk["pub_key"],
+            credential_current_sign_count=pk["sign_count"],
+            require_user_verification=True,
         )
         # update the stored sign-count that WebAuthn uses for replay protection
-        get_db().execute("UPDATE passkey SET sign_count=? WHERE id=?",
-                        (ver.new_sign_count, pk["id"]))
+        get_db().execute(
+            "UPDATE passkey SET sign_count=? WHERE id=?", (ver.new_sign_count, pk["id"])
+        )
         get_db().commit()
     except Exception:
         abort(400)
@@ -1435,49 +1632,48 @@ def webauthn_complete_login():
     session["csrf"] = secrets.token_hex(16)
     return {"ok": True}
 
+
 @app.route("/webauthn/begin_register")
 def webauthn_begin_register():
     login_required()
-    exclude = [
-        PublicKeyCredentialDescriptor(id=r["cred_id"])
-        for r in _passkeys()
-    ]
+    exclude = [PublicKeyCredentialDescriptor(id=r["cred_id"]) for r in _passkeys()]
     options = generate_registration_options(
-        rp_id   = _rp_id(),  
-        rp_name = get_setting("site_name", RP_NAME),
-        user_id = str(_u()).encode(),
-        user_name = current_username(),
-        exclude_credentials = exclude,
-        attestation = AttestationConveyancePreference.NONE,
+        rp_id=_rp_id(),
+        rp_name=get_setting("site_name", RP_NAME),
+        user_id=str(_u()).encode(),
+        user_name=current_username(),
+        exclude_credentials=exclude,
+        attestation=AttestationConveyancePreference.NONE,
     )
     session["wa_chal"] = options.challenge
     return options_to_json(options)
+
 
 @app.route("/webauthn/complete_register", methods=["POST"])
 def webauthn_complete_register():
     login_required()
     data = request.get_json(force=True)
 
-    rp_id  = request.host.split(":", 1)[0]
+    rp_id = request.host.split(":", 1)[0]
     origin = f"{request.scheme}://{request.host}"
 
     try:
         ver = verify_registration_response(
-            credential                = data,
-            expected_challenge        = session.pop("wa_chal", ""),  # ← note default
-            expected_rp_id            = rp_id,
-            expected_origin           = origin,
-            require_user_verification = True,
+            credential=data,
+            expected_challenge=session.pop("wa_chal", ""),  # ← note default
+            expected_rp_id=rp_id,
+            expected_origin=origin,
+            require_user_verification=True,
         )
     except Exception as e:
-        print("webauthn register failed")        # prints stack in terminal
-        return {"error": str(e)}, 400                    # visible in JS
+        print("webauthn register failed")  # prints stack in terminal
+        return {"error": str(e)}, 400  # visible in JS
 
     _add_passkey(
-        cred_id    = base64url_to_bytes(data["id"]),
-        pub_key    = ver.credential_public_key,
-        sign_count = ver.sign_count,
-        nick       = request.args.get("nickname") or "Passkey"
+        cred_id=base64url_to_bytes(data["id"]),
+        pub_key=ver.credential_public_key,
+        sign_count=ver.sign_count,
+        nick=request.args.get("nickname") or "Passkey",
     )
     return {"ok": True}
 
@@ -1491,13 +1687,12 @@ def webauthn_delete_passkey(pkid):
     login_required()
 
     db = get_db()
-    db.execute(
-        "DELETE FROM passkey WHERE id=? AND user_id=?", (pkid, _u())
-    )
+    db.execute("DELETE FROM passkey WHERE id=? AND user_id=?", (pkid, _u()))
     db.commit()
 
-    flash("Passkey deleted.")                   # nice feedback for the toast
+    flash("Passkey deleted.")  # nice feedback for the toast
     return redirect(url_for("settings"), code=303)  # PRG pattern
+
 
 @app.route("/webauthn/rename/<int:pkid>", methods=["POST"])
 def webauthn_rename_passkey(pkid):
@@ -1521,23 +1716,24 @@ def webauthn_rename_passkey(pkid):
     db.commit()
     return {"ok": True}
 
+
 ###############################################################################
 # Resources
 ###############################################################################
-@app.route('/favicon.svg')
+@app.route("/favicon.svg")
 def favicon():
     """Return a 64 px SVG favicon whose color follows the current theme."""
     # ── background = theme color ───────────────────────────────────────────
-    bg = theme_color().lstrip('#')
-    if len(bg) == 3:                               # allow #abc shorthand
-        bg = ''.join(c*2 for c in bg)
-    r, g, b = (int(bg[i:i+2], 16) for i in (0, 2, 4))
+    bg = theme_color().lstrip("#")
+    if len(bg) == 3:  # allow #abc shorthand
+        bg = "".join(c * 2 for c in bg)
+    r, g, b = (int(bg[i : i + 2], 16) for i in (0, 2, 4))
 
     # ── foreground = simple RGB complement (#RRGGBB → #ʀ̅ ɢ̅ ʙ̅) ───────────
-    fg = '#FFFFFF' if (r + g + b) < 384 else '#000000'  # light/dark
+    fg = "#FFFFFF" if (r + g + b) < 384 else "#000000"  # light/dark
 
     # ── pick a letter: “P” by default, or 1st character of Site name ───────
-    letter = (get_setting('site_name', '') or 'P')[0].upper()
+    letter = (get_setting("site_name", "") or "P")[0].upper()
 
     svg = f'''<svg xmlns="http://www.w3.org/2000/svg"
                     width="64" height="64" viewBox="0 0 64 64">
@@ -1549,10 +1745,14 @@ def favicon():
     </svg>'''
 
     # 1-day cache so browsers don’t keep hammering the route
-    return Response(svg, mimetype='image/svg+xml',
-                    headers={"Cache-Control": "public, max-age=86400"})
+    return Response(
+        svg,
+        mimetype="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
-@app.route('/robots.txt')
+
+@app.route("/robots.txt")
 def robots():
     """
     Allow selected well-behaved crawlers, nudge everyone else away.
@@ -1569,9 +1769,15 @@ def robots():
         "User-agent: *\n"
         "Disallow: /\n"
     )
-    return Response(rules, mimetype="text/plain", direct_passthrough=True), 200, {"Cache-Control": "public, max-age=86400"}  # 1 day cache
+    return (
+        Response(rules, mimetype="text/plain", direct_passthrough=True),
+        200,
+        {"Cache-Control": "public, max-age=86400"},
+    )  # 1 day cache
+
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
+
 
 @app.before_request
 def csrf_protect():
@@ -1585,77 +1791,88 @@ def csrf_protect():
 
     # ➌ for authenticated users we REQUIRE a valid token
     token = session.get("csrf", "")
-    sent  = request.form.get("csrf") or request.headers.get("X-CSRFToken", "")
+    sent = request.form.get("csrf") or request.headers.get("X-CSRFToken", "")
     if not token or not secrets.compare_digest(token, sent):
         abort(403)
 
+
 @app.after_request
 def sec_headers(resp):
-    resp.headers.update({
-        "X-Frame-Options": "DENY",
-        "X-Content-Type-Options": "nosniff",
-        "Referrer-Policy": "strict-origin-when-cross-origin",
-        "Permissions-Policy": "interest-cohort=()",   # opt-out of FLoC etc.
-    })
+    resp.headers.update(
+        {
+            "X-Frame-Options": "DENY",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "strict-origin-when-cross-origin",
+            "Permissions-Policy": "interest-cohort=()",  # opt-out of FLoC etc.
+        }
+    )
     return resp
+
 
 ###############################################################################
 # Settings
 ###############################################################################
-@app.route('/settings', methods=['GET', 'POST'])
+@app.route("/settings", methods=["GET", "POST"])
 def settings():
     login_required()
 
     db = get_db()
 
-    if request.method == 'POST' and request.form.get('action') == 'rotate_token':
-        session['one_time_token'] = _rotate_token(db)   # store once
-        return redirect(url_for('settings') + '#new-token', code=303)  # PRG; 303 = “See Other”
+    if request.method == "POST" and request.form.get("action") == "rotate_token":
+        session["one_time_token"] = _rotate_token(db)  # store once
+        return redirect(
+            url_for("settings") + "#new-token", code=303
+        )  # PRG; 303 = “See Other”
 
-
-    if request.method == 'POST':
-        site_name = request.form['site_name'].strip()
-        username  = request.form['username'].strip()
-        col = request.form['theme_color'].strip()
-        tz  = request.form.get("timezone","").strip()
-        if tz in available_timezones():            
+    if request.method == "POST":
+        site_name = request.form["site_name"].strip()
+        username = request.form["username"].strip()
+        col = request.form["theme_color"].strip()
+        tz = request.form.get("timezone", "").strip()
+        if tz in available_timezones():
             set_setting("timezone", tz)
 
         if site_name:
-            set_setting('site_name', site_name)
+            set_setting("site_name", site_name)
 
         if username:
-            db.execute('UPDATE user SET username=? WHERE id=1', (username,))
+            db.execute("UPDATE user SET username=? WHERE id=1", (username,))
             db.commit()
 
         if col:
-            if re.fullmatch(r'#?[0-9A-Fa-f]{6}', col):
-                if not col.startswith('#'):
-                    col = '#' + col
-                set_setting('theme_color', col)
+            if re.fullmatch(r"#?[0-9A-Fa-f]{6}", col):
+                if not col.startswith("#"):
+                    col = "#" + col
+                set_setting("theme_color", col)
             else:
-                flash('Invalid color – please use 6-digit hex.')
+                flash("Invalid color – please use 6-digit hex.")
 
-        set_setting('slug_say',  request.form.get('slug_say',  '').strip() or 'say')
-        set_setting('slug_post', request.form.get('slug_post', '').strip() or 'post')
-        set_setting('slug_pin',  request.form.get('slug_pin',  '').strip() or 'pin')
+        set_setting("slug_say", request.form.get("slug_say", "").strip() or "say")
+        set_setting("slug_post", request.form.get("slug_post", "").strip() or "post")
+        set_setting("slug_pin", request.form.get("slug_pin", "").strip() or "pin")
 
-        size = max(1, int(raw)) if (raw := request.form.get('page_size','').strip()).isdigit() else PAGE_DEFAULT
-        set_setting('page_size', size)
+        size = (
+            max(1, int(raw))
+            if (raw := request.form.get("page_size", "").strip()).isdigit()
+            else PAGE_DEFAULT
+        )
+        set_setting("page_size", size)
 
-        flash('Settings saved.')
-        return redirect(url_for('settings'))
+        flash("Settings saved.")
+        return redirect(url_for("settings"))
 
-    new_token = session.pop('one_time_token', None)     # use-and-forget
-    cur_username = db.execute('SELECT username FROM user LIMIT 1') \
-                       .fetchone()['username']
+    new_token = session.pop("one_time_token", None)  # use-and-forget
+    cur_username = db.execute("SELECT username FROM user LIMIT 1").fetchone()[
+        "username"
+    ]
     return render_template_string(
         TEMPL_SETTINGS,
-        site_name  = get_setting('site_name', 'po.etr.ist'),
-        username   = cur_username,
-        new_token  = new_token,
-        title      = get_setting('site_name', 'po.etr.ist'),
+        site_name=get_setting("site_name", "po.etr.ist"),
+        username=cur_username,
+        new_token=new_token,
+        title=get_setting("site_name", "po.etr.ist"),
     )
+
 
 TEMPL_SETTINGS = wrap("""
     {% block body %}
@@ -1944,72 +2161,83 @@ TEMPL_SETTINGS = wrap("""
     {% endblock %}
 """)
 
+
 ###############################################################################
 # Index + Listings
 ###############################################################################
-@app.route('/', methods=['GET', 'POST'])
+@app.route("/", methods=["GET", "POST"])
 def index():
     db = get_db()
 
     # Quick-add “Say” for logged-in admin
-    form_body = ''
-    if request.method == 'POST':
+    form_body = ""
+    if request.method == "POST":
         login_required()
-        form_body = request.form.get('body', '')
+        form_body = request.form.get("body", "")
         body_input = form_body.strip()
 
         if not body_input:
-            flash('Text is required.')
+            flash("Text is required.")
         else:
             body_parsed, blocks, errors = parse_trigger(body_input)
             if errors:
-                flash('Errors in caret blocks found. Entry was not saved.')
+                flash("Errors in caret blocks found. Entry was not saved.")
                 for err in errors:
                     flash(err)
             else:
-                kind  = blocks[0]['verb'] if blocks else infer_kind('', '')
-                now_dt  = utc_now()
-                now = now_dt.isoformat(timespec='seconds')
+                kind = blocks[0]["verb"] if blocks else infer_kind("", "")
+                now_dt = utc_now()
+                now = now_dt.isoformat(timespec="seconds")
                 slug = now_dt.strftime("%Y%m%d%H%M%S")
 
-                db.execute("""INSERT INTO entry (body, created_at, slug, kind)
+                db.execute(
+                    """INSERT INTO entry (body, created_at, slug, kind)
                               VALUES (?,?,?,?)""",
-                           (body_parsed, now, slug, kind))
+                    (body_parsed, now, slug, kind),
+                )
                 entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
                 sync_tags(entry_id, extract_tags(body_parsed), db=db)
 
                 for idx, blk in enumerate(blocks):
                     item_id, slug_i, uuid_i = get_or_create_item(
-                        item_type = blk['item_type'],
-                        title     = blk['title'],
-                        meta      = blk['meta'],
-                        slug      = blk['slug'],
-                        db        = db,
-                        update_meta=True        # only on creation
+                        item_type=blk["item_type"],
+                        title=blk["title"],
+                        meta=blk["meta"],
+                        slug=blk["slug"],
+                        db=db,
+                        update_meta=True,  # only on creation
                     )
 
-                    db.execute("""INSERT OR IGNORE INTO entry_item
+                    db.execute(
+                        """INSERT OR IGNORE INTO entry_item
                                     (entry_id, item_id, verb, action, progress)
                                 VALUES (?,?,?,?,?)""",
-                            (entry_id, item_id,
-                                blk['verb'], blk['action'], blk['progress']))
+                        (
+                            entry_id,
+                            item_id,
+                            blk["verb"],
+                            blk["action"],
+                            blk["progress"],
+                        ),
+                    )
 
                     # patch placeholder in the *local* variable
                     body_parsed = body_parsed.replace(
-                        f'^{blk["item_type"]}:$PENDING${idx}$',
-                        _verbose_block(blk, uuid_i)
+                        f"^{blk['item_type']}:$PENDING${idx}$",
+                        _verbose_block(blk, uuid_i),
                     )
 
                 # 🔑  NOW write the patched body back ↓↓↓
-                db.execute("UPDATE entry SET body=? WHERE id=?", (body_parsed, entry_id))
+                db.execute(
+                    "UPDATE entry SET body=? WHERE id=?", (body_parsed, entry_id)
+                )
                 db.commit()
-                return redirect(url_for('index'))
-
+                return redirect(url_for("index"))
 
     # pagination
-    page = max(int(request.args.get('page', 1)), 1)
-    ps   = page_size()
+    page = max(int(request.args.get("page", 1)), 1)
+    ps = page_size()
     BASE_SQL = """
         SELECT  e.*,
 
@@ -2036,17 +2264,17 @@ def index():
 
     entries, total_pages = paginate(BASE_SQL, (), page=page, per_page=ps, db=db)
 
-    pages = list(range(1, total_pages+1))
+    pages = list(range(1, total_pages + 1))
     back_map = backlinks(entries, db=db)
     return render_template_string(
         TEMPL_INDEX,
-        entries = entries,
-        page    = page,
-        pages   = pages,
-        backlinks = back_map,
-        title   = get_setting('site_name', 'po.etr.ist'), 
-        username= current_username(),
-        form_body = form_body,
+        entries=entries,
+        page=page,
+        pages=pages,
+        backlinks=back_map,
+        title=get_setting("site_name", "po.etr.ist"),
+        username=current_username(),
+        form_body=form_body,
     )
 
 
@@ -2159,35 +2387,36 @@ TEMPL_INDEX = wrap("""{% block body %}
 """)
 
 
-
-@app.route('/<slug>', methods=['GET', 'POST'])
+@app.route("/<slug>", methods=["GET", "POST"])
 def by_kind(slug):
     db = get_db()
 
-    page = db.execute("SELECT * FROM entry WHERE kind='page' AND slug=?", (slug,)).fetchone()
+    page = db.execute(
+        "SELECT * FROM entry WHERE kind='page' AND slug=?", (slug,)
+    ).fetchone()
     if page:
         return render_template_string(
             TEMPL_PAGE,
-            e        = page,
-            username = current_username(),
-            title    = get_setting('site_name', 'po.etr.ist'), 
-            kind     = 'page',
+            e=page,
+            username=current_username(),
+            title=get_setting("site_name", "po.etr.ist"),
+            kind="page",
         )
 
     kind = slug_to_kind(slug)
-    if kind == 'page':
+    if kind == "page":
         abort(404)
 
     # ---------- create new entry when the admin submits the inline form ----
-    form_title = ''
-    form_link  = ''
-    form_body  = ''
-    if request.method == 'POST':
+    form_title = ""
+    form_link = ""
+    form_body = ""
+    if request.method == "POST":
         login_required()
 
-        form_title = request.form.get('title', '').strip()
-        form_link  = request.form.get('link',  '').strip()
-        form_body  = request.form.get('body',  '')
+        form_title = request.form.get("title", "").strip()
+        form_link = request.form.get("link", "").strip()
+        form_body = request.form.get("body", "")
         body_input = form_body.strip()
 
         body_parsed, blocks, errors = parse_trigger(body_input)
@@ -2197,105 +2426,123 @@ def by_kind(slug):
         if request.form.get("is_page") == "1":
             entry_kind = "page"
         elif blocks:
-            entry_kind = blocks[0]['verb']
+            entry_kind = blocks[0]["verb"]
 
         if errors:
-            flash('Errors in caret blocks found. Entry was not saved.')
+            flash("Errors in caret blocks found. Entry was not saved.")
             for err in errors:
                 flash(err)
         else:
             missing = []
 
-            if entry_kind == 'say':
+            if entry_kind == "say":
                 if not body_input:
-                    missing.append('body')
+                    missing.append("body")
 
-            elif entry_kind == 'post':
+            elif entry_kind == "post":
                 if not form_title:
-                    missing.append('title')
+                    missing.append("title")
                 if not body_input:
-                    missing.append('body')
+                    missing.append("body")
 
-            elif entry_kind == 'pin':                # body is OPTIONAL here
+            elif entry_kind == "pin":  # body is OPTIONAL here
                 if not form_title:
-                    missing.append('title')
+                    missing.append("title")
                 if not form_link:
-                    missing.append('link')
+                    missing.append("link")
 
             if missing:
-                nice = ' and '.join(missing)
-                flash(f'{nice.capitalize()} {"is" if len(missing)==1 else "are"} required.')
+                nice = " and ".join(missing)
+                flash(
+                    f"{nice.capitalize()} {'is' if len(missing) == 1 else 'are'} required."
+                )
             else:
                 now_dt = utc_now()
-                now = now_dt.isoformat(timespec='seconds')
+                now = now_dt.isoformat(timespec="seconds")
                 entry_slug = now_dt.strftime("%Y%m%d%H%M%S")
-                db.execute("""INSERT INTO entry
+                db.execute(
+                    """INSERT INTO entry
                                 (title, body, link, created_at, slug, kind)
                              VALUES (?,?,?,?,?,?)""",
-                           (form_title or None,
-                            body_parsed,
-                            form_link or None,
-                            now,
-                            entry_slug,
-                            entry_kind))
+                    (
+                        form_title or None,
+                        body_parsed,
+                        form_link or None,
+                        now,
+                        entry_slug,
+                        entry_kind,
+                    ),
+                )
                 entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
                 sync_tags(entry_id, extract_tags(body_parsed), db=db)
 
                 for idx, blk in enumerate(blocks):
                     item_id, slug_i, uuid_i = get_or_create_item(
-                        item_type = blk['item_type'],
-                        title     = blk['title'],
-                        meta      = blk['meta'],
-                        slug      = blk['slug'],
-                        db        = db,
-                        update_meta=True        # only on creation
+                        item_type=blk["item_type"],
+                        title=blk["title"],
+                        meta=blk["meta"],
+                        slug=blk["slug"],
+                        db=db,
+                        update_meta=True,  # only on creation
                     )
 
-                    db.execute("""INSERT OR IGNORE INTO entry_item
+                    db.execute(
+                        """INSERT OR IGNORE INTO entry_item
                                     (entry_id, item_id, verb, action, progress)
                                 VALUES (?,?,?,?,?)""",
-                            (entry_id, item_id,
-                                blk['verb'], blk['action'], blk['progress']))
-
-                    body_parsed = body_parsed.replace(
-                        f'^{blk["item_type"]}:$PENDING${idx}$',
-                        _verbose_block(blk, uuid_i)
+                        (
+                            entry_id,
+                            item_id,
+                            blk["verb"],
+                            blk["action"],
+                            blk["progress"],
+                        ),
                     )
 
-                db.execute("UPDATE entry SET body=? WHERE id=?", (body_parsed, entry_id))
+                    body_parsed = body_parsed.replace(
+                        f"^{blk['item_type']}:$PENDING${idx}$",
+                        _verbose_block(blk, uuid_i),
+                    )
+
+                db.execute(
+                    "UPDATE entry SET body=? WHERE id=?", (body_parsed, entry_id)
+                )
                 db.commit()
 
                 if entry_kind == "page":
                     return redirect(url_for("by_kind", slug=entry_slug))
 
-                return redirect(url_for('by_kind', slug=kind_to_slug(entry_kind or "")))
+                return redirect(url_for("by_kind", slug=kind_to_slug(entry_kind or "")))
 
     # --- pagination -------------------------------------------------------
-    page = max(int(request.args.get('page', 1)), 1)
-    ps   = page_size()
+    page = max(int(request.args.get("page", 1)), 1)
+    ps = page_size()
 
     if kind in VERB_KINDS:
-
         # --- ➊ collect the “pills” -------------------------------------------------
-        cur = db.execute("""
+        cur = db.execute(
+            """
             SELECT i.item_type, COUNT(DISTINCT i.id) AS cnt
             FROM item        i
             JOIN entry_item  ei ON ei.item_id = i.id
             WHERE ei.verb = ?
             GROUP BY i.item_type
-        """, (kind,))
-        type_rows = sorted((dict(r) for r in cur),          # [{item_type, cnt}, …]
-                        key=lambda r: -r['cnt'])          # sort by cnt DESC
+        """,
+            (kind,),
+        )
+        type_rows = sorted(
+            (dict(r) for r in cur),  # [{item_type, cnt}, …]
+            key=lambda r: -r["cnt"],
+        )  # sort by cnt DESC
 
         # --- ➋ what filter (if any) is active? ------------------------------------
-        sel_type = request.args.get('type', '').strip()      # e.g. “book”
-        selected = sel_type.lower() if sel_type else ''      # empty → “All”
+        sel_type = request.args.get("type", "").strip()  # e.g. “book”
+        selected = sel_type.lower() if sel_type else ""  # empty → “All”
 
-        type_total_cnt = sum(r['cnt'] for r in type_rows)
+        type_total_cnt = sum(r["cnt"] for r in type_rows)
         if selected:
             filtered_total_cnt = next(
-                (r['cnt'] for r in type_rows if r['item_type'] == selected),
-                0
+                (r["cnt"] for r in type_rows if r["item_type"] == selected), 0
             )
         else:
             filtered_total_cnt = type_total_cnt
@@ -2304,11 +2551,21 @@ def by_kind(slug):
         if selected:
             action_type_sql = " AND i.item_type = ?"
 
-        params_actions = [kind, kind]
+        canonical_actions = [a.lower() for a in VERB_MAP.get(kind, ())]
+        canonical_set = set(canonical_actions)
+        action_placeholders = ",".join("?" * len(canonical_actions))
+        sub_latest_filter = (
+            f" AND LOWER(ei2.action) IN ({action_placeholders})"
+            if canonical_actions
+            else ""
+        )
+
+        params_actions = [kind, *canonical_actions, kind]
         if selected:
             params_actions.append(selected)
 
-        cur_actions = db.execute(f"""
+        cur_actions = db.execute(
+            f"""
             WITH latest AS (
                 SELECT i.id,
                        LOWER((
@@ -2316,7 +2573,7 @@ def by_kind(slug):
                              FROM entry_item ei2
                              JOIN entry      e2 ON e2.id = ei2.entry_id
                             WHERE ei2.item_id = i.id
-                              AND ei2.verb    = ?
+                              AND ei2.verb    = ?{sub_latest_filter}
                             ORDER BY e2.created_at DESC
                             LIMIT 1
                        )) AS last_action
@@ -2328,18 +2585,28 @@ def by_kind(slug):
             SELECT last_action, COUNT(*) AS cnt
               FROM latest
              WHERE last_action IS NOT NULL AND last_action <> ''
-             GROUP BY last_action
+            GROUP BY last_action
              ORDER BY cnt DESC
-        """, tuple(params_actions))
-        action_rows = [dict(r) for r in cur_actions]
+        """,
+            tuple(params_actions),
+        )
+        action_rows = [dict(r) for r in cur_actions if r["last_action"] in canonical_set]
 
-        sel_action = request.args.get('action', '').strip()
-        selected_action = sel_action.lower() if sel_action else ''
+        sel_action = request.args.get("action", "").strip()
+        selected_action = sel_action.lower() if sel_action else ""
+        if selected_action and selected_action not in canonical_set:
+            selected_action = ""
 
-        def items_for_verb(verb: str, *, item_type: str | None,
-                           last_action: str | None,
-                           page: int, per: int, db):
-            params = [verb, verb]
+        def items_for_verb(
+            verb: str,
+            *,
+            item_type: str | None,
+            last_action: str | None,
+            page: int,
+            per: int,
+            db,
+        ):
+            params = [verb, *canonical_actions, verb]
             type_filter_sql = ""
             if item_type:
                 type_filter_sql = " AND i.item_type = ?"
@@ -2356,7 +2623,7 @@ def by_kind(slug):
                             FROM entry_item ei2
                             JOIN entry      e2 ON e2.id = ei2.entry_id
                             WHERE ei2.item_id = i.id
-                            AND ei2.verb    = ?
+                            AND ei2.verb    = ?{sub_latest_filter}
                             ORDER BY e2.created_at DESC
                             LIMIT 1))                                   AS last_action
                     FROM item        i
@@ -2373,30 +2640,32 @@ def by_kind(slug):
                 params.append(last_action)
 
             base_sql += " ORDER BY last_at DESC"
-            return paginate(base_sql, tuple(params),
-                            page=page, per_page=per, db=db)
+            return paginate(base_sql, tuple(params), page=page, per_page=per, db=db)
 
-        rows, total_pages = items_for_verb(kind,
-                                        item_type=selected or None,
-                                        last_action=selected_action or None,
-                                        page=page, per=ps, db=db)
+        rows, total_pages = items_for_verb(
+            kind,
+            item_type=selected or None,
+            last_action=selected_action or None,
+            page=page,
+            per=ps,
+            db=db,
+        )
         pages = list(range(1, total_pages + 1))
         return render_template_string(
             TEMPL_ITEM_LIST,
-            rows      = rows,
-            pages     = pages,
-            page      = page,
-            verb      = kind,
-            types     = type_rows,        
-            selected  = selected,  
-            actions   = action_rows,
-            selected_action = selected_action,
-            type_total_cnt   = type_total_cnt,
-            filtered_total_cnt = filtered_total_cnt,
-            username  = current_username(),
-            title     = get_setting('site_name', 'po.etr.ist'),
+            rows=rows,
+            pages=pages,
+            page=page,
+            verb=kind,
+            types=type_rows,
+            selected=selected,
+            actions=action_rows,
+            selected_action=selected_action,
+            type_total_cnt=type_total_cnt,
+            filtered_total_cnt=filtered_total_cnt,
+            username=current_username(),
+            title=get_setting("site_name", "po.etr.ist"),
         )
-
 
     BASE_SQL = """
         SELECT e.*, ei.action
@@ -2407,23 +2676,24 @@ def by_kind(slug):
     """
 
     entries, total_pages = paginate(BASE_SQL, (kind,), page=page, per_page=ps, db=db)
-    pages = list(range(1, total_pages+1))
+    pages = list(range(1, total_pages + 1))
 
     back_map = backlinks(entries, db=db)
     return render_template_string(
         TEMPL_LIST,
-        rows     = entries,
-        pages    = pages,
-        page     = page,
-        heading  = (kind or '').capitalize()+'s',
-        kind     = kind,
-        username = current_username(),
-        title    = get_setting('site_name', 'po.etr.ist'),
-        form_title = form_title,
-        form_link  = form_link,
-        form_body  = form_body,
-        backlinks = back_map,
+        rows=entries,
+        pages=pages,
+        page=page,
+        heading=(kind or "").capitalize() + "s",
+        kind=kind,
+        username=current_username(),
+        title=get_setting("site_name", "po.etr.ist"),
+        form_title=form_title,
+        form_link=form_link,
+        form_body=form_body,
+        backlinks=back_map,
     )
+
 
 TEMPL_LIST = wrap("""
     {% block body %}
@@ -2715,16 +2985,17 @@ TEMPL_ITEM_LIST = wrap("""
 ###############################################################################
 # Entries (Say, Post, Pin)
 ###############################################################################
-@app.route('/<kind_slug>/<entry_slug>')
+@app.route("/<kind_slug>/<entry_slug>")
 def entry_detail(kind_slug, entry_slug):
     kind = slug_to_kind(kind_slug)
-    if kind == 'page':
+    if kind == "page":
         abort(404)
 
     db = get_db()
 
     # grab one action (the first, if there are several entry_item rows)
-    row = db.execute("""
+    row = db.execute(
+        """
         SELECT  e.*,
                 MIN(ei.action)                 AS action,
                 MIN(ei.progress)               AS progress,
@@ -2743,7 +3014,9 @@ def entry_detail(kind_slug, entry_slug):
         WHERE e.kind = ? AND e.slug = ?
         GROUP BY e.id
         LIMIT 1
-    """, (kind, entry_slug)).fetchone()
+    """,
+        (kind, entry_slug),
+    ).fetchone()
 
     if kind not in (*KINDS, *VERB_KINDS) or row is None:
         abort(404)
@@ -2753,10 +3026,11 @@ def entry_detail(kind_slug, entry_slug):
         TEMPL_ENTRY_DETAIL,
         e=row,
         backlinks=backs,
-        title=get_setting('site_name', 'po.etr.ist'),
+        title=get_setting("site_name", "po.etr.ist"),
         username=current_username(),
-        kind=row['kind'],
+        kind=row["kind"],
     )
+
 
 TEMPL_ENTRY_DETAIL = wrap("""
     {% block body %}
@@ -2850,117 +3124,128 @@ TEMPL_ENTRY_DETAIL = wrap("""
 """)
 
 
-@app.route('/<kind_slug>/<entry_slug>/edit', methods=['GET', 'POST'])
+@app.route("/<kind_slug>/<entry_slug>/edit", methods=["GET", "POST"])
 def edit_entry(kind_slug, entry_slug):
     login_required()
     kind = slug_to_kind(kind_slug)
-    db   = get_db()
+    db = get_db()
 
-    row  = db.execute("SELECT * FROM entry WHERE kind=? AND slug=?",
-                      (kind, entry_slug)).fetchone()
+    row = db.execute(
+        "SELECT * FROM entry WHERE kind=? AND slug=?", (kind, entry_slug)
+    ).fetchone()
     if not row:
         abort(404)
 
-    if request.method == 'POST':
-        title = request.form.get('title','').strip() or None
-        raw_body = request.form['body']
+    if request.method == "POST":
+        title = request.form.get("title", "").strip() or None
+        raw_body = request.form["body"]
         body_trimmed = raw_body.strip()
-        link  = request.form.get('link','').strip() or None
-        new_slug = request.form.get('slug','').strip() or row['slug']
+        link = request.form.get("link", "").strip() or None
+        new_slug = request.form.get("slug", "").strip() or row["slug"]
 
         # ── single pass ───────────────────────────────────────────────
-        body_parsed, blocks, errors = parse_trigger(body_trimmed)            # ← only call once
+        body_parsed, blocks, errors = parse_trigger(body_trimmed)  # ← only call once
 
         if errors:
-            flash('Errors in caret blocks found. Entry was not saved.')
+            flash("Errors in caret blocks found. Entry was not saved.")
             for err in errors:
                 flash(err)
             filled = dict(row)
-            filled.update({
-                'title': request.form.get('title', ''),
-                'body': raw_body,
-                'link': request.form.get('link', ''),
-                'slug': new_slug,
-            })
+            filled.update(
+                {
+                    "title": request.form.get("title", ""),
+                    "body": raw_body,
+                    "link": request.form.get("link", ""),
+                    "slug": new_slug,
+                }
+            )
             return render_template_string(
-                TEMPL_EDIT_ENTRY,
-                e=filled,
-                title=get_setting('site_name', 'po.etr.ist')
+                TEMPL_EDIT_ENTRY, e=filled, title=get_setting("site_name", "po.etr.ist")
             )
 
         # decide the final kind
-        is_page_flag = request.form.get('is_page')   # None, '1' or '0'
+        is_page_flag = request.form.get("is_page")  # None, '1' or '0'
 
-        if is_page_flag == '1' or (is_page_flag is None and row['kind'] == 'page'):
+        if is_page_flag == "1" or (is_page_flag is None and row["kind"] == "page"):
             # keep / promote to page
-            new_kind = 'page'
-        elif is_page_flag == '0' and row['kind'] == 'page':
+            new_kind = "page"
+        elif is_page_flag == "0" and row["kind"] == "page":
             # explicit demotion → become a post (or whatever is inferred)
-            new_kind = blocks[0]['verb'] if blocks else infer_kind(title, link)
+            new_kind = blocks[0]["verb"] if blocks else infer_kind(title, link)
         else:
             # normal post / pin / say workflow
-            new_kind = blocks[0]['verb'] if blocks else infer_kind(title, link)
+            new_kind = blocks[0]["verb"] if blocks else infer_kind(title, link)
 
         if not body_parsed:
-            flash('Body is required.')
+            flash("Body is required.")
             filled = dict(row)
-            filled.update({
-                'title': request.form.get('title', ''),
-                'body': raw_body,
-                'link': request.form.get('link', ''),
-                'slug': new_slug,
-                'kind': new_kind,
-            })
+            filled.update(
+                {
+                    "title": request.form.get("title", ""),
+                    "body": raw_body,
+                    "link": request.form.get("link", ""),
+                    "slug": new_slug,
+                    "kind": new_kind,
+                }
+            )
             return render_template_string(
-                TEMPL_EDIT_ENTRY,
-                e=filled,
-                title=get_setting('site_name', 'po.etr.ist')
+                TEMPL_EDIT_ENTRY, e=filled, title=get_setting("site_name", "po.etr.ist")
             )
 
         # 2️⃣  Synchronise entry_item & item_meta
-        db.execute("DELETE FROM entry_item WHERE entry_id=?", (row['id'],))
+        db.execute("DELETE FROM entry_item WHERE entry_id=?", (row["id"],))
         for idx, blk in enumerate(blocks):
             item_id, slug_i, uuid_i = get_or_create_item(
-                item_type = blk['item_type'],
-                title     = blk['title'],
-                meta      = blk['meta'],
-                slug      = blk['slug'],
-                db        = db,
-                update_meta=False
+                item_type=blk["item_type"],
+                title=blk["title"],
+                meta=blk["meta"],
+                slug=blk["slug"],
+                db=db,
+                update_meta=False,
             )
-            db.execute("""INSERT OR REPLACE INTO entry_item
+            db.execute(
+                """INSERT OR REPLACE INTO entry_item
                             (entry_id, item_id, verb, action, progress)
                           VALUES (?,?,?,?,?)""",
-                       (row['id'], item_id,
-                        blk['verb'], blk['action'], blk['progress']))
+                (row["id"], item_id, blk["verb"], blk["action"], blk["progress"]),
+            )
 
             body_parsed = body_parsed.replace(
-                f'^{blk["item_type"]}:$PENDING${idx}$',
-                _verbose_block(blk, uuid_i)
+                f"^{blk['item_type']}:$PENDING${idx}$", _verbose_block(blk, uuid_i)
             )
 
         # 3️⃣  Store the (possibly rewritten) entry itself
-        db.execute("""UPDATE entry
+        db.execute(
+            """UPDATE entry
                          SET title=?, body=?, link=?, slug=?, kind=?, updated_at=?
                        WHERE id=?""",
-                   (title, body_parsed, link, new_slug, new_kind,
-                    utc_now().isoformat(timespec='seconds'),
-                    row['id']))
+            (
+                title,
+                body_parsed,
+                link,
+                new_slug,
+                new_kind,
+                utc_now().isoformat(timespec="seconds"),
+                row["id"],
+            ),
+        )
 
         # 4️⃣  Tags
-        sync_tags(row['id'], extract_tags(body_parsed), db=db)
+        sync_tags(row["id"], extract_tags(body_parsed), db=db)
         db.commit()
 
         if new_kind == "page":
-            return redirect(url_for('by_kind', slug=new_slug))        
+            return redirect(url_for("by_kind", slug=new_slug))
 
-        return redirect(url_for('entry_detail',
-                                kind_slug=kind_to_slug(new_kind),
-                                entry_slug=new_slug))
+        return redirect(
+            url_for(
+                "entry_detail", kind_slug=kind_to_slug(new_kind), entry_slug=new_slug
+            )
+        )
 
-    return render_template_string(TEMPL_EDIT_ENTRY,
-                                  e=row,
-                                  title=get_setting('site_name', 'po.etr.ist'))
+    return render_template_string(
+        TEMPL_EDIT_ENTRY, e=row, title=get_setting("site_name", "po.etr.ist")
+    )
 
 
 TEMPL_EDIT_ENTRY = wrap("""
@@ -3051,28 +3336,31 @@ TEMPL_EDIT_ENTRY = wrap("""
 """)
 
 
-@app.route('/<kind_slug>/<entry_slug>/delete', methods=['GET', 'POST'])
+@app.route("/<kind_slug>/<entry_slug>/delete", methods=["GET", "POST"])
 def delete_entry(kind_slug, entry_slug):
     login_required()
     kind = slug_to_kind(kind_slug)
-    db   = get_db()
+    db = get_db()
 
-    row = db.execute("SELECT * FROM entry WHERE kind=? AND slug=?",
-                     (kind, entry_slug)).fetchone()
+    row = db.execute(
+        "SELECT * FROM entry WHERE kind=? AND slug=?", (kind, entry_slug)
+    ).fetchone()
     if not row:
         abort(404)
 
-    if request.method == 'POST':
-        db.execute('DELETE FROM entry WHERE id=?', (row['id'],))
+    if request.method == "POST":
+        db.execute("DELETE FROM entry WHERE id=?", (row["id"],))
         db.commit()
-        db.execute("DELETE FROM tag WHERE id NOT IN "
-                   "(SELECT DISTINCT tag_id FROM entry_tag)")
+        db.execute(
+            "DELETE FROM tag WHERE id NOT IN (SELECT DISTINCT tag_id FROM entry_tag)"
+        )
         db.commit()
-        return redirect(url_for('index'))
+        return redirect(url_for("index"))
 
-    return render_template_string(TEMPL_DELETE_ENTRY,
-                                  e=row,
-                                  title=get_setting('site_name', 'po.etr.ist'))
+    return render_template_string(
+        TEMPL_DELETE_ENTRY, e=row, title=get_setting("site_name", "po.etr.ist")
+    )
+
 
 TEMPL_DELETE_ENTRY = wrap("""
 {% block body %}
@@ -3094,11 +3382,12 @@ TEMPL_DELETE_ENTRY = wrap("""
 </div>
 """)
 
+
 ###############################################################################
 # Tags
 ###############################################################################
-@app.route('/tags', defaults={'tag_list': ''})
-@app.route('/tags/<path:tag_list>')
+@app.route("/tags", defaults={"tag_list": ""})
+@app.route("/tags/<path:tag_list>")
 def tags(tag_list: str):
     """
     Show a tag cloud.  Pills can be selected / deselected; the current
@@ -3107,36 +3396,40 @@ def tags(tag_list: str):
     db = get_db()
 
     # ---------- tag statistics for the cloud --------------------------------
-    cur  = db.execute("""SELECT t.name, COUNT(et.entry_id) AS cnt
+    cur = db.execute("""SELECT t.name, COUNT(et.entry_id) AS cnt
                          FROM tag t
                          LEFT JOIN entry_tag et ON t.id = et.tag_id
                          GROUP BY t.id
                          ORDER BY LOWER(t.name)""")
-    rows = [dict(r) for r in cur]           # make mutable dicts
+    rows = [dict(r) for r in cur]  # make mutable dicts
 
     # ---------- which is currently selected? ----------------------------------
-    selected = {t.lower() for t in tag_list.split('+') if t}
+    selected = {t.lower() for t in tag_list.split("+") if t}
 
     # ---------- scale counts → font-size (same as before) -------------------
     counts = [r["cnt"] for r in rows]
     lo, hi = (min(counts), max(counts)) if counts else (0, 0)
-    span   = max(1, hi - lo)
+    span = max(1, hi - lo)
     for r in rows:
-        weight     = (r["cnt"] - lo) / span if counts else 0
-        r["size"]  = f"{0.75 + weight * 1.2:.2f}em"
+        weight = (r["cnt"] - lo) / span if counts else 0
+        r["size"] = f"{0.75 + weight * 1.2:.2f}em"
         r["active"] = r["name"] in selected
 
         # ── URL that would result from clicking the pill ────────────────────
         new_sel = (selected - {r["name"]}) if r["active"] else (selected | {r["name"]})
-        r["href"] = url_for('tags', tag_list='+'.join(sorted(new_sel))) if new_sel else url_for('tags')
+        r["href"] = (
+            url_for("tags", tag_list="+".join(sorted(new_sel)))
+            if new_sel
+            else url_for("tags")
+        )
 
     # ---------- fetch entries if something is selected ----------------------
-    sort = request.args.get('sort', 'new') 
-    page = max(int(request.args.get('page', 1)), 1)
-    per  = page_size()
+    sort = request.args.get("sort", "new")
+    page = max(int(request.args.get("page", 1)), 1)
+    per = page_size()
     if selected:
         order_sql = "e.created_at DESC" if sort == "new" else "e.created_at ASC"
-        q_marks = ','.join('?' * len(selected))
+        q_marks = ",".join("?" * len(selected))
         base_sql = f"""
             SELECT  e.*,
                     ei.action,
@@ -3159,28 +3452,29 @@ def tags(tag_list: str):
             HAVING COUNT(DISTINCT t.name)=?
         ORDER BY {order_sql}
         """
-        entries, total_pages = paginate(base_sql,
-                                        (*selected, len(selected)),
-                                        page=page, per_page=per, db=db)
+        entries, total_pages = paginate(
+            base_sql, (*selected, len(selected)), page=page, per_page=per, db=db
+        )
         pages = list(range(1, total_pages + 1))
     else:
-        entries, pages = None, []                       # nothing selected → no list
+        entries, pages = None, []  # nothing selected → no list
 
     back_map = backlinks(entries, db=db)
 
     return render_template_string(
         TEMPL_TAGS,
-        tags     = rows,
-        entries  = entries,
-        selected = selected,
-        page     = page,
-        pages    = pages,
-        sort     = sort,
-        kind     = 'tags',
-        username = current_username(),
-        title    = get_setting('site_name', 'po.etr.ist'),
-        backlinks = back_map,
+        tags=rows,
+        entries=entries,
+        selected=selected,
+        page=page,
+        pages=pages,
+        sort=sort,
+        kind="tags",
+        username=current_username(),
+        title=get_setting("site_name", "po.etr.ist"),
+        backlinks=back_map,
     )
+
 
 TEMPL_TAGS = wrap("""
 {% block body %}
@@ -3339,6 +3633,7 @@ def _rfc2822(dt_str: str) -> str:
     except Exception:
         return dt_str
 
+
 def _rss(entries, *, title, feed_url, site_url):
     """
     Build a valid RSS 2.0 document (single string).
@@ -3353,9 +3648,8 @@ def _rss(entries, *, title, feed_url, site_url):
             "entry_detail",
             kind_slug=kind_to_slug(e["kind"]),
             entry_slug=e["slug"],
-            _external=True,            # absolute URL
+            _external=True,  # absolute URL
         )
-
 
         # choose the most recent timestamp we have
         ts_iso = e["updated_at"] or e["created_at"]
@@ -3389,46 +3683,54 @@ def _rss(entries, *, title, feed_url, site_url):
                rel="self"
                type="application/rss+xml" />
 
-    {''.join(items)}
+    {"".join(items)}
   </channel>
 </rss>"""
+
 
 # ------------------------------------------------------------------
 #  ✨  RSS feeds
 # ------------------------------------------------------------------
-@app.route('/rss')
+@app.route("/rss")
 def global_rss():
-    db  = get_db()
-    rows = db.execute("SELECT * FROM entry ORDER BY created_at DESC LIMIT 50").fetchall()
-    xml  = _rss(rows,
-                title = get_setting('site_name', 'po.etr.ist'),
-                feed_url = url_for('global_rss', _external=True),
-                site_url = request.url_root.rstrip('/'))
-    return app.response_class(xml, mimetype='application/rss+xml')
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM entry ORDER BY created_at DESC LIMIT 50"
+    ).fetchall()
+    xml = _rss(
+        rows,
+        title=get_setting("site_name", "po.etr.ist"),
+        feed_url=url_for("global_rss", _external=True),
+        site_url=request.url_root.rstrip("/"),
+    )
+    return app.response_class(xml, mimetype="application/rss+xml")
 
 
-@app.route('/<slug>/rss')
+@app.route("/<slug>/rss")
 def kind_rss(slug):
     kind = slug_to_kind(slug)
-    if kind == 'page':  # pages don't have an RSS feed
+    if kind == "page":  # pages don't have an RSS feed
         abort(404)
-    db   = get_db()
-    rows = db.execute("SELECT * FROM entry WHERE kind=? ORDER BY created_at DESC LIMIT 50",
-                      (kind,)).fetchall()
-    xml  = _rss(rows,
-                title = f"{(kind or "").capitalize()} – {get_setting('site_name','po.etr.ist')}",
-                feed_url = request.url,                 # already correct
-                site_url = request.url_root.rstrip('/'))
-    return app.response_class(xml, mimetype='application/rss+xml')
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM entry WHERE kind=? ORDER BY created_at DESC LIMIT 50", (kind,)
+    ).fetchall()
+    xml = _rss(
+        rows,
+        title=f"{(kind or '').capitalize()} – {get_setting('site_name', 'po.etr.ist')}",
+        feed_url=request.url,  # already correct
+        site_url=request.url_root.rstrip("/"),
+    )
+    return app.response_class(xml, mimetype="application/rss+xml")
 
 
-@app.route('/tags/<path:tag_list>/rss')
+@app.route("/tags/<path:tag_list>/rss")
 def tags_rss(tag_list):
-    tags = [t.lower() for t in re.split(r'[,+/]', tag_list) if t]
+    tags = [t.lower() for t in re.split(r"[,+/]", tag_list) if t]
     if not tags:
         abort(404)
 
-    q_marks = ','.join('?' * len(tags))
+    q_marks = ",".join("?" * len(tags))
     sql = f"""SELECT e.* FROM entry e
               JOIN entry_tag et ON et.entry_id = e.id
               JOIN tag t        ON t.id        = et.tag_id
@@ -3437,31 +3739,36 @@ def tags_rss(tag_list):
               ORDER BY e.created_at DESC LIMIT 50"""
     rows = get_db().execute(sql, (*tags, len(tags))).fetchall()
 
-    pretty = ' + '.join(tags)
-    xml    = _rss(rows,
-                  title   = f"#{pretty} – {get_setting('site_name','po.etr.ist')}",
-                  feed_url = request.url,               # already correct
-                  site_url = request.url_root.rstrip('/'))
-    return app.response_class(xml, mimetype='application/rss+xml')
+    pretty = " + ".join(tags)
+    xml = _rss(
+        rows,
+        title=f"#{pretty} – {get_setting('site_name', 'po.etr.ist')}",
+        feed_url=request.url,  # already correct
+        site_url=request.url_root.rstrip("/"),
+    )
+    return app.response_class(xml, mimetype="application/rss+xml")
+
 
 ###############################################################################
 # Check-ins / Items
 ###############################################################################
-@app.route('/<verb>/<item_type>/<slug>', methods=['GET', 'POST'])
+@app.route("/<verb>/<item_type>/<slug>", methods=["GET", "POST"])
 def item_detail(verb, item_type, slug):
-    db   = get_db()
-    itm = db.execute("SELECT id, uuid, slug, item_type, title "
-                     "FROM item WHERE slug=? AND item_type=?",
-                     (slug, item_type)).fetchone()
+    db = get_db()
+    itm = db.execute(
+        "SELECT id, uuid, slug, item_type, title "
+        "FROM item WHERE slug=? AND item_type=?",
+        (slug, item_type),
+    ).fetchone()
     if not itm:
         abort(404)
 
     # ──────────────────────────────── POST: quick “check-in” ──────────────
-    if request.method == 'POST':
+    if request.method == "POST":
         login_required()
 
         # ❶ ── turn the user input into a {key: value} dict -----------------
-        raw = request.form['meta'].rstrip()
+        raw = request.form["meta"].rstrip()
 
         meta_dict: dict[str, str] = {}
         body_lines: list[str] = []
@@ -3469,115 +3776,127 @@ def item_detail(verb, item_type, slug):
         for ln in raw.splitlines():
             stripped = ln.strip()
 
-            if stripped.startswith('^') and ':' in stripped:        # looks like “^key: val”
-                k, v = [p.strip() for p in stripped.split(':', 1)]
+            if stripped.startswith("^") and ":" in stripped:  # looks like “^key: val”
+                k, v = [p.strip() for p in stripped.split(":", 1)]
                 meta_dict[canon(k)] = v
-            else:                                       # free text → body
-                body_lines.append(ln.rstrip())  
+            else:  # free text → body
+                body_lines.append(ln.rstrip())
 
         # ❷ ── ensure we have an *action* (may be inferred) ------------------
-        if 'action' not in meta_dict:
+        if "action" not in meta_dict:
             # most-recent action for the same item / verb
-            r = db.execute("""SELECT ei.action
+            r = db.execute(
+                """SELECT ei.action
                                FROM entry_item ei
                                JOIN entry       e ON e.id = ei.entry_id
                               WHERE ei.item_id=? AND ei.verb=?
                               ORDER BY e.created_at DESC
                               LIMIT 1""",
-                           (itm['id'], verb)).fetchone()
+                (itm["id"], verb),
+            ).fetchone()
             if r:
-                meta_dict['action'] = r['action']
-            else:                                   # fall-back: 2nd word in map
-                meta_dict['action'] = VERB_MAP[verb][1] \
-                                   if verb in VERB_MAP and len(VERB_MAP[verb]) > 1 \
-                                   else verb
+                meta_dict["action"] = r["action"]
+            else:  # fall-back: 2nd word in map
+                meta_dict["action"] = (
+                    VERB_MAP[verb][1]
+                    if verb in VERB_MAP and len(VERB_MAP[verb]) > 1
+                    else verb
+                )
 
         # ❸ ── build the caret block ----------------------------------------
         caret_lines = [
-            f'^uuid:{itm["uuid"]}',
-            f'^item_type:{itm["item_type"]}',
-            f'^action:{meta_dict.pop("action")}',
-            f'^verb:{verb}',
+            f"^uuid:{itm['uuid']}",
+            f"^item_type:{itm['item_type']}",
+            f"^action:{meta_dict.pop('action')}",
+            f"^verb:{verb}",
         ]
-        for k, v in meta_dict.items():          # any remaining keys (progress, …)
-            caret_lines.append(f'{k}:{v}')
+        for k, v in meta_dict.items():  # any remaining keys (progress, …)
+            caret_lines.append(f"{k}:{v}")
 
         # put user text (if any) underneath the caret block
         if body_lines:
-            caret_lines.append('')          # blank line → separates meta/body
+            caret_lines.append("")  # blank line → separates meta/body
             caret_lines.extend(body_lines)
 
-        body_raw = '\n'.join(caret_lines)
+        body_raw = "\n".join(caret_lines)
 
-        body, blocks, errors = parse_trigger(body_raw)        # normal pipeline
+        body, blocks, errors = parse_trigger(body_raw)  # normal pipeline
         if errors:
             raise ValueError(f"Generated caret block invalid: {errors}")
 
-        now_dt   = utc_now()
-        now_iso  = now_dt.isoformat(timespec='seconds')
-        slug_ent = now_dt.strftime('%Y%m%d%H%M%S')
+        now_dt = utc_now()
+        now_iso = now_dt.isoformat(timespec="seconds")
+        slug_ent = now_dt.strftime("%Y%m%d%H%M%S")
 
         # ➊  create the *entry* itself
-        db.execute("""INSERT INTO entry (body, created_at, slug, kind)
+        db.execute(
+            """INSERT INTO entry (body, created_at, slug, kind)
                     VALUES (?,?,?,?)""",
-                (body, now_iso, slug_ent, verb))
+            (body, now_iso, slug_ent, verb),
+        )
         entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
         # ➋  link entry ↔ item   (only one block here, but keep the loop)
         for idx, blk in enumerate(blocks):
-            db.execute("""INSERT INTO entry_item
+            db.execute(
+                """INSERT INTO entry_item
                             (entry_id, item_id, verb, action, progress)
                         VALUES (?,?,?,?,?)""",
-                    (entry_id, itm['id'],
-                        blk['verb'], blk['action'], blk['progress']))
+                (entry_id, itm["id"], blk["verb"], blk["action"], blk["progress"]),
+            )
 
             # replace placeholder with the finished verbose block
             body = body.replace(
-                f'^{blk["item_type"]}:$PENDING${idx}$',
-                _verbose_block(blk, itm['uuid'])
+                f"^{blk['item_type']}:$PENDING${idx}$", _verbose_block(blk, itm["uuid"])
             )
 
         db.execute("UPDATE entry SET body=? WHERE id=?", (body, entry_id))
         db.commit()
 
-        flash('Check-in added.')
+        flash("Check-in added.")
         return redirect(request.url)
 
-    meta = db.execute("""
+    meta = db.execute(
+        """
             SELECT k, v
               FROM item_meta
              WHERE item_id=?
              ORDER BY ord, LOWER(k)         
-        """, (itm['id'],)).fetchall()
+        """,
+        (itm["id"],),
+    ).fetchall()
 
-
-    sort = request.args.get("sort", "old")          # ➊  new | old 
+    sort = request.args.get("sort", "old")  # ➊  new | old
 
     if sort == "old":
         order_sql = "e.created_at ASC"
-    else:                                           # newest (default)
+    else:  # newest (default)
         order_sql = "e.created_at DESC"
 
-    rows = db.execute(f"""
+    rows = db.execute(
+        f"""
             SELECT e.*, ei.action, ei.progress
               FROM entry      e
               JOIN entry_item ei ON ei.entry_id = e.id
              WHERE ei.item_id=? AND ei.verb=?
              ORDER BY {order_sql}
-        """, (itm["id"], verb)).fetchall()
-    
+        """,
+        (itm["id"], verb),
+    ).fetchall()
+
     back_map = backlinks(rows, db=db)
 
-    return render_template_string(TEMPL_ITEM_DETAIL, 
-                                  item   = itm,
-                                  meta   = meta,
-                                  entries= rows,
-                                  verb   = verb,
-                                  sort   = sort,
-                                  username=current_username(),
-                                  title  = get_setting('site_name', 'po.etr.ist'),
-                                  backlinks = back_map,
-                                )
+    return render_template_string(
+        TEMPL_ITEM_DETAIL,
+        item=itm,
+        meta=meta,
+        entries=rows,
+        verb=verb,
+        sort=sort,
+        username=current_username(),
+        title=get_setting("site_name", "po.etr.ist"),
+        backlinks=back_map,
+    )
 
 
 TEMPL_ITEM_DETAIL = wrap("""
@@ -3723,55 +4042,67 @@ TEMPL_ITEM_DETAIL = wrap("""
 {% endblock %}
 """)
 
-@app.route('/<verb>/<item_type>/<slug>/edit', methods=['GET', 'POST'])
+
+@app.route("/<verb>/<item_type>/<slug>/edit", methods=["GET", "POST"])
 def edit_item(verb, item_type, slug):
     login_required()
-    db   = get_db()
-    itm  = db.execute("SELECT * FROM item WHERE slug=? AND item_type=?",
-                      (slug, item_type)).fetchone()
+    db = get_db()
+    itm = db.execute(
+        "SELECT * FROM item WHERE slug=? AND item_type=?", (slug, item_type)
+    ).fetchone()
     if not itm:
         abort(404)
 
-    if request.method == 'POST':
-        title      = request.form['title'].strip()
-        new_slug   = request.form['slug'].strip() or itm['slug']
-        new_type   = request.form['item_type'].strip() or itm['item_type']
+    if request.method == "POST":
+        title = request.form["title"].strip()
+        new_slug = request.form["slug"].strip() or itm["slug"]
+        new_type = request.form["item_type"].strip() or itm["item_type"]
 
         # ➊ update main row ---------------------------------------------------
-        db.execute("""UPDATE item SET title=?, slug=?, item_type=? WHERE id=?""",
-                   (title, new_slug, new_type, itm['id']))
+        db.execute(
+            """UPDATE item SET title=?, slug=?, item_type=? WHERE id=?""",
+            (title, new_slug, new_type, itm["id"]),
+        )
 
         # ➋ meta – collect paired lists -------------------------------
-        keys  = request.form.getlist('meta_k')
-        vals  = request.form.getlist('meta_v')
-        orders = request.form.getlist('meta_o')
+        keys = request.form.getlist("meta_k")
+        vals = request.form.getlist("meta_v")
+        orders = request.form.getlist("meta_o")
 
         triples = [
             (k.strip(), v.strip(), int(o) if o.strip().isdigit() else idx)
             for idx, (k, v, o) in enumerate(zip(keys, vals, orders), 1)
             if k.strip()
         ]
-        db.execute("DELETE FROM item_meta WHERE item_id=?", (itm['id'],))
+        db.execute("DELETE FROM item_meta WHERE item_id=?", (itm["id"],))
         for k, v, o in triples:
-            db.execute("""INSERT INTO item_meta (item_id,k,v,ord)
-                        VALUES (?,?,?,?)""", (itm['id'], k, v, o))
+            db.execute(
+                """INSERT INTO item_meta (item_id,k,v,ord)
+                        VALUES (?,?,?,?)""",
+                (itm["id"], k, v, o),
+            )
 
         db.commit()
-        flash('Item saved.')
-        return redirect(url_for('item_detail',
-                                verb=verb, item_type=new_type, slug=new_slug))
+        flash("Item saved.")
+        return redirect(
+            url_for("item_detail", verb=verb, item_type=new_type, slug=new_slug)
+        )
 
     # → GET – render form -----------------------------------------------------
     meta_rows = db.execute(
-        "SELECT k, v, ord FROM item_meta WHERE item_id=? ORDER BY ord, LOWER(k)", (itm['id'],)
+        "SELECT k, v, ord FROM item_meta WHERE item_id=? ORDER BY ord, LOWER(k)",
+        (itm["id"],),
     ).fetchall()
 
-    return render_template_string(TEMPL_EDIT_ITEM,
-                                  item      = itm,
-                                  meta      = meta_rows,
-                                  verb      = verb,
-                                  username  = current_username(),
-                                  title     = get_setting('site_name', 'po.etr.ist'))
+    return render_template_string(
+        TEMPL_EDIT_ITEM,
+        item=itm,
+        meta=meta_rows,
+        verb=verb,
+        username=current_username(),
+        title=get_setting("site_name", "po.etr.ist"),
+    )
+
 
 TEMPL_EDIT_ITEM = wrap("""
 {% block body %}
@@ -3839,26 +4170,30 @@ TEMPL_EDIT_ITEM = wrap("""
 """)
 
 
-@app.route('/<verb>/<item_type>/<slug>/delete', methods=['GET', 'POST'])
+@app.route("/<verb>/<item_type>/<slug>/delete", methods=["GET", "POST"])
 def delete_item(verb, item_type, slug):
     login_required()
-    db   = get_db()
-    itm  = db.execute("SELECT * FROM item WHERE slug=? AND item_type=?",
-                      (slug, item_type)).fetchone()
+    db = get_db()
+    itm = db.execute(
+        "SELECT * FROM item WHERE slug=? AND item_type=?", (slug, item_type)
+    ).fetchone()
     if not itm:
         abort(404)
 
-    if request.method == 'POST':
-        db.execute("DELETE FROM item WHERE id=?", (itm['id'],))
+    if request.method == "POST":
+        db.execute("DELETE FROM item WHERE id=?", (itm["id"],))
         db.commit()
-        flash('Item deleted.')
-        return redirect(url_for('by_kind', slug=kind_to_slug(verb)))
+        flash("Item deleted.")
+        return redirect(url_for("by_kind", slug=kind_to_slug(verb)))
 
-    return render_template_string(TEMPL_DELETE_ITEM,
-                                  item     = itm,
-                                  verb     = verb, 
-                                  username = current_username(),
-                                  title    = get_setting('site_name', 'po.etr.ist'))
+    return render_template_string(
+        TEMPL_DELETE_ITEM,
+        item=itm,
+        verb=verb,
+        username=current_username(),
+        title=get_setting("site_name", "po.etr.ist"),
+    )
+
 
 TEMPL_DELETE_ITEM = wrap("""
 {% block body %}
@@ -3883,31 +4218,34 @@ TEMPL_DELETE_ITEM = wrap("""
 # Search
 ###############################################################################
 
-_SAFE_TOKEN_RE = re.compile(r'^\w+$', re.UNICODE)
+_SAFE_TOKEN_RE = re.compile(r"^\w+$", re.UNICODE)
+
 
 def _auto_quote(q: str) -> str:
     """Wrap every token that contains punctuation in double quotes."""
     out = []
     for tok in q.split():
         # leave trailing * outside the quotes so prefix-search still works
-        star = tok.endswith('*')
+        star = tok.endswith("*")
         core = tok[:-1] if star else tok
         if not _SAFE_TOKEN_RE.fullmatch(core):
-            core = core.replace('"', '""')         # escape embedded quotes
-            tok = f'"{core}"' + ('*' if star else '')
+            core = core.replace('"', '""')  # escape embedded quotes
+            tok = f'"{core}"' + ("*" if star else "")
         out.append(tok)
-    return ' '.join(out)
+    return " ".join(out)
+
 
 # ------------------------------------------------------------------
 # Full-text / LIKE search
 # ------------------------------------------------------------------
-def search_entries(q: str,
-                   *,
-                   db,
-                   page: int = 1,
-                   per_page: int = PAGE_DEFAULT,
-                   sort: str = "rel"      #  rel | new | old
-                   ):
+def search_entries(
+    q: str,
+    *,
+    db,
+    page: int = 1,
+    per_page: int = PAGE_DEFAULT,
+    sort: str = "rel",  #  rel | new | old
+):
     """
     Return (rows_on_page, total_hits, removed_chars_set).
 
@@ -3925,8 +4263,9 @@ def search_entries(q: str,
     # ─── 1-2 characters → simple LIKE ---------------------------------
     if len(q) < 3:
         like = f"%{q}%"
-        order_sql = {"new": "e.created_at DESC",
-                     "old": "e.created_at ASC"}.get(sort, "e.created_at DESC")
+        order_sql = {"new": "e.created_at DESC", "old": "e.created_at ASC"}.get(
+            sort, "e.created_at DESC"
+        )
         base_sql = f"""
             SELECT e.*,
                    ei.action, ei.progress,
@@ -3945,17 +4284,22 @@ def search_entries(q: str,
           GROUP BY e.id
             ORDER BY {order_sql}
         """
-        total = db.execute(f"SELECT COUNT(*) FROM ({base_sql})",
-                           (like, like)).fetchone()[0]
-        rows  = db.execute(f"{base_sql} LIMIT ? OFFSET ?",
-                           (like, like, per_page, (page-1)*per_page)).fetchall()
+        total = db.execute(
+            f"SELECT COUNT(*) FROM ({base_sql})", (like, like)
+        ).fetchone()[0]
+        rows = db.execute(
+            f"{base_sql} LIMIT ? OFFSET ?",
+            (like, like, per_page, (page - 1) * per_page),
+        ).fetchall()
         return rows, total, removed
 
     # ─── ≥3 chars → FTS5 trigram index --------------------------------
-    order_sql = {"new": "e.created_at DESC",
-                    "old": "e.created_at ASC"}.get(sort, "rank")
+    order_sql = {"new": "e.created_at DESC", "old": "e.created_at ASC"}.get(
+        sort, "rank"
+    )
 
-    rows = db.execute(f"""
+    rows = db.execute(
+        f"""
         SELECT
             e.*,
             bm25(entry_fts) AS rank,
@@ -3991,7 +4335,9 @@ def search_entries(q: str,
         WHERE entry_fts MATCH ?
         ORDER BY {order_sql}
         LIMIT ? OFFSET ?
-    """, (q, per_page, (page - 1) * per_page)).fetchall()
+    """,
+        (q, per_page, (page - 1) * per_page),
+    ).fetchall()
 
     total = db.execute(
         "SELECT COUNT(*) FROM entry_fts WHERE entry_fts MATCH ?", (q,)
@@ -3999,14 +4345,19 @@ def search_entries(q: str,
 
     return rows, total, removed
 
-_ITEM_Q_RE = re.compile(r"""
+
+_ITEM_Q_RE = re.compile(
+    r"""
     ^\s*
     (?P<type>[^\s:]+)                 # track / book / …
     (?:\s*:\s*(?P<field>[^\s:]+))?    # 演唱 / 作者 / …
     \s*:\s*
     (?P<term>".+?"|[^"].*?)           # ← fixed here
     \s*$
-""", re.X | re.I | re.U)
+""",
+    re.X | re.I | re.U,
+)
+
 
 def _parse_item_query(q: str):
     """
@@ -4017,13 +4368,14 @@ def _parse_item_query(q: str):
     if not m:
         return None
     d = m.groupdict()
-    term = d['term'].strip()
+    term = d["term"].strip()
     if term.startswith('"') and term.endswith('"'):
         term = term[1:-1]
-    d['term'] = term
-    d['type'] = d['type'].lower()
-    d['field'] = d['field'].lower() if d['field'] else None
+    d["term"] = term
+    d["type"] = d["type"].lower()
+    d["field"] = d["field"].lower() if d["field"] else None
     return d
+
 
 def search_items(q: str, *, db, page=1, per_page=PAGE_DEFAULT):
     """
@@ -4039,21 +4391,21 @@ def search_items(q: str, *, db, page=1, per_page=PAGE_DEFAULT):
     """
     spec = _parse_item_query(q)
     if not spec:
-        return [], 0           # not an item query → let caller fall back
+        return [], 0  # not an item query → let caller fall back
 
-    # ------------------------------------------------------------------ 
+    # ------------------------------------------------------------------
     # Build WHERE-clause and parameter list
     # ------------------------------------------------------------------
-    conds, params = ["i.item_type = ?"], [spec['type']]
+    conds, params = ["i.item_type = ?"], [spec["type"]]
     like = f"%{spec['term'].lower()}%"
 
     # --- helper fragment: exclude base64 images -----------------------
     _no_b64 = (
         "im.k NOT IN ('cover','img','poster') "
-        "AND LENGTH(im.v) < 500"              # >≈300 chars → almost always an image
+        "AND LENGTH(im.v) < 500"  # >≈300 chars → almost always an image
     )
 
-    if spec['field'] is None:                           #   book:"Kafka"
+    if spec["field"] is None:  #   book:"Kafka"
         conds.append(f"""
            (
              LOWER(i.title) LIKE ?
@@ -4065,11 +4417,11 @@ def search_items(q: str, *, db, page=1, per_page=PAGE_DEFAULT):
         """)
         params.extend([like, like])
 
-    elif spec['field'] == 'title':                      #   book:title:kafka
+    elif spec["field"] == "title":  #   book:title:kafka
         conds.append("LOWER(i.title) LIKE ?")
         params.append(like)
 
-    else:                                               #   book:author:kafka
+    else:  #   book:author:kafka
         conds.append(f"""
             EXISTS (SELECT 1 FROM item_meta im
                      WHERE im.item_id = i.id
@@ -4077,11 +4429,11 @@ def search_items(q: str, *, db, page=1, per_page=PAGE_DEFAULT):
                        AND {_no_b64}
                        AND LOWER(im.v) LIKE ?)
         """)
-        params.extend([spec['field'], like])
+        params.extend([spec["field"], like])
 
     where_sql = " AND ".join(conds)
 
-    # ------------------------------------------------------------------ 
+    # ------------------------------------------------------------------
     # Final query (unchanged apart from the new WHERE)
     # ------------------------------------------------------------------
     base_sql = f"""
@@ -4102,10 +4454,15 @@ def search_items(q: str, *, db, page=1, per_page=PAGE_DEFAULT):
          ORDER BY cnt DESC, last_at DESC
     """
 
-    total = db.execute(f"SELECT COUNT(*) FROM ({base_sql})", tuple(params)).fetchone()[0]
-    rows  = db.execute(f"{base_sql} LIMIT ? OFFSET ?",
-                       tuple(params) + (per_page, (page-1)*per_page)).fetchall()
+    total = db.execute(f"SELECT COUNT(*) FROM ({base_sql})", tuple(params)).fetchone()[
+        0
+    ]
+    rows = db.execute(
+        f"{base_sql} LIMIT ? OFFSET ?",
+        tuple(params) + (per_page, (page - 1) * per_page),
+    ).fetchall()
     return rows, total
+
 
 def _highlight(text: str | None, terms: list[str]) -> Markup:
     """
@@ -4116,66 +4473,65 @@ def _highlight(text: str | None, terms: list[str]) -> Markup:
         return Markup("")
     col = theme_color()
     pattern = re.compile("|".join(re.escape(t) for t in terms), re.I)
-    return Markup(pattern.sub(
-        lambda m: (
-            f'<mark style="background:transparent;'
-            f'color:{col};border-bottom:2px solid {col};">'
-            f'{m.group(0)}</mark>'
-        ),
-        text,
-    ))
+    return Markup(
+        pattern.sub(
+            lambda m: (
+                f'<mark style="background:transparent;'
+                f'color:{col};border-bottom:2px solid {col};">'
+                f"{m.group(0)}</mark>"
+            ),
+            text,
+        )
+    )
 
-@app.route('/search')
+
+@app.route("/search")
 def search():
-    q_raw = request.args.get('q','').strip()
-    page  = max(int(request.args.get('page',1)), 1)
+    q_raw = request.args.get("q", "").strip()
+    page = max(int(request.args.get("page", 1)), 1)
 
     # ── ①  try item‑search first ─────────────────────────────────────
-    if ':' in q_raw:                                      # quick pre‑filter
-        rows, total = search_items(q_raw, db=get_db(),
-                                   page=page, per_page=page_size())
-        if total or _parse_item_query(q_raw):             # valid pattern
-            pages = list(range(1, (total + page_size() - 1)//page_size() + 1))
+    if ":" in q_raw:  # quick pre‑filter
+        rows, total = search_items(q_raw, db=get_db(), page=page, per_page=page_size())
+        if total or _parse_item_query(q_raw):  # valid pattern
+            pages = list(range(1, (total + page_size() - 1) // page_size() + 1))
             return render_template_string(
                 TEMPL_SEARCH_ITEMS,
-                rows   = rows,
-                total  = total,
-                query  = q_raw,
-                page   = page,
-                pages  = pages,
-                kind   = 'search',
-                username = current_username(),
-                title   = get_setting('site_name', 'po.etr.ist'), 
-            )
-    
-    # ── ②  fall back to the existing entry search ───────────────────
-    sort  = request.args.get('sort','rel')
-    rows, total, removed = search_entries(q_raw,
-                db=get_db(),
+                rows=rows,
+                total=total,
+                query=q_raw,
                 page=page,
-                per_page=page_size(),
-                sort=sort)
-    
-    terms = [q_raw]                              # q here is your original short token
-    rows = [dict(r) for r in rows]           # make mutable copies
+                pages=pages,
+                kind="search",
+                username=current_username(),
+                title=get_setting("site_name", "po.etr.ist"),
+            )
+
+    # ── ②  fall back to the existing entry search ───────────────────
+    sort = request.args.get("sort", "rel")
+    rows, total, removed = search_entries(
+        q_raw, db=get_db(), page=page, per_page=page_size(), sort=sort
+    )
+
+    terms = [q_raw]  # q here is your original short token
+    rows = [dict(r) for r in rows]  # make mutable copies
     for r in rows:
-        r['snippet'] = _highlight(strip_caret(r['body']), terms)
+        r["snippet"] = _highlight(strip_caret(r["body"]), terms)
         r["title"] = _highlight(r["title"], terms)
 
-
-    pages = list(range(1, (total + page_size() - 1)//page_size() + 1))
+    pages = list(range(1, (total + page_size() - 1) // page_size() + 1))
 
     return render_template_string(
         TEMPL_SEARCH_ENTRIES,
-        rows     = rows,
-        query    = q_raw,
-        sort     = sort,
-        page     = page,
-        pages    = pages,
-        removed  = ''.join(sorted(removed)),
-        kind     = 'search',
-        username = current_username(),
-        title    = get_setting('site_name', 'po.etr.ist'),
+        rows=rows,
+        query=q_raw,
+        sort=sort,
+        page=page,
+        pages=pages,
+        removed="".join(sorted(removed)),
+        kind="search",
+        username=current_username(),
+        title=get_setting("site_name", "po.etr.ist"),
     )
 
 
@@ -4333,12 +4689,14 @@ TEMPL_SEARCH_ITEMS = wrap("""
 {% endblock %}
 """)
 
+
 ###############################################################################
 # On This Day
 ###############################################################################
-def _today_md() -> tuple[str,str]:
+def _today_md() -> tuple[str, str]:
     now = datetime.now(ZoneInfo(tz_name()))
     return now.strftime("%m"), now.strftime("%d")
+
 
 def _today_stats(*, db):
     """
@@ -4362,6 +4720,7 @@ def _today_stats(*, db):
     # sqlite Row supports attribute access – convert to regular dict for safety
     return [dict(r) for r in rows]
 
+
 def today_years(*, db) -> list[str]:
     """Helper so other parts of the code (or templates) can reuse the years list."""
     return [r["y"] for r in _today_stats(db=db)]
@@ -4371,20 +4730,22 @@ def has_today() -> bool:
     """Show the link only when ≥ 2 different years match today."""
     return len(today_years(db=get_db())) >= 2
 
+
 app.jinja_env.globals.update(has_today=has_today)
+
 
 @app.route("/today", defaults={"year": None})
 @app.route("/today/<int:year>")
 def today(year):
-    db        = get_db()
-    stats     = _today_stats(db=db)               # [{y, cnt}, …]
-    years     = [r["y"] for r in stats]           # plain list for convenience
-    counts    = {r["y"]: r["cnt"] for r in stats} # {'2024':3, …}
+    db = get_db()
+    stats = _today_stats(db=db)  # [{y, cnt}, …]
+    years = [r["y"] for r in stats]  # plain list for convenience
+    counts = {r["y"]: r["cnt"] for r in stats}  # {'2024':3, …}
     total_cnt = sum(counts.values())
     selected = str(year) if year else ""
-    mm, dd   = _today_md()
+    mm, dd = _today_md()
 
-    cond   = ""
+    cond = ""
     params = [mm, dd]
     if year:
         cond = " AND substr(e.created_at,1,4)=?"
@@ -4411,24 +4772,25 @@ def today(year):
         ORDER BY e.created_at DESC
     """
 
-    page             = max(int(request.args.get("page", 1)), 1)
-    per_page         = page_size()
-    entries, pages_t = paginate(BASE_SQL, tuple(params),
-                                page=page, per_page=per_page, db=db)
+    page = max(int(request.args.get("page", 1)), 1)
+    per_page = page_size()
+    entries, pages_t = paginate(
+        BASE_SQL, tuple(params), page=page, per_page=per_page, db=db
+    )
     pages = list(range(1, pages_t + 1))
 
     return render_template_string(
         TEMPL_TODAY,
-        rows       = entries,
-        stats      = stats,          # [{y, cnt}, …] for pills
-        years      = years,          # simple list if you still need it
-        total_cnt  = total_cnt,
-        selected   = selected,
-        page       = page,
-        pages      = pages,
-        title      = get_setting("site_name", "po.etr.ist"),
-        kind       = "today",
-        username   = current_username(),
+        rows=entries,
+        stats=stats,  # [{y, cnt}, …] for pills
+        years=years,  # simple list if you still need it
+        total_cnt=total_cnt,
+        selected=selected,
+        page=page,
+        pages=pages,
+        title=get_setting("site_name", "po.etr.ist"),
+        kind="today",
+        username=current_username(),
     )
 
 
@@ -4572,22 +4934,26 @@ TEMPL_TODAY = wrap("""
 # Error pages
 ###############################################################################
 
-@app.route('/.well-known')
-@app.route('/.well-known/<path:path>')
-@app.route('/users/<path:path>')
-@app.route('/nodeinfo')
-@app.route('/nodeinfo/<path:path>')
-@app.route('/api/nodeinfo')
-@app.route('/api/nodeinfo/<path:path>')
-@app.route('/inbox', methods=['GET','POST'])
+
+@app.route("/.well-known")
+@app.route("/.well-known/<path:path>")
+@app.route("/users/<path:path>")
+@app.route("/nodeinfo")
+@app.route("/nodeinfo/<path:path>")
+@app.route("/api/nodeinfo")
+@app.route("/api/nodeinfo/<path:path>")
+@app.route("/inbox", methods=["GET", "POST"])
 def gone(path=None):
-    return ('', 410)
+    return ("", 410)
 
 
 @app.errorhandler(404)
 def not_found(exc):
     """Site-wide “Not Found” page."""
-    return render_template_string(TEMPL_404, title = get_setting('site_name', 'po.etr.ist')), 404
+    return render_template_string(
+        TEMPL_404, title=get_setting("site_name", "po.etr.ist")
+    ), 404
+
 
 @app.errorhandler(500)
 def internal_error(exc):
@@ -4598,7 +4964,10 @@ def internal_error(exc):
       this handler while debug is on.
     """
     # Optional: log the traceback here if you like
-    return render_template_string(TEMPL_500, title = get_setting('site_name', 'po.etr.ist')), 500
+    return render_template_string(
+        TEMPL_500, title=get_setting("site_name", "po.etr.ist")
+    ), 500
+
 
 TEMPL_404 = wrap("""
 {% block body %}
@@ -4625,41 +4994,65 @@ TEMPL_500 = wrap("""
 # Import /Export Items data
 ###############################################################################
 
-@app.route('/<verb>/<item_type>/<slug>/json')
+
+@app.route("/<verb>/<item_type>/<slug>/json")
 @rate_limit(max_requests=30, window=60)
 def export_item_json(verb, item_type, slug):
-    db  = get_db()
-    itm = db.execute("""SELECT id, uuid, slug, item_type, title
+    db = get_db()
+    itm = db.execute(
+        """SELECT id, uuid, slug, item_type, title
                           FROM item
                          WHERE item_type=? AND slug=?""",
-                     (item_type, slug)).fetchone()
+        (item_type, slug),
+    ).fetchone()
     if not itm:
         abort(404)
 
-    meta = db.execute("""SELECT k, v, ord
+    meta = db.execute(
+        """SELECT k, v, ord
                            FROM item_meta
                           WHERE item_id=?
                           ORDER BY ord""",
-                      (itm['id'],)).fetchall()
+        (itm["id"],),
+    ).fetchall()
 
     return {
-        'title'    : itm['title'],
-        'item_type': itm['item_type'],
-        'slug'     : itm['slug'],
-        'uuid'     : itm['uuid'],
-        'meta'     : [{'k': m['k'], 'v': m['v'], 'ord': m['ord']} for m in meta]
+        "title": itm["title"],
+        "item_type": itm["item_type"],
+        "slug": itm["slug"],
+        "uuid": itm["uuid"],
+        "meta": [{"k": m["k"], "v": m["v"], "ord": m["ord"]} for m in meta],
     }
 
+
 _BAD_NETS = [
-    ipaddress.ip_network(n) for n in ("0.0.0.0/8","10.0.0.0/8","127.0.0.0/8","169.254.0.0/16","172.16.0.0/12","192.0.0.0/24","192.168.0.0/16","198.18.0.0/15","224.0.0.0/4","240.0.0.0/4","::/128", "::1/128","fc00::/7", "fe80::/10","ff00::/8",)
+    ipaddress.ip_network(n)
+    for n in (
+        "0.0.0.0/8",
+        "10.0.0.0/8",
+        "127.0.0.0/8",
+        "169.254.0.0/16",
+        "172.16.0.0/12",
+        "192.0.0.0/24",
+        "192.168.0.0/16",
+        "198.18.0.0/15",
+        "224.0.0.0/4",
+        "240.0.0.0/4",
+        "::/128",
+        "::1/128",
+        "fc00::/7",
+        "fe80::/10",
+        "ff00::/8",
+    )
 ]
+
 
 def _is_private(host: str) -> bool:
     """True ⇢ *host* resolves **only** to private / reserved addresses."""
     try:
         infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
     except socket.gaierror:
-        return True                             # unable to resolve ⇒ treat as bad
+        return True  # unable to resolve ⇒ treat as bad
     for fam, *_rest, sockaddr in infos:
         ip = sockaddr[0]
         try:
@@ -4667,7 +5060,7 @@ def _is_private(host: str) -> bool:
         except ValueError:
             return True
         if not any(ip_obj in net for net in _BAD_NETS):
-            return False                        # at least one public address
+            return False  # at least one public address
     return True
 
 
@@ -4685,7 +5078,7 @@ def import_item_json(url: str, *, action: str):
     # 0 . normalise URL and pull out components
     # ------------------------------------------------------------------ #
     parsed = urlparse(url)
-    host   = parsed.hostname or ""
+    host = parsed.hostname or ""
     scheme = parsed.scheme or "https"
     if not host:
         raise ValueError("Malformed URL – host missing")
@@ -4711,8 +5104,10 @@ def import_item_json(url: str, *, action: str):
         with requests.get(
             url,
             timeout=5,
-            stream=True,                      # we want to cap download
-            verify=(host not in localhost_hosts),   # allow self-signed *only* for localhost
+            stream=True,  # we want to cap download
+            verify=(
+                host not in localhost_hosts
+            ),  # allow self-signed *only* for localhost
             headers={"Accept": "application/json"},
         ) as resp:
             resp.raise_for_status()
@@ -4722,7 +5117,7 @@ def import_item_json(url: str, *, action: str):
                 raise ValueError(f"Unexpected Content-Type “{ctype}”")
 
             raw = b""
-            max_bytes = 1 * 1024 * 1024       # 1 MiB should be plenty
+            max_bytes = 1 * 1024 * 1024  # 1 MiB should be plenty
             for chunk in resp.iter_content(8192):
                 raw += chunk
                 if len(raw) > max_bytes:
@@ -4745,8 +5140,7 @@ def import_item_json(url: str, *, action: str):
 
     verb_from_url = path_parts[0].lower()
     verb_from_action = next(
-        (v for v, acts in VERB_MAP.items() if action.lower() in acts),
-        action.lower()
+        (v for v, acts in VERB_MAP.items() if action.lower() in acts), action.lower()
     )
     if verb_from_url != verb_from_action:
         raise ValueError("Verb/action mismatch")
@@ -4755,21 +5149,23 @@ def import_item_json(url: str, *, action: str):
     # 4 . craft block-dict for caller
     # ------------------------------------------------------------------ #
     return {
-        "verb"      : verb_from_action,
-        "action"    : action.lower(),
-        "item_type" : data["item_type"],
-        "title"     : data["title"],
-        "slug"      : data["slug"],
-        "progress"  : None,
-        "meta"      : {m["k"]: m["v"] for m in data.get("meta", [])},
+        "verb": verb_from_action,
+        "action": action.lower(),
+        "item_type": data["item_type"],
+        "title": data["title"],
+        "slug": data["slug"],
+        "progress": None,
+        "meta": {m["k"]: m["v"] for m in data.get("meta", [])},
     }
+
 
 ###############################################################################
 # main
 ###############################################################################
-if __name__ == '__main__':
+if __name__ == "__main__":
     import sys
-    if len(sys.argv) > 1 and sys.argv[1] == 'init':
+
+    if len(sys.argv) > 1 and sys.argv[1] == "init":
         with app.app_context():
             cli_init()
     else:
