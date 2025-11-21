@@ -698,8 +698,15 @@ def is_b64_image(k: str, v: str) -> bool:
 
 # Slug helpers
 def slug_map() -> dict[str, str]:
-    """Return {'say':'saying', 'post':'post', …} with fall-back defaults."""
-    return {k: get_setting(f"slug_{k}", v) or v for k, v in SLUG_DEFAULTS.items()}
+    """
+    Return slug mappings for core kinds plus verbs, with fall-back defaults.
+    Settings keys follow slug_<kind>, e.g. slug_read.
+    """
+    slugs = {k: get_setting(f"slug_{k}", v) or v for k, v in SLUG_DEFAULTS.items()}
+    slugs.update(
+        {v: get_setting(f"slug_{v}", v) or v for v in VERB_KINDS}
+    )  # verbs default to themselves
+    return slugs
 
 
 def kind_to_slug(kind: str) -> str:
@@ -1847,9 +1854,10 @@ def settings():
             else:
                 flash("Invalid color – please use 6-digit hex.")
 
-        set_setting("slug_say", request.form.get("slug_say", "").strip() or "say")
-        set_setting("slug_post", request.form.get("slug_post", "").strip() or "post")
-        set_setting("slug_pin", request.form.get("slug_pin", "").strip() or "pin")
+        slug_defaults = {**SLUG_DEFAULTS, **{v: v for v in VERB_KINDS}}
+        for kind, default_slug in slug_defaults.items():
+            raw = request.form.get(f"slug_{kind}", "").strip()
+            set_setting(f"slug_{kind}", raw or default_slug)
 
         size = (
             max(1, int(raw))
@@ -1865,12 +1873,16 @@ def settings():
     cur_username = db.execute("SELECT username FROM user LIMIT 1").fetchone()[
         "username"
     ]
+    slug_settings = slug_map()
+    verb_slugs = [(v, slug_settings.get(v, v)) for v in VERB_KINDS]
     return render_template_string(
         TEMPL_SETTINGS,
         site_name=get_setting("site_name", "po.etr.ist"),
         username=cur_username,
         new_token=new_token,
         title=get_setting("site_name", "po.etr.ist"),
+        slug_settings=slug_settings,
+        verb_slugs=verb_slugs,
     )
 
 
@@ -1930,16 +1942,27 @@ TEMPL_SETTINGS = wrap("""
                 <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(10rem,1fr)); gap:.75rem;">
                     <label>
                         <span style="font-size:.8em; color:#aaa">Says</span><br>
-                        <input name="slug_say"  value="{{ get_setting('slug_say',  'say')  }}" style="width:100%">
+                        <input name="slug_say"  value="{{ slug_settings['say'] }}" style="width:100%">
                     </label>
                     <label>
                         <span style="font-size:.8em; color:#aaa">Posts</span><br>
-                        <input name="slug_post" value="{{ get_setting('slug_post', 'post') }}" style="width:100%">
+                        <input name="slug_post" value="{{ slug_settings['post'] }}" style="width:100%">
                     </label>
                     <label>
                         <span style="font-size:.8em; color:#aaa">Pins</span><br>
-                        <input name="slug_pin" value="{{ get_setting('slug_pin',  'pin')  }}" style="width:100%">
+                        <input name="slug_pin" value="{{ slug_settings['pin'] }}" style="width:100%">
                     </label>
+            </div>
+            <div style="margin-top:1rem;">
+                <span style="font-size:.8em; color:#aaa">Verbs</span>
+                <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(10rem,1fr)); gap:.75rem; margin-top:.4rem;">
+                    {% for verb, slug in verb_slugs %}
+                    <label>
+                        <span style="font-size:.8em; color:#aaa">{{ verb|capitalize }}</span><br>
+                        <input name="slug_{{ verb }}" value="{{ slug }}" style="width:100%">
+                    </label>
+                    {% endfor %}
+                </div>
             </div>
         </fieldset>
 
