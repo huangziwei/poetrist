@@ -3079,55 +3079,6 @@ TEMPL_ITEM_LIST = wrap("""
     </details>
 
     <div class="more-panel" style="grid-column:1 / span 2;">
-        {% if genres %}
-        <div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
-            <a href="{{ url_for('by_kind',
-                                slug=kind_to_slug(verb),
-                                type=selected or None,
-                                action=selected_action or None) }}"
-               style="text-decoration:none !important;
-                      border-bottom:none!important;
-                      display:inline-flex;
-                      margin:.15rem 0;
-                      padding:.15rem .6rem;
-                      border-radius:1rem;
-                      white-space:nowrap;
-                      font-size:.8em;
-                      {% if not selected_genre %}
-                          background:{{ theme_color() }}; color:#000;
-                      {% else %}
-                          background:#444;   color:{{ theme_color() }};
-                      {% endif %}">
-                All
-                <sup style="font-size:.5em;">{{ genre_total_cnt }}</sup>
-            </a>
-
-            {% for g in genres %}
-            <a href="{{ url_for('by_kind',
-                                slug=kind_to_slug(verb),
-                                type=selected or None,
-                                action=selected_action or None,
-                                genre=g.key) }}"
-               style="text-decoration:none !important;
-                      border-bottom:none!important;
-                      display:inline-flex;
-                      margin:.15rem 0;
-                      padding:.15rem .6rem;
-                      border-radius:1rem;
-                      white-space:nowrap;
-                      font-size:.8em;
-                      {% if selected_genre == g.key %}
-                          background:{{ theme_color() }}; color:#000;
-                      {% else %}
-                          background:#444;   color:{{ theme_color() }};
-                      {% endif %}">
-                {{ g.label | smartcap }}
-                <sup style="font-size:.5em;">{{ g.cnt }}</sup>
-            </a>
-            {% endfor %}
-        </div>
-        {% endif %}
-
         {% if actions %}
         <div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
             <a href="{{ url_for('by_kind',
@@ -3172,6 +3123,55 @@ TEMPL_ITEM_LIST = wrap("""
                       {% endif %}">
                 {{ a.last_action | smartcap }}
                 <sup style="font-size:.5em;">{{ a.cnt }}</sup>
+            </a>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if genres %}
+        <div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
+            <a href="{{ url_for('by_kind',
+                                slug=kind_to_slug(verb),
+                                type=selected or None,
+                                action=selected_action or None) }}"
+               style="text-decoration:none !important;
+                      border-bottom:none!important;
+                      display:inline-flex;
+                      margin:.15rem 0;
+                      padding:.15rem .6rem;
+                      border-radius:1rem;
+                      white-space:nowrap;
+                      font-size:.8em;
+                      {% if not selected_genre %}
+                          background:{{ theme_color() }}; color:#000;
+                      {% else %}
+                          background:#444;   color:{{ theme_color() }};
+                      {% endif %}">
+                All
+                <sup style="font-size:.5em;">{{ genre_total_cnt }}</sup>
+            </a>
+
+            {% for g in genres %}
+            <a href="{{ url_for('by_kind',
+                                slug=kind_to_slug(verb),
+                                type=selected or None,
+                                action=selected_action or None,
+                                genre=g.key) }}"
+               style="text-decoration:none !important;
+                      border-bottom:none!important;
+                      display:inline-flex;
+                      margin:.15rem 0;
+                      padding:.15rem .6rem;
+                      border-radius:1rem;
+                      white-space:nowrap;
+                      font-size:.8em;
+                      {% if selected_genre == g.key %}
+                          background:{{ theme_color() }}; color:#000;
+                      {% else %}
+                          background:#444;   color:{{ theme_color() }};
+                      {% endif %}">
+                {{ g.label | smartcap }}
+                <sup style="font-size:.5em;">{{ g.cnt }}</sup>
             </a>
             {% endfor %}
         </div>
