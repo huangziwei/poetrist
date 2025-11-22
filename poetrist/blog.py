@@ -2766,6 +2766,7 @@ def by_kind(slug):
             genre_item_ids = {
                 rec["id"] for rec in items_data.values() if selected_genre in rec["genres"]
             }
+        more_filters = bool(action_rows or genre_rows)
 
         def items_for_verb(
             verb: str,
@@ -2845,6 +2846,7 @@ def by_kind(slug):
             genres=genre_rows,
             selected_genre=selected_genre,
             genre_total_cnt=genre_total_cnt,
+            more_filters=more_filters,
             type_total_cnt=type_total_cnt,
             filtered_total_cnt=filtered_total_cnt,
             username=current_username(),
@@ -2999,162 +3001,181 @@ TEMPL_ITEM_LIST = wrap("""
 {% block body %}
 <hr>
 
-<!-- —— Type-cloud as selectable pills ——————————————— -->
-<div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
+<style>
+.filter-grid details.more-toggle + .more-panel { display: none; }
+.filter-grid details.more-toggle[open] + .more-panel { display: flex; flex-direction:column; gap:.35rem; }
+</style>
 
-    <!-- “All” pill -->
-    <a href="{{ url_for('by_kind',
-                        slug=kind_to_slug(verb),
-                        action=selected_action or None,
-                        genre=selected_genre or None) }}"
-       style="text-decoration:none !important;
-              border-bottom:none!important;
-              display:inline-flex;
-              margin:.15rem 0;
-              padding:.15rem .6rem;
-              border-radius:1rem;
-              white-space:nowrap;
-              font-size:.8em;
-              {% if not selected %}
-                  background:{{ theme_color() }}; color:#000;
-              {% else %}
-                  background:#444;   color:{{ theme_color() }};
-              {% endif %}">
-        All
-        <sup style="font-size:.5em;">{{ type_total_cnt }}</sup>
-    </a>
+<div class="filter-grid" style="display:grid; grid-template-columns:1fr auto; grid-template-rows:auto auto; column-gap:.75rem; row-gap:.35rem; align-items:start;">
+    <div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
+        <a href="{{ url_for('by_kind',
+                            slug=kind_to_slug(verb),
+                            action=selected_action or None,
+                            genre=selected_genre or None) }}"
+           style="text-decoration:none !important;
+                  border-bottom:none!important;
+                  display:inline-flex;
+                  margin:.15rem 0;
+                  padding:.15rem .6rem;
+                  border-radius:1rem;
+                  white-space:nowrap;
+                  font-size:.8em;
+                  {% if not selected %}
+                      background:{{ theme_color() }}; color:#000;
+                  {% else %}
+                      background:#444;   color:{{ theme_color() }};
+                  {% endif %}">
+            All
+            <sup style="font-size:.5em;">{{ type_total_cnt }}</sup>
+        </a>
 
-    <!-- one pill per item_type -->
-    {% for t in types %}
-    <a href="{{ url_for('by_kind',
-                        slug=kind_to_slug(verb),
-                        type=t.item_type,
-                        action=selected_action or None,
-                        genre=selected_genre or None) }}"
-       style="text-decoration:none !important;
-              border-bottom:none!important;
-              display:inline-flex;
-              margin:.15rem 0;
-              padding:.15rem .6rem;
-              border-radius:1rem;
-              white-space:nowrap;
-              font-size:.8em;
-              {% if selected == t.item_type %}
-                  background:{{ theme_color() }}; color:#000;
-              {% else %}
-                  background:#444;   color:{{ theme_color() }};
-              {% endif %}">
-        {{ t.item_type | smartcap }}
-        <sup style="font-size:.5em;">{{ t.cnt }}</sup>
-    </a>
-    {% endfor %}
+        {% for t in types %}
+        <a href="{{ url_for('by_kind',
+                            slug=kind_to_slug(verb),
+                            type=t.item_type,
+                            action=selected_action or None,
+                            genre=selected_genre or None) }}"
+           style="text-decoration:none !important;
+                  border-bottom:none!important;
+                  display:inline-flex;
+                  margin:.15rem 0;
+                  padding:.15rem .6rem;
+                  border-radius:1rem;
+                  white-space:nowrap;
+                  font-size:.8em;
+                  {% if selected == t.item_type %}
+                      background:{{ theme_color() }}; color:#000;
+                  {% else %}
+                      background:#444;   color:{{ theme_color() }};
+                  {% endif %}">
+            {{ t.item_type | smartcap }}
+            <sup style="font-size:.5em;">{{ t.cnt }}</sup>
+        </a>
+        {% endfor %}
+    </div>
+
+    {% if more_filters %}
+    <details class="more-toggle"
+             style="margin:.15rem 0; justify-self:end;"
+             {% if selected_action or selected_genre %}open{% endif %}>
+        <summary style="list-style:none;
+                        display:inline-flex;
+                        align-items:center;
+                        gap:.25rem;
+                        margin:0;
+                        padding:.15rem .6rem;
+                        border-radius:1rem;
+                        border:1px solid #555;
+                        background:#333;
+                        color:{{ theme_color() }};
+                        font-size:.8em;
+                        cursor:pointer;">
+            More
+            <span aria-hidden="true" style="font-size:.75em;">▾</span>
+        </summary>
+    </details>
+
+    <div class="more-panel" style="grid-column:1 / span 2;">
+        {% if genres %}
+        <div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
+            <a href="{{ url_for('by_kind',
+                                slug=kind_to_slug(verb),
+                                type=selected or None,
+                                action=selected_action or None) }}"
+               style="text-decoration:none !important;
+                      border-bottom:none!important;
+                      display:inline-flex;
+                      margin:.15rem 0;
+                      padding:.15rem .6rem;
+                      border-radius:1rem;
+                      white-space:nowrap;
+                      font-size:.8em;
+                      {% if not selected_genre %}
+                          background:{{ theme_color() }}; color:#000;
+                      {% else %}
+                          background:#444;   color:{{ theme_color() }};
+                      {% endif %}">
+                All
+                <sup style="font-size:.5em;">{{ genre_total_cnt }}</sup>
+            </a>
+
+            {% for g in genres %}
+            <a href="{{ url_for('by_kind',
+                                slug=kind_to_slug(verb),
+                                type=selected or None,
+                                action=selected_action or None,
+                                genre=g.key) }}"
+               style="text-decoration:none !important;
+                      border-bottom:none!important;
+                      display:inline-flex;
+                      margin:.15rem 0;
+                      padding:.15rem .6rem;
+                      border-radius:1rem;
+                      white-space:nowrap;
+                      font-size:.8em;
+                      {% if selected_genre == g.key %}
+                          background:{{ theme_color() }}; color:#000;
+                      {% else %}
+                          background:#444;   color:{{ theme_color() }};
+                      {% endif %}">
+                {{ g.label | smartcap }}
+                <sup style="font-size:.5em;">{{ g.cnt }}</sup>
+            </a>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if actions %}
+        <div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
+            <a href="{{ url_for('by_kind',
+                                slug=kind_to_slug(verb),
+                                type=selected or None,
+                                genre=selected_genre or None) }}"
+               style="text-decoration:none !important;
+                      border-bottom:none!important;
+                      display:inline-flex;
+                      margin:.15rem 0;
+                      padding:.15rem .6rem;
+                      border-radius:1rem;
+                      white-space:nowrap;
+                      font-size:.8em;
+                      {% if not selected_action %}
+                          background:{{ theme_color() }}; color:#000;
+                      {% else %}
+                          background:#444;   color:{{ theme_color() }};
+                      {% endif %}">
+                All
+                <sup style="font-size:.5em;">{{ filtered_total_cnt }}</sup>
+            </a>
+
+            {% for a in actions %}
+            <a href="{{ url_for('by_kind',
+                                slug=kind_to_slug(verb),
+                                type=selected or None,
+                                action=a.last_action,
+                                genre=selected_genre or None) }}"
+               style="text-decoration:none !important;
+                      border-bottom:none!important;
+                      display:inline-flex;
+                      margin:.15rem 0;
+                      padding:.15rem .6rem;
+                      border-radius:1rem;
+                      white-space:nowrap;
+                      font-size:.8em;
+                      {% if selected_action == a.last_action %}
+                          background:{{ theme_color() }}; color:#000;
+                      {% else %}
+                          background:#444;   color:{{ theme_color() }};
+                      {% endif %}">
+                {{ a.last_action | smartcap }}
+                <sup style="font-size:.5em;">{{ a.cnt }}</sup>
+            </a>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
 </div>
-
-{% if genres %}
-<hr style="border-color:#444;opacity:.35;margin:.3rem 0;">
-
-<!-- —— Genre pills ——————————————————————————————— -->
-<div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
-    <a href="{{ url_for('by_kind',
-                        slug=kind_to_slug(verb),
-                        type=selected or None,
-                        action=selected_action or None) }}"
-       style="text-decoration:none !important;
-              border-bottom:none!important;
-              display:inline-flex;
-              margin:.15rem 0;
-              padding:.15rem .6rem;
-              border-radius:1rem;
-              white-space:nowrap;
-              font-size:.8em;
-              {% if not selected_genre %}
-                  background:{{ theme_color() }}; color:#000;
-              {% else %}
-                  background:#444;   color:{{ theme_color() }};
-              {% endif %}">
-        All
-        <sup style="font-size:.5em;">{{ genre_total_cnt }}</sup>
-    </a>
-
-    {% for g in genres %}
-    <a href="{{ url_for('by_kind',
-                        slug=kind_to_slug(verb),
-                        type=selected or None,
-                        action=selected_action or None,
-                        genre=g.key) }}"
-       style="text-decoration:none !important;
-              border-bottom:none!important;
-              display:inline-flex;
-              margin:.15rem 0;
-              padding:.15rem .6rem;
-              border-radius:1rem;
-              white-space:nowrap;
-              font-size:.8em;
-              {% if selected_genre == g.key %}
-                  background:{{ theme_color() }}; color:#000;
-              {% else %}
-                  background:#444;   color:{{ theme_color() }};
-              {% endif %}">
-        {{ g.label | smartcap }}
-        <sup style="font-size:.5em;">{{ g.cnt }}</sup>
-    </a>
-    {% endfor %}
-</div>
-{% endif %}
-
-{% if actions %}
-<hr style="border-color:#444;opacity:.35;margin:.3rem 0;">
-
-<!-- —— Action pills ——————————————————————————————— -->
-<div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
-
-    <!-- “All” pill for actions -->
-    <a href="{{ url_for('by_kind',
-                        slug=kind_to_slug(verb),
-                        type=selected or None,
-                        genre=selected_genre or None) }}"
-       style="text-decoration:none !important;
-              border-bottom:none!important;
-              display:inline-flex;
-              margin:.15rem 0;
-              padding:.15rem .6rem;
-              border-radius:1rem;
-              white-space:nowrap;
-              font-size:.8em;
-              {% if not selected_action %}
-                  background:{{ theme_color() }}; color:#000;
-              {% else %}
-                  background:#444;   color:{{ theme_color() }};
-              {% endif %}">
-        All
-        <sup style="font-size:.5em;">{{ filtered_total_cnt }}</sup>
-    </a>
-
-    {% for a in actions %}
-    <a href="{{ url_for('by_kind',
-                        slug=kind_to_slug(verb),
-                        type=selected or None,
-                        action=a.last_action,
-                        genre=selected_genre or None) }}"
-       style="text-decoration:none !important;
-              border-bottom:none!important;
-              display:inline-flex;
-              margin:.15rem 0;
-              padding:.15rem .6rem;
-              border-radius:1rem;
-              white-space:nowrap;
-              font-size:.8em;
-              {% if selected_action == a.last_action %}
-                  background:{{ theme_color() }}; color:#000;
-              {% else %}
-                  background:#444;   color:{{ theme_color() }};
-              {% endif %}">
-        {{ a.last_action | smartcap }}
-        <sup style="font-size:.5em;">{{ a.cnt }}</sup>
-    </a>
-    {% endfor %}
-</div>
-{% endif %}
 
 <!-- —— Item list ——————————————————————————————— -->
 {% if rows %}
