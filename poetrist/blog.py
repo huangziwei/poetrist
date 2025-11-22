@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo, available_timezones
 import click
 import latex2mathml.converter as _l2m
 import markdown
+from markdown.extensions import Extension
 import requests
 from flask import (
     Flask,
@@ -193,6 +194,7 @@ _BACKREF_RE = re.compile(r"<a[^>]+footnote-backref[^>]*>.*?</a>", re.S)
 _SUP_RE = re.compile(
     r'<sup id="fnref:([^"]+)"><a class="footnote-ref" href="#fn:[^"]+"[^>]*>.*?</a></sup>'
 )
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
 try:
     __version__ = version("poetrist")
@@ -213,62 +215,150 @@ app.config.update(
 )
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
-md = markdown.Markdown(
-    extensions=[
-        "pymdownx.extra",
-        "pymdownx.magiclink",
-        "pymdownx.tilde",
-        "pymdownx.mark",
-        "pymdownx.superfences",
-        "pymdownx.highlight",
-        "pymdownx.betterem",
-        "pymdownx.saneheaders",
-        "pymdownx.arithmatex",
-    ],
-    extension_configs={
-        "pymdownx.highlight": {
-            "guess_lang": True,
-            "noclasses": True,
-            "pygments_style": "nord",
-        },
-        "pymdownx.arithmatex": {"generic": True},
+EMBED_MAX_DEPTH = 2
+EMBED_MAX_COUNT = 10
+_EMBED_RE = re.compile(r"^@entry:(\S+?)(?:#([A-Za-z0-9._-]+))?\s*$")
+
+MD_EXTENSION_CONFIGS = {
+    "pymdownx.highlight": {
+        "guess_lang": True,
+        "noclasses": True,
+        "pygments_style": "nord",
     },
-)
+    "pymdownx.arithmatex": {"generic": True},
+}
+BASE_MD_EXTENSIONS = [
+    "pymdownx.extra",
+    "pymdownx.magiclink",
+    "pymdownx.tilde",
+    "pymdownx.mark",
+    "pymdownx.superfences",
+    "pymdownx.highlight",
+    "pymdownx.betterem",
+    "pymdownx.saneheaders",
+    "pymdownx.arithmatex",
+]
 
 
-@app.template_filter("md")
-def md_filter(text: str | None) -> Markup:
+def _slugify_heading(text: str) -> str:
+    """Simplistic slugify to match headings for partial embeds."""
+    slug = re.sub(r"[^\w\s-]", "", text or "").strip().lower()
+    slug = re.sub(r"\s+", "-", slug)
+    return slug
+
+
+def _new_embed_ctx(source_slug: str | None) -> dict:
+    """Per-render context for embed depth/loop tracking."""
+    return {"root": source_slug, "stack": set(), "depth": 0, "count": 0}
+
+
+def _get_embed_ctx() -> dict:
+    ctx = getattr(g, "_embed_ctx", None)
+    if ctx is None:
+        ctx = _new_embed_ctx(None)
+    return ctx
+
+
+def _set_embed_ctx(ctx):
+    g._embed_ctx = ctx
+
+
+def _drop_caret_meta(text: str) -> str:
     """
-    Render Markdown and turn every #tag into a link to the tag view.
+    Remove ^meta lines **except** when they are inside a fenced
+    code-block (``` … ``` or ~~~ … ~~~).
     """
-    theme_col = theme_color()  # get the current theme color
+    out, in_code, fence = [], False, ""
+    for ln in (text or "").splitlines():
+        m = _CODE_FENCE_RE.match(ln)
+        if m:  # toggle fence status
+            tok = m.group(1)
+            if not in_code:
+                in_code, fence = True, tok
+            elif tok == fence:  # matching closer
+                in_code, fence = False, ""
+            out.append(ln)
+            continue
 
-    # -- drop every line that starts with ^something:   (= caret meta)
-    def _drop_caret_meta(text: str) -> str:
-        """
-        Remove ^meta lines **except** when they are inside a fenced
-        code-block (``` … ``` or ~~~ … ~~~).
-        """
-        out, in_code, fence = [], False, ""
-        for ln in (text or "").splitlines():
-            m = _CODE_FENCE_RE.match(ln)
-            if m:  # toggle fence status
-                tok = m.group(1)
-                if not in_code:
-                    in_code, fence = True, tok
-                elif tok == fence:  # matching closer
-                    in_code, fence = False, ""
-                out.append(ln)
-                continue
+        if in_code or not ln.lstrip().startswith("^"):
+            out.append(ln)  # keep line
+    return "\n".join(out)
 
-            if in_code or not ln.lstrip().startswith("^"):
-                out.append(ln)  # keep line
-        return "\n".join(out)
 
-    clean = _drop_caret_meta((text or ""))
-    html = md.reset().convert(clean)
+def _render_markdown(text: str, *, ctx: dict | None = None, renderer=None) -> str:
+    """Convert Markdown text to HTML with a dedicated renderer."""
+    ctx = ctx or _new_embed_ctx(None)
+    prev = getattr(g, "_embed_ctx", None)
+    _set_embed_ctx(ctx)
+    try:
+        rnd = renderer or md
+        rnd.reset()
+        return rnd.convert(text)
+    finally:
+        if prev is None:
+            g.pop("_embed_ctx", None)
+        else:
+            _set_embed_ctx(prev)
 
-    # -- Hashtag `#tag` -------------------------------------------------
+
+def _popup_footnotes(html: str) -> str:
+    div_m = _FOOTNOTE_DIV_RE.search(html)
+    if not div_m:
+        return html
+
+    notes = {}
+    for m in _FOOT_LI_RE.finditer(div_m.group(0)):
+        num, raw = m.group(1), m.group(2)
+        raw = _BACKREF_RE.sub("", raw)
+        paras = [p.strip() for p in _PARA_RE.findall(raw)]
+        notes[num] = "<br><br>".join(paras)
+    html = html.replace(div_m.group(0), "")
+
+    # ensure the global “none” radio exists once per request
+    if "fn_none_added" not in g:
+        g.fn_none_added = True
+        html = (
+            '<input type="radio" hidden id="fn-none" name="fn-set" '
+            'class="fn-none" checked>'
+        ) + html
+
+    def repl(m: re.Match) -> str:
+        num = m.group(1)
+        body = notes.get(num, "")
+        rid = f"fn-{num}-{uuid.uuid4().hex[:4]}"
+        return (
+            f'<sup class="fn" id="fnref:{num}">'
+            f'  <input hidden type="radio" id="{rid}" name="fn-set" '
+            f'         class="fn-toggle">'
+            f'  <label for="{rid}" class="fn-ref">{num}</label>'
+            f'  <span  class="fn-popup">{body}</span>'
+            f'  <label for="fn-none" class="fn-overlay"></label>'
+            f"</sup>"
+        )
+
+    html = _SUP_RE.sub(repl, html)
+    all_notes = "".join(
+        f'<li id="fn:{k}"><a href="#fnref:{k}" class="fn-badge" style="font-size:0.85rem;text-decoration:none;">{k}</a> {v}</li>'
+        for k, v in notes.items()
+    )
+    html += (
+        '<details class="fn-all" style="margin-bottom:1.5rem;font-size:1rem;">'
+        f'  <summary style="cursor:pointer;font-weight:bold;">'
+        f"    Footnotes&nbsp;({len(notes)})"
+        "  </summary>"
+        '  <ol style="list-style:none;margin:0.5rem 0">'
+        f"{all_notes}"
+        "  </ol>"
+        "</details>"
+    )
+    return html
+
+
+def _postprocess_html(html: str, *, theme_col: str) -> str:
+    """
+    Apply hashtag links, mark styling, MathML conversion, footnote popups,
+    and add u-photo class to images.
+    """
     def _hashtag_repl(match):
         orig_tag = match.group(1)
         tag_lc = orig_tag.lower()
@@ -282,12 +372,9 @@ def md_filter(text: str | None) -> Markup:
         html,
     )
 
-    # -- TeX → MathML ---------------------------------------------------
-    _DELIMS = [("$$", "$$"), (r"\[", r"\]"), (r"\(", r"\)"), ("$", "$")]
-
     def _undelimit(tex: str) -> str:
         tex = tex.strip()
-        for left, right in _DELIMS:
+        for left, right in [("$$", "$$"), (r"\[", r"\]"), (r"\(", r"\)"), ("$", "$")]:
             if tex.startswith(left) and tex.endswith(right):
                 return tex[len(left) : -len(right)].strip()
         return tex
@@ -305,82 +392,239 @@ def md_filter(text: str | None) -> Markup:
             return f'<pre class="tex">{escape(m.group(2))}</pre>'
 
     html = ARITH_RE.sub(_to_mathml, html)
-
-    # -- Pop-up Footnotes → <sup> links ----------------------------------
-    def _popup_footnotes(html: str) -> str:
-        div_m = _FOOTNOTE_DIV_RE.search(html)
-        if not div_m:
-            return html
-
-        # 1)  collect notes
-        notes = {}
-        for m in _FOOT_LI_RE.finditer(div_m.group(0)):
-            num, raw = m.group(1), m.group(2)
-            raw = _BACKREF_RE.sub("", raw)
-            paras = [p.strip() for p in _PARA_RE.findall(raw)]
-            notes[num] = "<br><br>".join(paras)
-        html = html.replace(div_m.group(0), "")
-
-        # 2)  ensure the global “none” radio exists once per request
-        if "fn_none_added" not in g:
-            g.fn_none_added = True
-            html = (
-                '<input type="radio" hidden id="fn-none" name="fn-set" '
-                'class="fn-none" checked>'
-            ) + html
-
-        # 3)  replace every superscript
-        def repl(m: re.Match) -> str:
-            num = m.group(1)
-            body = notes.get(num, "")
-            rid = f"fn-{num}-{uuid.uuid4().hex[:4]}"
-            return (
-                f'<sup class="fn" id="fnref:{num}">'
-                f'  <input hidden type="radio" id="{rid}" name="fn-set" '
-                f'         class="fn-toggle">'
-                f'  <label for="{rid}" class="fn-ref">{num}</label>'
-                f'  <span  class="fn-popup">{body}</span>'
-                f'  <label for="fn-none" class="fn-overlay"></label>'  # ← overlay here
-                f"</sup>"
-            )
-
-        html = _SUP_RE.sub(repl, html)
-        all_notes = "".join(
-            f'<li id="fn:{k}"><a href="#fnref:{k}" class="fn-badge" style="font-size:0.85rem;text-decoration:none;">{k}</a> {v}</li>'
-            for k, v in notes.items()
-        )
-        html += (
-            '<details class="fn-all" style="margin-bottom:1.5rem;font-size:1rem;">'
-            f'  <summary style="cursor:pointer;font-weight:bold;">'
-            f"    Footnotes&nbsp;({len(notes)})"
-            "  </summary>"
-            '  <ol style="list-style:none;margin:0.5rem 0">'
-            f"{all_notes}"
-            "  </ol>"
-            "</details>"
-        )
-        return html
-
     html = _popup_footnotes(html)
 
     def _add_u_photo(m):
         tag = m.group(0)
-        return (
-            tag if "u-photo" in tag else tag.replace("<img", '<img class="u-photo"', 1)
-        )
+        return tag if "u-photo" in tag else tag.replace("<img", '<img class="u-photo"', 1)
 
-    html = re.sub(r"<img\b[^>]*>", _add_u_photo, html)
+    return re.sub(r"<img\b[^>]*>", _add_u_photo, html)
 
-    return Markup(html)
+
+def _extract_section(body: str, section: str) -> str | None:
+    """
+    Return the Markdown text for a heading-matched section.
+
+    Uses a simple slugify to match '# Title' → 'title' and captures until the
+    next heading of the same or higher level.
+    """
+    if not section:
+        return body
+
+    lines = body.splitlines()
+    in_code, fence = False, ""
+    start_idx, end_idx, level = None, None, None
+    for idx, ln in enumerate(lines):
+        m_f = _CODE_FENCE_RE.match(ln)
+        if m_f:
+            tok = m_f.group(1)
+            if not in_code:
+                in_code, fence = True, tok
+            elif tok == fence:
+                in_code, fence = False, ""
+            continue
+
+        if in_code:
+            continue
+
+        h = _HEADING_RE.match(ln)
+        if not h:
+            continue
+
+        h_level = len(h.group(1))
+        if start_idx is not None and h_level <= (level or h_level):
+            end_idx = idx
+            break
+
+        slug = _slugify_heading(h.group(2))
+        if slug == section:
+            start_idx = idx
+            level = h_level
+
+    if start_idx is None:
+        return None
+    if end_idx is None:
+        end_idx = len(lines)
+    return "\n".join(lines[start_idx:end_idx]).strip()
+
+
+def _embed_error(msg: str) -> str:
+    return f'<div class="entry-embed entry-embed--error"><strong>Embed error:</strong> {escape(msg)}</div>'
+
+
+def _parse_embed_target(raw: str, section_hint: str | None) -> tuple[str | None, str | None, str | None]:
+    """
+    Accept a slug OR an absolute/relative URL and return (slug, section, error).
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return None, section_hint, "embed target missing"
+
+    parsed = urlparse(raw)
+    section = section_hint
+
+    if not section and parsed.fragment:
+        section = parsed.fragment
+
+    if parsed.scheme or parsed.netloc:
+        parts = [p for p in parsed.path.split("/") if p]
+        if not parts:
+            return None, section, "embed URL missing slug"
+        return parts[-1].rstrip("/"), section, None
+
+    if raw.startswith("/"):
+        parts = [p for p in raw.split("/") if p]
+        if not parts:
+            return None, section, "embed path missing slug"
+        return parts[-1].rstrip("/"), section, None
+
+    return raw, section, None
+
+
+def render_entry_embed(slug: str, section: str | None, *, ctx: dict | None = None) -> str:
+    """
+    Resolve @entry:slug embeds, optionally scoped to a heading section.
+    """
+    slug, section, parse_err = _parse_embed_target(slug, section)
+    if parse_err:
+        return _embed_error(parse_err)
+
+    section_key = section.lower() if section else None
+    ctx = ctx or _get_embed_ctx()
+    ctx.setdefault("stack", set())
+    ctx.setdefault("depth", 0)
+    ctx.setdefault("count", 0)
+    if ctx["count"] >= EMBED_MAX_COUNT:
+        return _embed_error("too many embeds in one entry")
+
+    if slug == ctx.get("root") or slug in ctx["stack"]:
+        return _embed_error("circular embed detected")
+
+    if ctx["depth"] >= EMBED_MAX_DEPTH:
+        return _embed_error("embed depth limit reached")
+
+    row = (
+        get_db()
+        .execute("SELECT id, title, body, created_at, slug, kind FROM entry WHERE slug=?", (slug,))
+        .fetchone()
+    )
+    if not row:
+        return _embed_error(f"entry '{slug}' not found")
+
+    body = row["body"] or ""
+    if section_key:
+        part = _extract_section(body, section_key)
+        if not part:
+            return _embed_error(f"section '{section}' not found in entry")
+        body = part
+
+    clean = _drop_caret_meta(body)
+    ctx["stack"].add(slug)
+    ctx["depth"] += 1
+    ctx["count"] += 1
+    try:
+        inner_html = _render_markdown(clean, ctx=ctx, renderer=_markdown_renderer())
+    finally:
+        ctx["stack"].discard(slug)
+        ctx["depth"] -= 1
+
+    url = url_for(
+        "entry_detail", kind_slug=kind_to_slug(row["kind"]), entry_slug=row["slug"]
+    )
+    title = row["title"] or row["slug"]
+    ts = ts_filter(row["created_at"])
+    sec_badge = f'<span class="entry-embed__badge">#{escape(section)}</span>' if section else ""
+    return (
+        f'<div class="entry-embed" data-slug="{escape(slug)}">'
+        f'  <div class="entry-embed__header">'
+        f'    <div class="entry-embed__title"><a href="{url}">{escape(title)}</a></div>'
+        f'    <div class="entry-embed__meta">{escape(row["kind"])} · {escape(ts)}{sec_badge}</div>'
+        f"  </div>"
+        f'  <div class="entry-embed__body">{inner_html}</div>'
+        f"</div>"
+    )
+
+
+def render_markdown_html(
+    text: str | None,
+    *,
+    source_slug: str | None = None,
+    renderer=None,
+) -> str:
+    """
+    Shared Markdown renderer used across filters and RSS.
+    """
+    clean = _drop_caret_meta((text or ""))
+    ctx = _new_embed_ctx(source_slug)
+    html = _render_markdown(clean, ctx=ctx, renderer=renderer)
+    return _postprocess_html(html, theme_col=theme_color())
+
+
+class EntryEmbedPreprocessor(markdown.preprocessors.Preprocessor):
+    """Replace @entry:slug references with embedded entry HTML blocks."""
+
+    def run(self, lines: list[str]) -> list[str]:
+        ctx = _get_embed_ctx()
+        out, in_code, fence = [], False, ""
+        for ln in lines:
+            m_f = _CODE_FENCE_RE.match(ln)
+            if m_f:
+                tok = m_f.group(1)
+                if not in_code:
+                    in_code, fence = True, tok
+                elif tok == fence:
+                    in_code, fence = False, ""
+                out.append(ln)
+                continue
+
+            if in_code:
+                out.append(ln)
+                continue
+
+            m = _EMBED_RE.match(ln.strip())
+            if not m:
+                out.append(ln)
+                continue
+
+            slug, section = m.group(1), m.group(2)
+            out.append(render_entry_embed(slug, section, ctx=ctx))
+        return out
+
+
+class EntryEmbedExtension(Extension):
+    def extendMarkdown(self, md_inst):
+        md_inst.preprocessors.register(EntryEmbedPreprocessor(md_inst), "entry_embed", 27)
+
+
+def _markdown_extensions():
+    return [*BASE_MD_EXTENSIONS, EntryEmbedExtension()]
+
+
+def _markdown_renderer():
+    return markdown.Markdown(
+        extensions=_markdown_extensions(),
+        extension_configs=MD_EXTENSION_CONFIGS,
+    )
+
+
+md = _markdown_renderer()
+
+
+@app.template_filter("md")
+def md_filter(text: str | None, source_slug: str | None = None) -> Markup:
+    """
+    Render Markdown and turn every #tag into a link to the tag view.
+    """
+    return Markup(render_markdown_html(text, source_slug=source_slug))
 
 
 @app.template_filter("mdinline")
-def md_inline_filter(text: str | None) -> Markup:
+def md_inline_filter(text: str | None, source_slug: str | None = None) -> Markup:
     """
     Render Markdown like `md`, but if the result is exactly one
     <p>…</p> block, unwrap it so we get pure inline HTML.
     """
-    html = md_filter(text)  # reuse the existing logic
+    html = md_filter(text, source_slug)  # reuse the existing logic
     # Markup -> str for inspection, but keep it safe afterwards
     s = str(html)
 
@@ -1284,7 +1528,7 @@ TEMPL_PROLOG = """
 <link rel="alternate" type="application/rss+xml"
       href="{{ url_for('global_rss') }}" title="{{ title }} – RSS">
 <style>
-html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif}body{font-size:1.8rem;line-height:1.618;max-width:38em;margin:auto;color:#c9c9c9;background-color:#222222;padding:13px}@media (max-width:684px){body{font-size:1.75rem}}@media (max-width:382px)@media (max-width:560px){.meta {flex:0 0 100%;order:1;margin-left:0;text-align:left;}}{body{font-size:1.35rem}}h1,h2,h3,h4,h5,h6{line-height:1.1;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;font-weight:700;margin-top:3rem;margin-bottom:1.5rem;overflow-wrap:break-word;word-wrap:break-word;-ms-word-break:break-all;word-break:break-word}h1{font-size:2.35em}h2{font-size:1.7em}h3{font-size:1.55em}h4{font-size:1.4em}h5{font-size:1.25em}h6{font-size:1.1em}p{margin-top:0px;margin-bottom:2.5rem;hyphens:auto}small,sub,sup{font-size:75%}hr{border-color:#ffffff}a{text-decoration:none;color:#ffffff}a:hover{color:#c9c9c9;border-bottom:2px solid #c9c9c9}p>a{text-decoration:none;border-bottom:0.1px dotted #ffffff}ul{padding-left:1.4em;margin-top:0px;margin-bottom:2.5rem}li{margin-bottom:0.4em}blockquote{margin-left:0px;margin-right:0px;padding-left:1em;padding-top:0.8em;padding-bottom:0.8em;padding-right:0.8em;border-left:5px solid #ffffff;margin-bottom:2.5rem;background-color:#4a4a4a}blockquote p{margin-bottom:0.75em}img,video{height:auto;max-width:100%;margin-top:0px;margin-bottom:0px}pre{background-color:#4a4a4a;display:block;padding:1em;overflow-x:auto;margin-top:0px;margin-bottom:2.5rem;font-size:0.9em}code,kbd,samp{font-size:0.9em;padding:0 0.5em;background-color:#4a4a4a;white-space:pre-wrap}pre>code{padding:0;background-color:transparent;white-space:pre;font-size:1em}table{text-align:justify;width:100%;border-collapse:collapse;margin-bottom:2rem}td,th{padding:0.5em;border-bottom:1px solid #4a4a4a}input,textarea{border:1px solid #c9c9c9}input:focus,textarea:focus{border:1px solid #ffffff}textarea{width:100%}.button,button,input[type=submit],input[type=reset],input[type=button],input[type=file]::file-selector-button{display:inline-block;padding:5px 10px;text-align:center;text-decoration:none;white-space:nowrap;background-color:#ffffff;color:#222222;border-radius:1px;border:1px solid #ffffff;cursor:pointer;box-sizing:border-box}.button[disabled],button[disabled],input[type=submit][disabled],input[type=reset][disabled],input[type=button][disabled],input[type=file]::file-selector-button[disabled]{cursor:default;opacity:0.5}.button:hover,button:hover,input[type=submit]:hover,input[type=reset]:hover,input[type=button]:hover,input[type=file]::file-selector-button:hover{background-color:#c9c9c9;color:#222222;outline:0}.button:focus-visible,button:focus-visible,input[type=submit]:focus-visible,input[type=reset]:focus-visible,input[type=button]:focus-visible,input[type=file]::file-selector-button:focus-visible{outline-style:solid;outline-width:2px}textarea,select,input{color:#c9c9c9;padding:6px 10px;margin-bottom:10px;background-color:#4a4a4a;border:1px solid #4a4a4a;border-radius:4px;box-shadow:none;box-sizing:border-box}textarea:focus,select:focus,input:focus{border:1px solid #ffffff;outline:0}input[type=checkbox]:focus{outline:1px dotted #ffffff}label,legend,fieldset{display:block;margin-bottom:0.5rem;font-weight:600}p>math[display="block"]{display: block;margin: 1em 0}math[display="block"]:not(:first-child){margin-top: 1.2em}sup.fn{position:relative;display:inline-block;}sup.fn>.fn-ref,.fn-badge{position:relative;z-index:2500;display:inline-flex;align-items:center;justify-content:center;min-width:1rem;max-width:25em;padding:0.2em .4em;min-height:1.5rem;margin:0 0.25em;vertical-align:top;border-radius:.75em;white-space:normal;background:var(--fn-badge-bg,#666); color:#fff;font-size:.65em;line-height:1;cursor:pointer;transition:background .2s ease;text-decoration:none;}sup.fn>.fn-ref:hover{background:var(--fn-badge-bg-hover,#888);text-decoration:none !important;}.fn-popup{position:fixed;left:50%; bottom:0;transform:translate(-50%,100%);width:90vw;max-width:60rem; z-index:3000;max-height:40vh; overflow:auto;background:#222; color:#fff; line-height:1.45;padding:1rem 1.25rem;border:1px solid #444;transition:transform .25s ease;will-change:transform;}.fn-overlay{position:fixed; inset:0;background:transparent;opacity:0; visibility:hidden; pointer-events:none;transition:opacity .25s ease;touch-action:none;-webkit-tap-highlight-color:transparent;z-index:2000}sup.fn .fn-toggle:checked + .fn-ref + .fn-popup{transform:translate(-50%,0);box-shadow:0 -4px 12px rgba(0,0,0,.4);}sup.fn .fn-toggle:checked ~ .fn-overlay{opacity:1; visibility:visible; pointer-events:auto}.math-scroll{overflow-x:auto;overflow-y:hidden;max-width:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}.jump-btn{position:fixed;bottom:1.25rem;right:1.25rem;width:3rem;height:3rem;display:flex;align-items:center;justify-content:center;font-size:1.5rem;line-height:1;border-radius:50%;background:#aaa;color:#000;text-decoration:none;border-bottom:none;box-shadow:0 2px 6px rgba(0,0,0,.3);z-index:1000;opacity:.15;transition:opacity .3s}.jump-btn:hover{opacity:.8;text-decoration:none}.jump-up{display:none}#page-bottom:target~.jump-up{display:flex}#page-bottom:target~.jump-down{display:none}#page-top:target~.jump-down{display:flex}#page-top:target~.jump-up{display:none}a.fn-badge,a.fn-badge:hover,a.fn-badge:focus{border-bottom:none !important;text-decoration:none !important}
+html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif}body{font-size:1.8rem;line-height:1.618;max-width:38em;margin:auto;color:#c9c9c9;background-color:#222222;padding:13px}@media (max-width:684px){body{font-size:1.75rem}}@media (max-width:382px)@media (max-width:560px){.meta {flex:0 0 100%;order:1;margin-left:0;text-align:left;}}{body{font-size:1.35rem}}h1,h2,h3,h4,h5,h6{line-height:1.1;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;font-weight:700;margin-top:3rem;margin-bottom:1.5rem;overflow-wrap:break-word;word-wrap:break-word;-ms-word-break:break-all;word-break:break-word}h1{font-size:2.35em}h2{font-size:1.7em}h3{font-size:1.55em}h4{font-size:1.4em}h5{font-size:1.25em}h6{font-size:1.1em}p{margin-top:0px;margin-bottom:2.5rem;hyphens:auto}small,sub,sup{font-size:75%}hr{border-color:#ffffff}a{text-decoration:none;color:#ffffff}a:hover{color:#c9c9c9;border-bottom:2px solid #c9c9c9}p>a{text-decoration:none;border-bottom:0.1px dotted #ffffff}ul{padding-left:1.4em;margin-top:0px;margin-bottom:2.5rem}li{margin-bottom:0.4em}blockquote{margin-left:0px;margin-right:0px;padding-left:1em;padding-top:0.8em;padding-bottom:0.8em;padding-right:0.8em;border-left:5px solid #ffffff;margin-bottom:2.5rem;background-color:#4a4a4a}blockquote p{margin-bottom:0.75em}img,video{height:auto;max-width:100%;margin-top:0px;margin-bottom:0px}pre{background-color:#4a4a4a;display:block;padding:1em;overflow-x:auto;margin-top:0px;margin-bottom:2.5rem;font-size:0.9em}code,kbd,samp{font-size:0.9em;padding:0 0.5em;background-color:#4a4a4a;white-space:pre-wrap}pre>code{padding:0;background-color:transparent;white-space:pre;font-size:1em}table{text-align:justify;width:100%;border-collapse:collapse;margin-bottom:2rem}td,th{padding:0.5em;border-bottom:1px solid #4a4a4a}input,textarea{border:1px solid #c9c9c9}input:focus,textarea:focus{border:1px solid #ffffff}textarea{width:100%}.button,button,input[type=submit],input[type=reset],input[type=button],input[type=file]::file-selector-button{display:inline-block;padding:5px 10px;text-align:center;text-decoration:none;white-space:nowrap;background-color:#ffffff;color:#222222;border-radius:1px;border:1px solid #ffffff;cursor:pointer;box-sizing:border-box}.button[disabled],button[disabled],input[type=submit][disabled],input[type=reset][disabled],input[type=button][disabled],input[type=file]::file-selector-button[disabled]{cursor:default;opacity:0.5}.button:hover,button:hover,input[type=submit]:hover,input[type=reset]:hover,input[type=button]:hover,input[type=file]::file-selector-button:hover{background-color:#c9c9c9;color:#222222;outline:0}.button:focus-visible,button:focus-visible,input[type=submit]:focus-visible,input[type=reset]:focus-visible,input[type=button]:focus-visible,input[type=file]::file-selector-button:focus-visible{outline-style:solid;outline-width:2px}textarea,select,input{color:#c9c9c9;padding:6px 10px;margin-bottom:10px;background-color:#4a4a4a;border:1px solid #4a4a4a;border-radius:4px;box-shadow:none;box-sizing:border-box}textarea:focus,select:focus,input:focus{border:1px solid #ffffff;outline:0}input[type=checkbox]:focus{outline:1px dotted #ffffff}label,legend,fieldset{display:block;margin-bottom:0.5rem;font-weight:600}p>math[display="block"]{display: block;margin: 1em 0}math[display="block"]:not(:first-child){margin-top: 1.2em}sup.fn{position:relative;display:inline-block;}sup.fn>.fn-ref,.fn-badge{position:relative;z-index:2500;display:inline-flex;align-items:center;justify-content:center;min-width:1rem;max-width:25em;padding:0.2em .4em;min-height:1.5rem;margin:0 0.25em;vertical-align:top;border-radius:.75em;white-space:normal;background:var(--fn-badge-bg,#666); color:#fff;font-size:.65em;line-height:1;cursor:pointer;transition:background .2s ease;text-decoration:none;}sup.fn>.fn-ref:hover{background:var(--fn-badge-bg-hover,#888);text-decoration:none !important;}.fn-popup{position:fixed;left:50%; bottom:0;transform:translate(-50%,100%);width:90vw;max-width:60rem; z-index:3000;max-height:40vh; overflow:auto;background:#222; color:#fff; line-height:1.45;padding:1rem 1.25rem;border:1px solid #444;transition:transform .25s ease;will-change:transform;}.fn-overlay{position:fixed; inset:0;background:transparent;opacity:0; visibility:hidden; pointer-events:none;transition:opacity .25s ease;touch-action:none;-webkit-tap-highlight-color:transparent;z-index:2000}sup.fn .fn-toggle:checked + .fn-ref + .fn-popup{transform:translate(-50%,0);box-shadow:0 -4px 12px rgba(0,0,0,.4);}sup.fn .fn-toggle:checked ~ .fn-overlay{opacity:1; visibility:visible; pointer-events:auto}.math-scroll{overflow-x:auto;overflow-y:hidden;max-width:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}.jump-btn{position:fixed;bottom:1.25rem;right:1.25rem;width:3rem;height:3rem;display:flex;align-items:center;justify-content:center;font-size:1.5rem;line-height:1;border-radius:50%;background:#aaa;color:#000;text-decoration:none;border-bottom:none;box-shadow:0 2px 6px rgba(0,0,0,.3);z-index:1000;opacity:.15;transition:opacity .3s}.jump-btn:hover{opacity:.8;text-decoration:none}.jump-up{display:none}#page-bottom:target~.jump-up{display:flex}#page-bottom:target~.jump-down{display:none}#page-top:target~.jump-down{display:flex}#page-top:target~.jump-up{display:none}a.fn-badge,a.fn-badge:hover,a.fn-badge:focus{border-bottom:none !important;text-decoration:none !important}.entry-embed{border:1px solid #444;border-radius:6px;padding:1rem;margin:1.5rem 0;background:#2a2a2a}.entry-embed__header{display:flex;align-items:baseline;justify-content:space-between;gap:.5rem}.entry-embed__title a{color:#fff;border-bottom:none;font-weight:700}.entry-embed__meta{color:#aaa;font-size:.9em}.entry-embed__badge{display:inline-block;margin-left:.5rem;padding:.15em .5em;border-radius:.6rem;background:#444;color:#fff;font-size:.8em}.entry-embed__body{margin-top:.5rem}.entry-embed--error{border-color:#b33;background:#331414;color:#f9c0c0}
 </style>
 {% macro backlinks_panel(blist) -%}
     {% if blist %}
@@ -2403,7 +2647,7 @@ TEMPL_INDEX = wrap("""{% block body %}
         {% elif e['kind']=='post' and e['title'] %}
             <h2 class="p-name">{{e['title']}}</h2>
         {% endif %}
-        <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md }}</div>
+        <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md(e['slug']) }}</div>
 
         {{ backlinks_panel(backlinks[e.id]) }}
 
@@ -2932,7 +3176,7 @@ TEMPL_LIST = wrap("""
             {% elif e['title'] %}
                 <h2 class="p-name">{{ e['title'] }}</h2>
             {% endif %}
-            <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md }}</div>
+            <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md(e['slug']) }}</div>
             {{ backlinks_panel(backlinks[e.id]) }}
             {% if e['link'] and e['kind'] != 'pin' %}
                 <p>🔗 <a href="{{ e['link'] }}" target="_blank" rel="noopener">{{ e['link'] }}</a></p>
@@ -2989,7 +3233,7 @@ TEMPL_PAGE = wrap("""
 {% block body %}
 <hr>
 <article>
-  <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md }}</div>
+  <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md(e['slug']) }}</div>
   {% if session.get('logged_in') %}
       <small>
         <a href="{{ url_for('edit_entry',
@@ -3320,7 +3564,7 @@ TEMPL_ENTRY_DETAIL = wrap("""
                 <h2 class="p-name">{{ e['title'] }}</h2>
             {% endif %}
 
-            <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md }}</div>    
+            <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md(e['slug']) }}</div>    
             {{ backlinks_panel(backlinks) }}
                                      
             <small style="color:#aaa;">
@@ -3640,7 +3884,7 @@ TEMPL_DELETE_ENTRY = wrap("""
     <h2>Delete entry?</h2>
     <article style="border-left:3px solid #c00; padding-left:1rem;">
         {% if e['title'] %}<h3>{{ e['title'] }}</h3>{% endif %}
-        <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md }}</div>
+        <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md(e['slug']) }}</div>
         <small style="color:#aaa;">{{ e['created_at']|ts }}</small>
     </article>
     <form method="post" style="margin-top:1rem;">
@@ -3817,7 +4061,7 @@ TEMPL_TAGS = wrap("""
             {% if e['title'] %}
                 <h3 style="margin:.25rem 0 .5rem 0;">{{ e['title'] }}</h3>
             {% endif %}
-            <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md }}</div>
+            <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md(e['slug']) }}</div>
             {{ backlinks_panel(backlinks[e.id]) }}
             <small style="color:#aaa;">
                 {# —— item info (if any) ———————————————————————— #}
@@ -3931,7 +4175,7 @@ def _rss(entries, *, title, feed_url, site_url):
         ts_rfc = _rfc2822(ts_iso)
         guid = f"{link}#{ts_iso}"
 
-        body_html = md.reset().convert(strip_caret(e["body"]) if e["body"] else "")
+        body_html = render_markdown_html(e["body"], source_slug=e["slug"])
         rss_title = e["title"] if e["title"] else e["slug"]
         items.append(
             f"""
@@ -4283,7 +4527,7 @@ TEMPL_ITEM_DETAIL = wrap("""
 {% endif %}
 {% for e in entries %}    
 <article style="padding-bottom:1rem; {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
-    <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md }}</div>
+    <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md(e['slug']) }}</div>
     {{ backlinks_panel(backlinks[e.id]) }}
     <small style="color:#aaa;">
 
@@ -4884,7 +5128,7 @@ TEMPL_SEARCH_ENTRIES = wrap("""
             {% if e['title'] %}
                 <h3 style="margin:.4rem 0;">{{ e['title'] }}</h3>
             {% endif %}
-            <p>{{ e['snippet']|md }}</p>
+            <p>{{ e['snippet']|md(e['slug']) }}</p>
             <small style="color:#aaa;">
                 {% if e.item_title %}
                     <span style="display:inline-block;padding:.1em .6em;margin-right:.4em;
@@ -5141,7 +5385,7 @@ TEMPL_TODAY = wrap("""
       {% if e.title %}
         <h3 style="margin:.4rem 0;">{{ e.title }}</h3>
       {% endif %}
-      <p>{{ e.body|md }}</p>
+      <p>{{ e.body|md(e.slug) }}</p>
       <small style="color:#aaa;">
 
         {# —— Item-related pills & link (if any) ———————————————— #}
