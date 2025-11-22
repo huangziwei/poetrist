@@ -154,6 +154,13 @@ def canon(k: str) -> str:  # helper: ^pg → progress
     return ALIASES.get(k.lower(), k.lower())
 
 
+GENRE_SPLIT_RE = re.compile(r"\s*/\s*")
+
+
+def normalize_genre(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip()).lower()
+
+
 KINDS = ("say", "post", "pin") + tuple(VERB_MAP.keys()) + ("page",)
 PAGE_DEFAULT = 100
 RFC2822_FMT = "%a, %d %b %Y %H:%M:%S %z"
@@ -2606,37 +2613,8 @@ def by_kind(slug):
     ps = page_size()
 
     if kind in VERB_KINDS:
-        # --- ➊ collect the “pills” -------------------------------------------------
-        cur = db.execute(
-            """
-            SELECT i.item_type, COUNT(DISTINCT i.id) AS cnt
-            FROM item        i
-            JOIN entry_item  ei ON ei.item_id = i.id
-            WHERE ei.verb = ?
-            GROUP BY i.item_type
-        """,
-            (kind,),
-        )
-        type_rows = sorted(
-            (dict(r) for r in cur),  # [{item_type, cnt}, …]
-            key=lambda r: -r["cnt"],
-        )  # sort by cnt DESC
-
-        # --- ➋ what filter (if any) is active? ------------------------------------
         sel_type = request.args.get("type", "").strip()  # e.g. “book”
         selected = sel_type.lower() if sel_type else ""  # empty → “All”
-
-        type_total_cnt = sum(r["cnt"] for r in type_rows)
-        if selected:
-            filtered_total_cnt = next(
-                (r["cnt"] for r in type_rows if r["item_type"] == selected), 0
-            )
-        else:
-            filtered_total_cnt = type_total_cnt
-
-        action_type_sql = ""
-        if selected:
-            action_type_sql = " AND i.item_type = ?"
 
         canonical_actions = [a.lower() for a in VERB_MAP.get(kind, ())]
         canonical_set = set(canonical_actions)
@@ -2647,14 +2625,20 @@ def by_kind(slug):
             else ""
         )
 
-        params_actions = [kind, *canonical_actions, kind]
-        if selected:
-            params_actions.append(selected)
+        sel_action = request.args.get("action", "").strip()
+        selected_action = sel_action.lower() if sel_action else ""
+        if selected_action and selected_action not in canonical_set:
+            selected_action = ""
 
-        cur_actions = db.execute(
+        raw_genre = request.args.get("genre", "").strip()
+        selected_genre = normalize_genre(raw_genre) if raw_genre else ""
+
+        params_facets = [kind, *canonical_actions, kind]
+        facet_rows = db.execute(
             f"""
             WITH latest AS (
                 SELECT i.id,
+                       i.item_type,
                        LOWER((
                            SELECT ei2.action
                              FROM entry_item ei2
@@ -2666,38 +2650,147 @@ def by_kind(slug):
                        )) AS last_action
                   FROM item i
                   JOIN entry_item ei ON ei.item_id = i.id
-                 WHERE ei.verb = ?{action_type_sql}
+                 WHERE ei.verb = ?
                  GROUP BY i.id
             )
-            SELECT last_action, COUNT(*) AS cnt
-              FROM latest
-             WHERE last_action IS NOT NULL AND last_action <> ''
-            GROUP BY last_action
-             ORDER BY cnt DESC
+            SELECT l.id,
+                   l.item_type,
+                   l.last_action,
+                   im.v AS genre_value
+              FROM latest l
+              LEFT JOIN item_meta im
+                     ON im.item_id = l.id
+                    AND LOWER(im.k) IN ('genre','genres')
         """,
-            tuple(params_actions),
+            tuple(params_facets),
         )
-        action_rows = [dict(r) for r in cur_actions if r["last_action"] in canonical_set]
 
-        sel_action = request.args.get("action", "").strip()
-        selected_action = sel_action.lower() if sel_action else ""
-        if selected_action and selected_action not in canonical_set:
-            selected_action = ""
+        items_data: dict[int, dict] = {}
+        genre_labels: dict[str, str] = {}
+        for row in facet_rows:
+            item_id = row["id"]
+            rec = items_data.setdefault(
+                item_id,
+                {
+                    "id": item_id,
+                    "item_type": row["item_type"],
+                    "last_action": row["last_action"],
+                    "genres": set(),
+                },
+            )
+            val = row["genre_value"]
+            if val:
+                for raw in GENRE_SPLIT_RE.split(val):
+                    norm = normalize_genre(raw)
+                    if not norm:
+                        continue
+                    rec["genres"].add(norm)
+                    genre_labels.setdefault(norm, raw.strip())
+
+        def _matches(
+            rec: dict,
+            *,
+            type_filter: str | None,
+            action_filter: str | None,
+            genre_filter: str | None,
+        ) -> bool:
+            if type_filter and rec["item_type"] != type_filter:
+                return False
+            if action_filter and rec["last_action"] != action_filter:
+                return False
+            if genre_filter and genre_filter not in rec["genres"]:
+                return False
+            return True
+
+        type_counts: DefaultDict[str, int] = defaultdict(int)
+        for rec in items_data.values():
+            if not _matches(
+                rec,
+                type_filter=None,
+                action_filter=selected_action or None,
+                genre_filter=selected_genre or None,
+            ):
+                continue
+            type_counts[rec["item_type"]] += 1
+        type_rows = sorted(
+            ({"item_type": t, "cnt": cnt} for t, cnt in type_counts.items()),
+            key=lambda r: -r["cnt"],
+        )
+        type_total_cnt = sum(type_counts.values())
+
+        base_items_for_action = [
+            rec
+            for rec in items_data.values()
+            if _matches(
+                rec,
+                type_filter=selected or None,
+                action_filter=None,
+                genre_filter=selected_genre or None,
+            )
+        ]
+        filtered_total_cnt = len(base_items_for_action)
+
+        action_counts: DefaultDict[str, int] = defaultdict(int)
+        for rec in base_items_for_action:
+            act = rec["last_action"]
+            if act in canonical_set:
+                action_counts[act] += 1
+        action_rows = [
+            {"last_action": act, "cnt": cnt}
+            for act, cnt in sorted(action_counts.items(), key=lambda kv: -kv[1])
+        ]
+
+        items_for_genres = [
+            rec
+            for rec in items_data.values()
+            if _matches(
+                rec,
+                type_filter=selected or None,
+                action_filter=selected_action or None,
+                genre_filter=None,
+            )
+        ]
+        genre_total_cnt = len(items_for_genres)
+
+        genre_counts: DefaultDict[str, int] = defaultdict(int)
+        for rec in items_for_genres:
+            for g in rec["genres"]:
+                genre_counts[g] += 1
+        genre_rows = [
+            {"key": g, "label": genre_labels.get(g, g), "cnt": cnt}
+            for g, cnt in sorted(genre_counts.items(), key=lambda kv: -kv[1])
+        ]
+
+        genre_item_ids: set[int] | None = None
+        if selected_genre:
+            genre_item_ids = {
+                rec["id"] for rec in items_data.values() if selected_genre in rec["genres"]
+            }
 
         def items_for_verb(
             verb: str,
             *,
             item_type: str | None,
             last_action: str | None,
+            genre_ids: set[int] | None,
             page: int,
             per: int,
             db,
         ):
+            if genre_ids is not None and not genre_ids:
+                return [], 0
+
             params = [verb, *canonical_actions, verb]
             type_filter_sql = ""
             if item_type:
                 type_filter_sql = " AND i.item_type = ?"
                 params.append(item_type)
+
+            genre_filter_sql = ""
+            if genre_ids:
+                placeholders = ",".join("?" * len(genre_ids))
+                genre_filter_sql = f" AND i.id IN ({placeholders})"
+                params.extend(sorted(genre_ids))
 
             base_sql = f"""
                 WITH item_rows AS (
@@ -2717,7 +2810,7 @@ def by_kind(slug):
                     LEFT JOIN item_meta  im ON im.item_id = i.id
                     JOIN  entry_item  ei ON ei.item_id  = i.id
                     JOIN  entry       e  ON e.id        = ei.entry_id
-                    WHERE ei.verb = ?{type_filter_sql}
+                    WHERE ei.verb = ?{type_filter_sql}{genre_filter_sql}
                     GROUP BY i.id
                 )
                 SELECT * FROM item_rows
@@ -2733,6 +2826,7 @@ def by_kind(slug):
             kind,
             item_type=selected or None,
             last_action=selected_action or None,
+            genre_ids=genre_item_ids,
             page=page,
             per=ps,
             db=db,
@@ -2748,6 +2842,9 @@ def by_kind(slug):
             selected=selected,
             actions=action_rows,
             selected_action=selected_action,
+            genres=genre_rows,
+            selected_genre=selected_genre,
+            genre_total_cnt=genre_total_cnt,
             type_total_cnt=type_total_cnt,
             filtered_total_cnt=filtered_total_cnt,
             username=current_username(),
@@ -2908,7 +3005,8 @@ TEMPL_ITEM_LIST = wrap("""
     <!-- “All” pill -->
     <a href="{{ url_for('by_kind',
                         slug=kind_to_slug(verb),
-                        action=selected_action or None) }}"
+                        action=selected_action or None,
+                        genre=selected_genre or None) }}"
        style="text-decoration:none !important;
               border-bottom:none!important;
               display:inline-flex;
@@ -2931,7 +3029,8 @@ TEMPL_ITEM_LIST = wrap("""
     <a href="{{ url_for('by_kind',
                         slug=kind_to_slug(verb),
                         type=t.item_type,
-                        action=selected_action or None) }}"
+                        action=selected_action or None,
+                        genre=selected_genre or None) }}"
        style="text-decoration:none !important;
               border-bottom:none!important;
               display:inline-flex;
@@ -2951,6 +3050,58 @@ TEMPL_ITEM_LIST = wrap("""
     {% endfor %}
 </div>
 
+{% if genres %}
+<hr style="border-color:#444;opacity:.35;margin:.3rem 0;">
+
+<!-- —— Genre pills ——————————————————————————————— -->
+<div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
+    <a href="{{ url_for('by_kind',
+                        slug=kind_to_slug(verb),
+                        type=selected or None,
+                        action=selected_action or None) }}"
+       style="text-decoration:none !important;
+              border-bottom:none!important;
+              display:inline-flex;
+              margin:.15rem 0;
+              padding:.15rem .6rem;
+              border-radius:1rem;
+              white-space:nowrap;
+              font-size:.8em;
+              {% if not selected_genre %}
+                  background:{{ theme_color() }}; color:#000;
+              {% else %}
+                  background:#444;   color:{{ theme_color() }};
+              {% endif %}">
+        All
+        <sup style="font-size:.5em;">{{ genre_total_cnt }}</sup>
+    </a>
+
+    {% for g in genres %}
+    <a href="{{ url_for('by_kind',
+                        slug=kind_to_slug(verb),
+                        type=selected or None,
+                        action=selected_action or None,
+                        genre=g.key) }}"
+       style="text-decoration:none !important;
+              border-bottom:none!important;
+              display:inline-flex;
+              margin:.15rem 0;
+              padding:.15rem .6rem;
+              border-radius:1rem;
+              white-space:nowrap;
+              font-size:.8em;
+              {% if selected_genre == g.key %}
+                  background:{{ theme_color() }}; color:#000;
+              {% else %}
+                  background:#444;   color:{{ theme_color() }};
+              {% endif %}">
+        {{ g.label | smartcap }}
+        <sup style="font-size:.5em;">{{ g.cnt }}</sup>
+    </a>
+    {% endfor %}
+</div>
+{% endif %}
+
 {% if actions %}
 <hr style="border-color:#444;opacity:.35;margin:.3rem 0;">
 
@@ -2960,7 +3111,8 @@ TEMPL_ITEM_LIST = wrap("""
     <!-- “All” pill for actions -->
     <a href="{{ url_for('by_kind',
                         slug=kind_to_slug(verb),
-                        type=selected or None) }}"
+                        type=selected or None,
+                        genre=selected_genre or None) }}"
        style="text-decoration:none !important;
               border-bottom:none!important;
               display:inline-flex;
@@ -2982,7 +3134,8 @@ TEMPL_ITEM_LIST = wrap("""
     <a href="{{ url_for('by_kind',
                         slug=kind_to_slug(verb),
                         type=selected or None,
-                        action=a.last_action) }}"
+                        action=a.last_action,
+                        genre=selected_genre or None) }}"
        style="text-decoration:none !important;
               border-bottom:none!important;
               display:inline-flex;
@@ -3056,6 +3209,7 @@ TEMPL_ITEM_LIST = wrap("""
                                slug=kind_to_slug(verb),
                                type=selected or None,
                                action=selected_action or None,
+                               genre=selected_genre or None,
                                page=p) }}">{{ p }}</a>
         {% endif %}
         {% if not loop.last %}&nbsp;{% endif %}
