@@ -733,7 +733,9 @@ def tags_slug() -> str:
 
 def settings_slug() -> str:
     """Current base slug for the settings page."""
-    s = (get_setting("slug_settings", "settings") or "settings").strip("/") or "settings"
+    s = (get_setting("slug_settings", "settings") or "settings").strip(
+        "/"
+    ) or "settings"
     return s
 
 
@@ -2764,7 +2766,9 @@ def by_kind(slug):
         genre_item_ids: set[int] | None = None
         if selected_genre:
             genre_item_ids = {
-                rec["id"] for rec in items_data.values() if selected_genre in rec["genres"]
+                rec["id"]
+                for rec in items_data.values()
+                if selected_genre in rec["genres"]
             }
         more_filters = bool(action_rows or genre_rows)
 
@@ -3056,7 +3060,7 @@ TEMPL_ITEM_LIST = wrap("""
 
     {% if more_filters %}
     <details class="more-toggle"
-             style="margin:.15rem 0; justify-self:end;"
+             style="justify-self:end;"
              {% if selected_action or selected_genre %}open{% endif %}>
         <summary style="list-style:none;
                         display:inline-flex;
@@ -3677,9 +3681,7 @@ def _render_tags(tag_list: str):
 
         # ── URL that would result from clicking the pill ────────────────────
         new_sel = (selected - {r["name"]}) if r["active"] else (selected | {r["name"]})
-        r["href"] = (
-            tags_href("+".join(sorted(new_sel))) if new_sel else tags_href()
-        )
+        r["href"] = tags_href("+".join(sorted(new_sel))) if new_sel else tags_href()
 
     # ---------- fetch entries if something is selected ----------------------
     sort = request.args.get("sort", "new")
@@ -4013,6 +4015,8 @@ def _render_tags_rss(tag_list: str):
         site_url=request.url_root.rstrip("/"),
     )
     return app.response_class(xml, mimetype="application/rss+xml")
+
+
 @app.route("/tags/<path:tag_list>/rss")
 def tags_rss(tag_list):
     return _render_tags_rss(tag_list)
