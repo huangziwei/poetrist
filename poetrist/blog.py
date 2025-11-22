@@ -154,6 +154,11 @@ def canon(k: str) -> str:  # helper: ^pg → progress
     return ALIASES.get(k.lower(), k.lower())
 
 
+def canon_meta_key(k: str) -> str:
+    """Map aliases, otherwise preserve the original casing."""
+    return ALIASES.get(k.lower(), k)
+
+
 GENRE_SPLIT_RE = re.compile(r"\s*/\s*")
 
 
@@ -975,7 +980,7 @@ def parse_trigger(text: str) -> tuple[str, list[dict], list[str]]:
                 km = META_RE.match(nxt)
                 if km:
                     k, v = km.groups()
-                    k = canon(k)
+                    k = canon_meta_key(k)
                     if k == "progress":
                         blk["progress"] = v
                     elif k not in {
@@ -1023,7 +1028,7 @@ def parse_trigger(text: str) -> tuple[str, list[dict], list[str]]:
                     i += 1
                     continue
                 k, v = m2.groups()
-                k = canon(k)
+                k = canon_meta_key(k)
                 if k == "action":
                     tmp["action"] = v
                 elif k == "verb":

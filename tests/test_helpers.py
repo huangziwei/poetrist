@@ -43,6 +43,14 @@ def test_parse_compact_trigger():
     assert blk["progress"] == "42%"
     assert errors == []
 
+def test_parse_trigger_preserves_meta_case():
+    body, blocks, errors = parse_trigger('^reading:book:"Hitchhiker"\n^ISBN-13:abc123')
+    assert errors == []
+    blk = blocks[0]
+    assert blk["meta"].get("ISBN-13") == "abc123"
+    # ensure we did not downcase the key
+    assert "isbn-13" not in blk["meta"]
+
 
 # ──────────────────────────────────────────────────────────────
 # slug helpers
