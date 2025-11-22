@@ -116,3 +116,20 @@ def test_embed_self_loop_warns(client):
     html = resp.data.decode()
     assert "Embed error" in html
     assert "circular" in html.lower()
+
+
+def test_embed_titleless_entry_shows_no_title_block(client):
+    _login(client)
+    # create source "say" without title
+    client.post("/", data={"body": "just a say", "csrf": CSRF}, follow_redirects=True)
+    src = _latest_entry()
+
+    # create another entry embedding it
+    client.post("/", data={"body": f"@entry:{src['slug']}", "csrf": CSRF}, follow_redirects=True)
+    dest = _latest_entry()
+
+    resp = client.get(_detail_url(dest["kind"], dest["slug"]))
+    assert resp.status_code == 200
+    html = resp.data.decode()
+    assert 'entry-embed__title' not in html
+    assert "just a say" in html

@@ -24,7 +24,6 @@ from zoneinfo import ZoneInfo, available_timezones
 import click
 import latex2mathml.converter as _l2m
 import markdown
-from markdown.extensions import Extension
 import requests
 from flask import (
     Flask,
@@ -39,6 +38,7 @@ from flask import (
     url_for,
 )
 from itsdangerous import BadSignature, SignatureExpired, TimestampSigner
+from markdown.extensions import Extension
 from markupsafe import Markup
 from webauthn import (
     generate_authentication_options,
@@ -359,6 +359,7 @@ def _postprocess_html(html: str, *, theme_col: str) -> str:
     Apply hashtag links, mark styling, MathML conversion, footnote popups,
     and add u-photo class to images.
     """
+
     def _hashtag_repl(match):
         orig_tag = match.group(1)
         tag_lc = orig_tag.lower()
@@ -396,7 +397,9 @@ def _postprocess_html(html: str, *, theme_col: str) -> str:
 
     def _add_u_photo(m):
         tag = m.group(0)
-        return tag if "u-photo" in tag else tag.replace("<img", '<img class="u-photo"', 1)
+        return (
+            tag if "u-photo" in tag else tag.replace("<img", '<img class="u-photo"', 1)
+        )
 
     return re.sub(r"<img\b[^>]*>", _add_u_photo, html)
 
@@ -452,7 +455,9 @@ def _embed_error(msg: str) -> str:
     return f'<div class="entry-embed entry-embed--error"><strong>Embed error:</strong> {escape(msg)}</div>'
 
 
-def _parse_embed_target(raw: str, section_hint: str | None) -> tuple[str | None, str | None, str | None]:
+def _parse_embed_target(
+    raw: str, section_hint: str | None
+) -> tuple[str | None, str | None, str | None]:
     """
     Accept a slug OR an absolute/relative URL and return (slug, section, error).
     """
@@ -481,7 +486,9 @@ def _parse_embed_target(raw: str, section_hint: str | None) -> tuple[str | None,
     return raw, section, None
 
 
-def render_entry_embed(slug: str, section: str | None, *, ctx: dict | None = None) -> str:
+def render_entry_embed(
+    slug: str, section: str | None, *, ctx: dict | None = None
+) -> str:
     """
     Resolve @entry:slug embeds, optionally scoped to a heading section.
     """
@@ -505,7 +512,10 @@ def render_entry_embed(slug: str, section: str | None, *, ctx: dict | None = Non
 
     row = (
         get_db()
-        .execute("SELECT id, title, body, created_at, slug, kind FROM entry WHERE slug=?", (slug,))
+        .execute(
+            "SELECT id, title, body, created_at, slug, kind FROM entry WHERE slug=?",
+            (slug,),
+        )
         .fetchone()
     )
     if not row:
@@ -531,16 +541,32 @@ def render_entry_embed(slug: str, section: str | None, *, ctx: dict | None = Non
     url = url_for(
         "entry_detail", kind_slug=kind_to_slug(row["kind"]), entry_slug=row["slug"]
     )
-    title = row["title"] or row["slug"]
+    view_url = f"{url}#{section_key}" if section_key else url
     ts = ts_filter(row["created_at"])
-    sec_badge = f'<span class="entry-embed__badge">#{escape(section)}</span>' if section else ""
+    section_label = ""
+    kind_url = url_for("by_kind", slug=kind_to_slug(row["kind"]))
+
+    title_html = ""
+    if row["title"]:
+        title_html = f'<div class="entry-embed__title"><a href="{view_url}">{escape(row["title"])}</a></div>'
+
+    footer_html = (
+        '  <div class="entry-embed__footer" style="color:#aaa;">'
+        '    <span class="entry-embed__pill">'
+        f'      <a href="{kind_url}" style="text-decoration:none; color:inherit;border-bottom:none;">{escape(row["kind"])}</a>'
+        "    </span>"
+        f'    <a class="u-url" href="{view_url}" style="text-decoration:none; color:inherit; vertical-align:middle; font-variant-numeric:tabular-nums; white-space:nowrap;">'
+        f'      <time class="dt-published" datetime="{escape(row["created_at"])}">{escape(ts)}</time>'
+        "    </a>"
+        f"    {section_label}"
+        "  </div>"
+    )
+
     return (
-        f'<div class="entry-embed" data-slug="{escape(slug)}">'
-        f'  <div class="entry-embed__header">'
-        f'    <div class="entry-embed__title"><a href="{url}">{escape(title)}</a></div>'
-        f'    <div class="entry-embed__meta">{escape(row["kind"])} · {escape(ts)}{sec_badge}</div>'
-        f"  </div>"
-        f'  <div class="entry-embed__body">{inner_html}</div>'
+        f'<div class="entry-embed" data-slug="{escape(slug)}">\n'
+        f"{title_html}\n"
+        f'  <div class="entry-embed__body">{inner_html}</div>\n'
+        f"{footer_html}\n"
         f"</div>"
     )
 
@@ -593,7 +619,9 @@ class EntryEmbedPreprocessor(markdown.preprocessors.Preprocessor):
 
 class EntryEmbedExtension(Extension):
     def extendMarkdown(self, md_inst):
-        md_inst.preprocessors.register(EntryEmbedPreprocessor(md_inst), "entry_embed", 27)
+        md_inst.preprocessors.register(
+            EntryEmbedPreprocessor(md_inst), "entry_embed", 27
+        )
 
 
 def _markdown_extensions():
@@ -1528,7 +1556,7 @@ TEMPL_PROLOG = """
 <link rel="alternate" type="application/rss+xml"
       href="{{ url_for('global_rss') }}" title="{{ title }} – RSS">
 <style>
-html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif}body{font-size:1.8rem;line-height:1.618;max-width:38em;margin:auto;color:#c9c9c9;background-color:#222222;padding:13px}@media (max-width:684px){body{font-size:1.75rem}}@media (max-width:382px)@media (max-width:560px){.meta {flex:0 0 100%;order:1;margin-left:0;text-align:left;}}{body{font-size:1.35rem}}h1,h2,h3,h4,h5,h6{line-height:1.1;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;font-weight:700;margin-top:3rem;margin-bottom:1.5rem;overflow-wrap:break-word;word-wrap:break-word;-ms-word-break:break-all;word-break:break-word}h1{font-size:2.35em}h2{font-size:1.7em}h3{font-size:1.55em}h4{font-size:1.4em}h5{font-size:1.25em}h6{font-size:1.1em}p{margin-top:0px;margin-bottom:2.5rem;hyphens:auto}small,sub,sup{font-size:75%}hr{border-color:#ffffff}a{text-decoration:none;color:#ffffff}a:hover{color:#c9c9c9;border-bottom:2px solid #c9c9c9}p>a{text-decoration:none;border-bottom:0.1px dotted #ffffff}ul{padding-left:1.4em;margin-top:0px;margin-bottom:2.5rem}li{margin-bottom:0.4em}blockquote{margin-left:0px;margin-right:0px;padding-left:1em;padding-top:0.8em;padding-bottom:0.8em;padding-right:0.8em;border-left:5px solid #ffffff;margin-bottom:2.5rem;background-color:#4a4a4a}blockquote p{margin-bottom:0.75em}img,video{height:auto;max-width:100%;margin-top:0px;margin-bottom:0px}pre{background-color:#4a4a4a;display:block;padding:1em;overflow-x:auto;margin-top:0px;margin-bottom:2.5rem;font-size:0.9em}code,kbd,samp{font-size:0.9em;padding:0 0.5em;background-color:#4a4a4a;white-space:pre-wrap}pre>code{padding:0;background-color:transparent;white-space:pre;font-size:1em}table{text-align:justify;width:100%;border-collapse:collapse;margin-bottom:2rem}td,th{padding:0.5em;border-bottom:1px solid #4a4a4a}input,textarea{border:1px solid #c9c9c9}input:focus,textarea:focus{border:1px solid #ffffff}textarea{width:100%}.button,button,input[type=submit],input[type=reset],input[type=button],input[type=file]::file-selector-button{display:inline-block;padding:5px 10px;text-align:center;text-decoration:none;white-space:nowrap;background-color:#ffffff;color:#222222;border-radius:1px;border:1px solid #ffffff;cursor:pointer;box-sizing:border-box}.button[disabled],button[disabled],input[type=submit][disabled],input[type=reset][disabled],input[type=button][disabled],input[type=file]::file-selector-button[disabled]{cursor:default;opacity:0.5}.button:hover,button:hover,input[type=submit]:hover,input[type=reset]:hover,input[type=button]:hover,input[type=file]::file-selector-button:hover{background-color:#c9c9c9;color:#222222;outline:0}.button:focus-visible,button:focus-visible,input[type=submit]:focus-visible,input[type=reset]:focus-visible,input[type=button]:focus-visible,input[type=file]::file-selector-button:focus-visible{outline-style:solid;outline-width:2px}textarea,select,input{color:#c9c9c9;padding:6px 10px;margin-bottom:10px;background-color:#4a4a4a;border:1px solid #4a4a4a;border-radius:4px;box-shadow:none;box-sizing:border-box}textarea:focus,select:focus,input:focus{border:1px solid #ffffff;outline:0}input[type=checkbox]:focus{outline:1px dotted #ffffff}label,legend,fieldset{display:block;margin-bottom:0.5rem;font-weight:600}p>math[display="block"]{display: block;margin: 1em 0}math[display="block"]:not(:first-child){margin-top: 1.2em}sup.fn{position:relative;display:inline-block;}sup.fn>.fn-ref,.fn-badge{position:relative;z-index:2500;display:inline-flex;align-items:center;justify-content:center;min-width:1rem;max-width:25em;padding:0.2em .4em;min-height:1.5rem;margin:0 0.25em;vertical-align:top;border-radius:.75em;white-space:normal;background:var(--fn-badge-bg,#666); color:#fff;font-size:.65em;line-height:1;cursor:pointer;transition:background .2s ease;text-decoration:none;}sup.fn>.fn-ref:hover{background:var(--fn-badge-bg-hover,#888);text-decoration:none !important;}.fn-popup{position:fixed;left:50%; bottom:0;transform:translate(-50%,100%);width:90vw;max-width:60rem; z-index:3000;max-height:40vh; overflow:auto;background:#222; color:#fff; line-height:1.45;padding:1rem 1.25rem;border:1px solid #444;transition:transform .25s ease;will-change:transform;}.fn-overlay{position:fixed; inset:0;background:transparent;opacity:0; visibility:hidden; pointer-events:none;transition:opacity .25s ease;touch-action:none;-webkit-tap-highlight-color:transparent;z-index:2000}sup.fn .fn-toggle:checked + .fn-ref + .fn-popup{transform:translate(-50%,0);box-shadow:0 -4px 12px rgba(0,0,0,.4);}sup.fn .fn-toggle:checked ~ .fn-overlay{opacity:1; visibility:visible; pointer-events:auto}.math-scroll{overflow-x:auto;overflow-y:hidden;max-width:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}.jump-btn{position:fixed;bottom:1.25rem;right:1.25rem;width:3rem;height:3rem;display:flex;align-items:center;justify-content:center;font-size:1.5rem;line-height:1;border-radius:50%;background:#aaa;color:#000;text-decoration:none;border-bottom:none;box-shadow:0 2px 6px rgba(0,0,0,.3);z-index:1000;opacity:.15;transition:opacity .3s}.jump-btn:hover{opacity:.8;text-decoration:none}.jump-up{display:none}#page-bottom:target~.jump-up{display:flex}#page-bottom:target~.jump-down{display:none}#page-top:target~.jump-down{display:flex}#page-top:target~.jump-up{display:none}a.fn-badge,a.fn-badge:hover,a.fn-badge:focus{border-bottom:none !important;text-decoration:none !important}.entry-embed{border:1px solid #444;border-radius:6px;padding:1rem;margin:1.5rem 0;background:#2a2a2a}.entry-embed__header{display:flex;align-items:baseline;justify-content:space-between;gap:.5rem}.entry-embed__title a{color:#fff;border-bottom:none;font-weight:700}.entry-embed__meta{color:#aaa;font-size:.9em}.entry-embed__badge{display:inline-block;margin-left:.5rem;padding:.15em .5em;border-radius:.6rem;background:#444;color:#fff;font-size:.8em}.entry-embed__body{margin-top:.5rem}.entry-embed--error{border-color:#b33;background:#331414;color:#f9c0c0}
+html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif}body{font-size:1.8rem;line-height:1.618;max-width:38em;margin:auto;color:#c9c9c9;background-color:#222222;padding:13px}@media (max-width:684px){body{font-size:1.75rem}}@media (max-width:382px)@media (max-width:560px){.meta {flex:0 0 100%;order:1;margin-left:0;text-align:left;}}{body{font-size:1.35rem}}h1,h2,h3,h4,h5,h6{line-height:1.1;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;font-weight:700;margin-top:3rem;margin-bottom:1.5rem;overflow-wrap:break-word;word-wrap:break-word;-ms-word-break:break-all;word-break:break-word}h1{font-size:2.35em}h2{font-size:1.7em}h3{font-size:1.55em}h4{font-size:1.4em}h5{font-size:1.25em}h6{font-size:1.1em}p{margin-top:0px;margin-bottom:2.5rem;hyphens:auto}small,sub,sup{font-size:75%}hr{border-color:#ffffff}a{text-decoration:none;color:#ffffff}a:hover{color:#c9c9c9;border-bottom:2px solid #c9c9c9}p>a{text-decoration:none;border-bottom:0.1px dotted #ffffff}ul{padding-left:1.4em;margin-top:0px;margin-bottom:2.5rem}li{margin-bottom:0.4em}blockquote{margin-left:0px;margin-right:0px;padding-left:1em;padding-top:0.8em;padding-bottom:0.8em;padding-right:0.8em;border-left:5px solid #ffffff;margin-bottom:2.5rem;background-color:#4a4a4a}blockquote p{margin-bottom:0.75em}img,video{height:auto;max-width:100%;margin-top:0px;margin-bottom:0px}pre{background-color:#4a4a4a;display:block;padding:1em;overflow-x:auto;margin-top:0px;margin-bottom:2.5rem;font-size:0.9em}code,kbd,samp{font-size:0.9em;padding:0 0.5em;background-color:#4a4a4a;white-space:pre-wrap}pre>code{padding:0;background-color:transparent;white-space:pre;font-size:1em}table{text-align:justify;width:100%;border-collapse:collapse;margin-bottom:2rem}td,th{padding:0.5em;border-bottom:1px solid #4a4a4a}input,textarea{border:1px solid #c9c9c9}input:focus,textarea:focus{border:1px solid #ffffff}textarea{width:100%}.button,button,input[type=submit],input[type=reset],input[type=button],input[type=file]::file-selector-button{display:inline-block;padding:5px 10px;text-align:center;text-decoration:none;white-space:nowrap;background-color:#ffffff;color:#222222;border-radius:1px;border:1px solid #ffffff;cursor:pointer;box-sizing:border-box}.button[disabled],button[disabled],input[type=submit][disabled],input[type=reset][disabled],input[type=button][disabled],input[type=file]::file-selector-button[disabled]{cursor:default;opacity:0.5}.button:hover,button:hover,input[type=submit]:hover,input[type=reset]:hover,input[type=button]:hover,input[type=file]::file-selector-button:hover{background-color:#c9c9c9;color:#222222;outline:0}.button:focus-visible,button:focus-visible,input[type=submit]:focus-visible,input[type=reset]:focus-visible,input[type=button]:focus-visible,input[type=file]::file-selector-button:focus-visible{outline-style:solid;outline-width:2px}textarea,select,input{color:#c9c9c9;padding:6px 10px;margin-bottom:10px;background-color:#4a4a4a;border:1px solid #4a4a4a;border-radius:4px;box-shadow:none;box-sizing:border-box}textarea:focus,select:focus,input:focus{border:1px solid #ffffff;outline:0}input[type=checkbox]:focus{outline:1px dotted #ffffff}label,legend,fieldset{display:block;margin-bottom:0.5rem;font-weight:600}p>math[display="block"]{display: block;margin: 1em 0}math[display="block"]:not(:first-child){margin-top: 1.2em}sup.fn{position:relative;display:inline-block;}sup.fn>.fn-ref,.fn-badge{position:relative;z-index:2500;display:inline-flex;align-items:center;justify-content:center;min-width:1rem;max-width:25em;padding:0.2em .4em;min-height:1.5rem;margin:0 0.25em;vertical-align:top;border-radius:.75em;white-space:normal;background:var(--fn-badge-bg,#666); color:#fff;font-size:.65em;line-height:1;cursor:pointer;transition:background .2s ease;text-decoration:none;}sup.fn>.fn-ref:hover{background:var(--fn-badge-bg-hover,#888);text-decoration:none !important;}.fn-popup{position:fixed;left:50%; bottom:0;transform:translate(-50%,100%);width:90vw;max-width:60rem; z-index:3000;max-height:40vh; overflow:auto;background:#222; color:#fff; line-height:1.45;padding:1rem 1.25rem;border:1px solid #444;transition:transform .25s ease;will-change:transform;}.fn-overlay{position:fixed; inset:0;background:transparent;opacity:0; visibility:hidden; pointer-events:none;transition:opacity .25s ease;touch-action:none;-webkit-tap-highlight-color:transparent;z-index:2000}sup.fn .fn-toggle:checked + .fn-ref + .fn-popup{transform:translate(-50%,0);box-shadow:0 -4px 12px rgba(0,0,0,.4);}sup.fn .fn-toggle:checked ~ .fn-overlay{opacity:1; visibility:visible; pointer-events:auto}.math-scroll{overflow-x:auto;overflow-y:hidden;max-width:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}.jump-btn{position:fixed;bottom:1.25rem;right:1.25rem;width:3rem;height:3rem;display:flex;align-items:center;justify-content:center;font-size:1.5rem;line-height:1;border-radius:50%;background:#aaa;color:#000;text-decoration:none;border-bottom:none;box-shadow:0 2px 6px rgba(0,0,0,.3);z-index:1000;opacity:.15;transition:opacity .3s}.jump-btn:hover{opacity:.8;text-decoration:none}.jump-up{display:none}#page-bottom:target~.jump-up{display:flex}#page-bottom:target~.jump-down{display:none}#page-top:target~.jump-down{display:flex}#page-top:target~.jump-up{display:none}a.fn-badge,a.fn-badge:hover,a.fn-badge:focus{border-bottom:none !important;text-decoration:none !important}.entry-embed{border:1px solid #444;border-radius:6px;padding:1rem;margin:1.5rem 0;background:#2a2a2a}.entry-embed__title a{color:#fff;border-bottom:none;font-weight:700}.entry-embed__body{margin-top:.5rem}.entry-embed__footer{color:#aaa;font-size:.75em;display:flex;align-items:center;gap:.35rem;flex-wrap:wrap;margin-top:.25rem}.entry-embed__footer a{color:inherit;text-decoration:none;border-bottom:0.1px dotted currentColor}.entry-embed__pill{display:inline-block;padding:.1em .6em;margin-right:.4em;background:#444;color:#fff;border-radius:1em;font-size:.75em;text-transform:capitalize;vertical-align:middle;line-height:1.6}.entry-embed--error{border-color:#b33;background:#331414;color:#f9c0c0}
 </style>
 {% macro backlinks_panel(blist) -%}
     {% if blist %}
