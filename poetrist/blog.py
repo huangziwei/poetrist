@@ -234,8 +234,7 @@ md = markdown.Markdown(
 @app.template_filter("md")
 def md_filter(text: str | None) -> Markup:
     """
-    Render Markdown and turn every #tag into
-    <a href="/tags/<tag>">#tag</a>.
+    Render Markdown and turn every #tag into a link to the tag view.
     """
     theme_col = theme_color()  # get the current theme color
 
@@ -268,7 +267,7 @@ def md_filter(text: str | None) -> Markup:
     def _hashtag_repl(match):
         orig_tag = match.group(1)
         tag_lc = orig_tag.lower()
-        href = url_for("tags", tag_list=tag_lc)
+        href = tags_href(tag_lc)
         return f'<a href="{href}" style="text-decoration:none;color:{theme_col};border-bottom:0.1px dotted currentColor;">#{orig_tag}</a>'
 
     html = HASH_LINK_RE.sub(_hashtag_repl, html)
@@ -3253,6 +3252,8 @@ TEMPL_ITEM_LIST = wrap("""
 ###############################################################################
 @app.route("/<kind_slug>/<entry_slug>")
 def entry_detail(kind_slug, entry_slug):
+    if kind_slug == tags_slug():
+        return tags(entry_slug)
     kind = slug_to_kind(kind_slug)
     if kind == "page":
         abort(404)
@@ -3719,7 +3720,7 @@ def _render_tags(tag_list: str):
     else:
         entries, pages = None, []  # nothing selected → no list
 
-        back_map = backlinks(entries, db=db)
+    back_map = backlinks(entries, db=db)
 
     return render_template_string(
         TEMPL_TAGS,
