@@ -3216,63 +3216,109 @@ TEMPL_LIST = wrap("""
         </form>
         {% endif %}
         <hr>
-        {% for e in rows %}
-        <article class="h-entry" style="{% if not loop.last %}padding-bottom:1.5em; border-bottom:1px solid #444;{% endif %}">
-            {% if e['kind'] == 'pin' %}
-                <h2>
-                    <a class="u-bookmark-of p-name" href="{{ e['link'] }}" target="_blank" rel="noopener">
-                        {{ e['title'] }}
+        {% if kind == 'post' %}
+            <ul style="list-style:none; padding:0; margin:0;">
+            {% for e in rows %}
+                <li class="h-entry" style="margin:1em 0;">
+                    <a class="p-name u-url u-uid"
+                       href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
+                       style="display:inline-block;
+                              font-weight:normal;
+                              line-height:1.25;">
+                        {{ e['title'] or e['slug'] }}
                     </a>
-                    {{ external_icon() }} 
-                </h2>            
-            {% elif e['title'] %}
-                <h2 class="p-name">{{ e['title'] }}</h2>
-            {% endif %}
-            <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md(e['slug']) }}</div>
-            {{ backlinks_panel(backlinks[e.id]) }}
-            {% if e['link'] and e['kind'] != 'pin' %}
-                <p>🔗 <a href="{{ e['link'] }}" target="_blank" rel="noopener">{{ e['link'] }}</a></p>
-            {% endif %}
-            <small style="color:#aaa;">
-                <span style="
-                    display:inline-block;
-                    padding:.1em .6em;
-                    margin-right:.4em;
-                    background:#444;
-                    color:#fff;
-                    border-radius:1em;
-                    font-size:.75em;
-                    text-transform:capitalize;
-                    vertical-align:middle;
-                ">
-                    <a href="{{ url_for('by_kind', slug=kind_to_slug(e['kind'])) }}"
-                        style="text-decoration:none; color:inherit;border-bottom:none;">
-                        {{ e['action'] or e['kind'] }}
-                    </a>
-                </span>
-                <a class="u-url u-uid" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
-                    style="text-decoration:none; color:inherit;vertical-align:middle;font-variant-numeric:tabular-nums;white-space:nowrap;">
-                    <time class="dt-published" datetime="{{ e['created_at'] }}">{{ e['created_at']|ts }}</time>
-                </a>&nbsp;
-                {% if session.get('logged_in') %}
-                    <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
-                    <a href="{{ url_for('delete_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Delete</a>
-                {% endif %}
-                {% set tags = entry_tags(e.id) %}
-                {% if tags %}
-                    &nbsp;·&nbsp;
-                    {% for tag in tags %}
-                        <a class="p-category" rel="tag" href="{{ tags_href(tag) }}"
-                           style="text-decoration:none;margin-right:.35em;color:{{ theme_color() }};vertical-align:middle;">
-                            #{{ tag }}
-                        </a>
-                    {% endfor %}
-                {% endif %}
-            </small>
-        </article>
+                    <div style="display:flex;
+                                flex-wrap:wrap;
+                                align-items:center;
+                                margin-top:.25rem;
+                                gap:.35rem;
+                                font-size:1rem;
+                                color:#888;">
+                        <span style="white-space:nowrap;font-size:1rem;">
+                            {{ e['created_at']|ts }}
+                        </span>
+                        {% set tags = entry_tags(e.id) %}
+                        {% if tags %}
+                            <span aria-hidden="true">•</span>
+                            {% for tag in tags %}
+                                <a class="p-category" rel="tag" href="{{ tags_href(tag) }}"
+                                   style="text-decoration:none; color:{{ theme_color() }}; border-bottom:0.1px dotted currentColor;">
+                                    #{{ tag }}
+                                </a>
+                            {% endfor %}
+                        {% endif %}
+                        {% if session.get('logged_in') %}
+                            <span aria-hidden="true">•</span>
+                            <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
+                               style="text-decoration:none;">Edit</a>
+                            <a href="{{ url_for('delete_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
+                               style="text-decoration:none;">Delete</a>
+                        {% endif %}
+                    </div>
+                </li>
+            {% else %}
+                <p>No {{ heading.lower() }} yet.</p>
+            {% endfor %}
+            </ul>
         {% else %}
-            <p>No {{ heading.lower() }} yet.</p>
-        {% endfor %}
+            {% for e in rows %}
+            <article class="h-entry" style="{% if not loop.last %}padding-bottom:1.5em; border-bottom:1px solid #444;{% endif %}">
+                {% if e['kind'] == 'pin' %}
+                    <h2>
+                        <a class="u-bookmark-of p-name" href="{{ e['link'] }}" target="_blank" rel="noopener">
+                            {{ e['title'] }}
+                        </a>
+                        {{ external_icon() }} 
+                    </h2>            
+                {% elif e['title'] %}
+                    <h2 class="p-name">{{ e['title'] }}</h2>
+                {% endif %}
+                <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md(e['slug']) }}</div>
+                {{ backlinks_panel(backlinks[e.id]) }}
+                {% if e['link'] and e['kind'] != 'pin' %}
+                    <p>🔗 <a href="{{ e['link'] }}" target="_blank" rel="noopener">{{ e['link'] }}</a></p>
+                {% endif %}
+                <small style="color:#aaa;">
+                    <span style="
+                        display:inline-block;
+                        padding:.1em .6em;
+                        margin-right:.4em;
+                        background:#444;
+                        color:#fff;
+                        border-radius:1em;
+                        font-size:.75em;
+                        text-transform:capitalize;
+                        vertical-align:middle;
+                    ">
+                        <a href="{{ url_for('by_kind', slug=kind_to_slug(e['kind'])) }}"
+                            style="text-decoration:none; color:inherit;border-bottom:none;">
+                            {{ e['action'] or e['kind'] }}
+                        </a>
+                    </span>
+                    <a class="u-url u-uid" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
+                        style="text-decoration:none; color:inherit;vertical-align:middle;font-variant-numeric:tabular-nums;white-space:nowrap;">
+                        <time class="dt-published" datetime="{{ e['created_at'] }}">{{ e['created_at']|ts }}</time>
+                    </a>&nbsp;
+                    {% if session.get('logged_in') %}
+                        <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
+                        <a href="{{ url_for('delete_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Delete</a>
+                    {% endif %}
+                    {% set tags = entry_tags(e.id) %}
+                    {% if tags %}
+                        &nbsp;·&nbsp;
+                        {% for tag in tags %}
+                            <a class="p-category" rel="tag" href="{{ tags_href(tag) }}"
+                               style="text-decoration:none;margin-right:.35em;color:{{ theme_color() }};vertical-align:middle;">
+                                #{{ tag }}
+                            </a>
+                        {% endfor %}
+                    {% endif %}
+                </small>
+            </article>
+            {% else %}
+                <p>No {{ heading.lower() }} yet.</p>
+            {% endfor %}
+        {% endif %}
 
         {% if pages|length > 1 %}
             <nav style="margin-top:2em;padding-top:2em;font-size:.75em;border-top:1px solid #444;">
