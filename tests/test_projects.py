@@ -22,6 +22,10 @@ def _latest_entry():
     )
 
 
+def _latest_project():
+    return get_db().execute("SELECT slug, title FROM project ORDER BY id DESC LIMIT 1").fetchone()
+
+
 def test_project_creation_and_pill(client):
     _login(client)
     body = "~project:alpha|Alpha Project\nBody text"
@@ -115,3 +119,28 @@ def test_edit_prefills_project_marker(client):
     # still linked
     proj_html = client.get("/projects/delta").data.decode()
     assert "Edit Me Updated" in proj_html
+
+
+def test_project_edit_updates_slug_and_title(client):
+    _login(client)
+    client.post(
+        "/posts",
+        data={"title": "Project Rename", "body": "~project:epsilon|Old Title", "csrf": CSRF},
+        follow_redirects=True,
+    )
+    proj = _latest_project()
+    assert proj["slug"] == "epsilon"
+
+    resp = client.post(
+        f"/projects/{proj['slug']}/edit",
+        data={"title": "New Title", "slug": "epsilon-new", "csrf": CSRF},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("/projects/epsilon-new")
+
+    page = client.get("/projects/epsilon-new")
+    assert page.status_code == 200
+    html = page.data.decode()
+    assert "New Title" in html
+    assert "Old Title" not in html

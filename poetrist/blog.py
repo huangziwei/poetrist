@@ -3856,20 +3856,39 @@ TEMPL_ITEM_LIST = wrap("""
 TEMPL_PROJECT_PAGE = wrap("""
 {% block body %}
 <hr>
-<div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
-    <h2 style="margin:0;">{{ project['title'] or project['slug'] }}</h2>
-    <div style="display:flex; gap:.5rem; font-size:.9em;">
+<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
+    <div style="display:flex; align-items:flex-end; gap:.5rem; flex-wrap:wrap;">
+        <h2 style="margin:0;">{{ project['title'] or project['slug'] }}</h2>
+        {% if session.get('logged_in') %}
+            <a href="{{ url_for('project_edit', project_slug=project['slug']) }}"
+               style="font-size:.85em; color:#aaa; text-decoration:none;">
+               Edit
+            </a>
+        {% endif %}
+    </div>
+    <span style="display:inline-flex;
+                border:1px solid #555;
+                border-radius:4px;
+                overflow:hidden;
+                font-size:.75em;">
         <a href="{{ url_for('project_detail', project_slug=project['slug'], sort='old') }}"
-           style="text-decoration:none; padding:.15rem .6rem; border-radius:1rem; border:1px solid #555;
-                  {% if sort != 'new' %}background:{{ theme_color() }};color:#000;{% else %}color:#fff;{% endif %}">
-           Oldest
+           style="display:flex; align-items:center;
+                  padding:.25em .85em;
+                  text-decoration:none; border-bottom:none;
+                  {% if sort != 'new' %}background:{{ theme_color() }};color:#000;
+                  {% else %}background:#333;color:#eee;{% endif %}">
+        Oldest
         </a>
         <a href="{{ url_for('project_detail', project_slug=project['slug'], sort='new') }}"
-           style="text-decoration:none; padding:.15rem .6rem; border-radius:1rem; border:1px solid #555;
-                  {% if sort == 'new' %}background:{{ theme_color() }};color:#000;{% else %}color:#fff;{% endif %}">
-           Newest
+           style="display:flex; align-items:center;
+                  padding:.25em .85em;
+                  text-decoration:none; border-bottom:none;
+                  border-left:1px solid #555;
+                  {% if sort == 'new' %}background:{{ theme_color() }};color:#000;
+                  {% else %}background:#333;color:#eee;{% endif %}">
+        Newest
         </a>
-    </div>
+    </span>
 </div>
 
 <ul style="list-style:none; padding:0; margin:1rem 0 0;">
@@ -3923,6 +3942,32 @@ TEMPL_PROJECT_PAGE = wrap("""
 """)
 
 
+TEMPL_PROJECT_EDIT = wrap("""
+{% block body %}
+<hr>
+<h2>Edit project</h2>
+<form method="post" style="display:flex; flex-direction:column; gap:.75rem; max-width:28rem;">
+    {% if csrf_token() %}
+        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    {% endif %}
+    <label>
+        <div style="font-size:.85em;color:#aaa;">Title</div>
+        <input name="title" value="{{ project['title'] or '' }}" style="width:100%;">
+    </label>
+    <label>
+        <div style="font-size:.85em;color:#aaa;">Slug</div>
+        <input name="slug" value="{{ project['slug'] }}" style="width:100%;">
+        <div style="font-size:.8em;color:#777;">Allowed: letters, numbers, hyphen, underscore.</div>
+    </label>
+    <div style="display:flex; gap:.75rem;">
+        <button>Save</button>
+        <a href="{{ url_for('project_detail', project_slug=project['slug']) }}" style="align-self:center;">Cancel</a>
+    </div>
+</form>
+{% endblock %}
+""")
+
+
 @app.route("/projects/<project_slug>")
 def project_detail(project_slug):
     db = get_db()
@@ -3952,6 +3997,40 @@ def project_detail(project_slug):
         page=page,
         pages=pages,
         sort="new" if sort == "new" else "old",
+        title=get_setting("site_name", "po.etr.ist"),
+    )
+
+
+@app.route("/projects/<project_slug>/edit", methods=["GET", "POST"])
+def project_edit(project_slug):
+    login_required()
+    db = get_db()
+    proj = db.execute("SELECT * FROM project WHERE slug=?", (project_slug,)).fetchone()
+    if not proj:
+        abort(404)
+
+    if request.method == "POST":
+        new_title = request.form.get("title", "").strip() or None
+        new_slug = (request.form.get("slug", "") or project_slug).strip().strip("/")
+        new_slug = re.sub(r"[^0-9A-Za-z_-]+", "-", new_slug).strip("-").lower()
+
+        if not new_slug:
+            flash("Slug is required.")
+        elif db.execute(
+            "SELECT 1 FROM project WHERE slug=? AND id!=?", (new_slug, proj["id"])
+        ).fetchone():
+            flash("Slug already exists.")
+        else:
+            db.execute(
+                "UPDATE project SET title=?, slug=? WHERE id=?",
+                (new_title or new_slug, new_slug, proj["id"]),
+            )
+            db.commit()
+            return redirect(url_for("project_detail", project_slug=new_slug))
+
+    return render_template_string(
+        TEMPL_PROJECT_EDIT,
+        project=proj,
         title=get_setting("site_name", "po.etr.ist"),
     )
 
