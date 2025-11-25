@@ -4012,8 +4012,8 @@ def project_edit(project_slug):
     if request.method == "POST":
         new_title = request.form.get("title", "").strip() or None
         new_slug = (request.form.get("slug", "") or project_slug).strip().strip("/")
-        new_slug = re.sub(r"[^0-9A-Za-z_-]+", "-", new_slug).strip("-").lower()
-
+        # allow broad Unicode slugs (match creation behavior), just collapse whitespace to dashes
+        new_slug = re.sub(r"\s+", "-", new_slug).strip("-")
         if not new_slug:
             flash("Slug is required.")
         elif db.execute(
