@@ -4240,7 +4240,7 @@ def _rfc2822(dt_str: str) -> str:
         return dt_str
 
 
-def _rss(entries, *, title, feed_url, site_url):
+def _rss(entries, *, title, feed_url, site_url, feed_kind: str | None = None):
     """
     Build a valid RSS 2.0 document (single string).
     `entries` is an iterable of rows from the `entry` table.
@@ -4264,6 +4264,10 @@ def _rss(entries, *, title, feed_url, site_url):
 
         body_html = render_markdown_html(e["body"], source_slug=e["slug"])
         rss_title = e["title"] if e["title"] else e["slug"]
+        if feed_kind:
+            kind_slug = kind_to_slug(feed_kind)
+            if not rss_title.lower().startswith(kind_slug.lower()):
+                rss_title = f"{kind_slug}/{rss_title}"
         items.append(
             f"""
         <item>
@@ -4308,6 +4312,7 @@ def global_rss():
         title=get_setting("site_name", "po.etr.ist"),
         feed_url=url_for("global_rss", _external=True),
         site_url=request.url_root.rstrip("/"),
+        feed_kind=None,
     )
     return app.response_class(xml, mimetype="application/rss+xml")
 
@@ -4326,6 +4331,7 @@ def kind_rss(slug):
         title=f"{(kind or '').capitalize()} – {get_setting('site_name', 'po.etr.ist')}",
         feed_url=request.url,  # already correct
         site_url=request.url_root.rstrip("/"),
+        feed_kind=kind,
     )
     return app.response_class(xml, mimetype="application/rss+xml")
 
@@ -4350,6 +4356,7 @@ def _render_tags_rss(tag_list: str):
         title=f"#{pretty} – {get_setting('site_name', 'po.etr.ist')}",
         feed_url=request.url,  # already correct
         site_url=request.url_root.rstrip("/"),
+        feed_kind=None,
     )
     return app.response_class(xml, mimetype="application/rss+xml")
 
