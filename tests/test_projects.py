@@ -88,3 +88,30 @@ def test_project_page_sorting(client):
 
     html_new = client.get("/projects/gamma?sort=new").data.decode()
     assert html_new.index("New Post") < html_new.index("Old Post")
+
+
+def test_edit_prefills_project_marker(client):
+    _login(client)
+    client.post(
+        "/posts",
+        data={"title": "Edit Me", "body": "~project:delta|Delta\nbody", "csrf": CSRF},
+        follow_redirects=True,
+    )
+    entry = _latest_entry()
+
+    edit_html = client.get(f"/{kind_to_slug(entry['kind'])}/{entry['slug']}/edit").data.decode()
+    assert "~project:delta|Delta" in edit_html
+
+    client.post(
+        f"/{kind_to_slug(entry['kind'])}/{entry['slug']}/edit",
+        data={
+            "title": "Edit Me Updated",
+            "body": "~project:delta|Delta\nupdated body",
+            "slug": entry["slug"],
+            "csrf": CSRF,
+        },
+        follow_redirects=True,
+    )
+    # still linked
+    proj_html = client.get("/projects/delta").data.decode()
+    assert "Edit Me Updated" in proj_html

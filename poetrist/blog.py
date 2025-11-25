@@ -1131,7 +1131,9 @@ def parse_projects(text: str) -> tuple[str, list[dict[str, str]]]:
         slug = m.group(1).lower()
         title = (m.group(2) or "").strip()
         projects.setdefault(slug, title)
-    return "\n".join(clean_lines), [{"slug": s, "title": t} for s, t in projects.items()]
+    return "\n".join(clean_lines), [
+        {"slug": s, "title": t} for s, t in projects.items()
+    ]
 
 
 def sync_projects(entry_id: int, projects: list[dict[str, str]], *, db):
@@ -1155,12 +1157,9 @@ def sync_projects(entry_id: int, projects: list[dict[str, str]], *, db):
     remove = set(cur) - set(wanted)
 
     # ensure projects exist + link
-    created_at = (
-        db.execute("SELECT created_at FROM entry WHERE id=?", (entry_id,)).fetchone()[
-            "created_at"
-        ]
-        or utc_now().isoformat(timespec="seconds")
-    )
+    created_at = db.execute(
+        "SELECT created_at FROM entry WHERE id=?", (entry_id,)
+    ).fetchone()["created_at"] or utc_now().isoformat(timespec="seconds")
 
     for slug in add:
         title = wanted[slug] or slug
@@ -3447,14 +3446,14 @@ TEMPL_LIST = wrap("""
                         <span style="white-space:nowrap;font-size:1rem;">
                             {{ e['created_at']|ts }}
                         </span>
-                        {% set tags = entry_tags(e.id) %}
-                        {% if tags %}
+                        {% set projects = entry_projects(e.id) %}
+                        {% if projects %}
                             <span aria-hidden="true">•</span>
-                            {% for tag in tags %}
-                                <a class="p-category" rel="tag" href="{{ tags_href(tag) }}"
+                            {% for pr in projects %}
+                                <a href="{{ url_for('project_detail', project_slug=pr['slug']) }}"
                                    style="text-decoration:none; color:{{ theme_color() }}; border-bottom:0.1px dotted currentColor;">
-                                    #{{ tag }}
-                                </a>
+                                    {{ pr['title'] }}
+                                </a>{% if not loop.last %}<span aria-hidden="true"> / </span>{% endif %}
                             {% endfor %}
                         {% endif %}
                         {% if session.get('logged_in') %}
@@ -3854,14 +3853,14 @@ TEMPL_PROJECT_PAGE = wrap("""
         <span style="white-space:nowrap;font-size:1rem;">
             {{ e['created_at']|ts }}
         </span>
-        {% set tags = entry_tags(e.id) %}
-        {% if tags %}
+        {% set projects = entry_projects(e.id) %}
+        {% if projects %}
             <span aria-hidden="true">•</span>
-            {% for tag in tags %}
-                <a class="p-category" rel="tag" href="{{ tags_href(tag) }}"
+            {% for pr in projects %}
+                <a href="{{ url_for('project_detail', project_slug=pr['slug']) }}"
                    style="text-decoration:none;color:{{ theme_color() }};border-bottom:0.1px dotted currentColor;">
-                    #{{ tag }}
-                </a>
+                    {{ pr['title'] }}
+                </a>{% if not loop.last %}<span aria-hidden="true"> / </span>{% endif %}
             {% endfor %}
         {% endif %}
     </div>
@@ -4065,17 +4064,7 @@ TEMPL_ENTRY_DETAIL = wrap("""
                     <a href="{{ url_for('project_detail', project_slug=pr['slug']) }}"
                        style="text-decoration:none;margin-right:.35em;color:{{ theme_color() }};vertical-align:middle;">
                         {{ pr['title'] }}
-                    </a>
-                {% endfor %}
-            {% endif %}
-            {% set tags = entry_tags(e.id) %}
-            {% if tags %}
-                &nbsp;·&nbsp;
-                {% for tag in tags %}
-                    <a class="p-category" rel="tag" href="{{ tags_href(tag) }}"
-                       style="text-decoration:none;margin-right:.35em;color:{{ theme_color() }};vertical-align:middle;">
-                        #{{ tag }}
-                    </a>
+                    </a>{% if not loop.last %}<span aria-hidden="true"> / </span>{% endif %}
                 {% endfor %}
             {% endif %}
             </small>
@@ -4210,7 +4199,30 @@ def edit_entry(kind_slug, entry_slug):
         )
 
     return render_template_string(
-        TEMPL_EDIT_ENTRY, e=row, title=get_setting("site_name", "po.etr.ist")
+        TEMPL_EDIT_ENTRY,
+        e=(
+            (
+                lambda r: {
+                    **r,
+                    "body": "\n".join(
+                        filter(
+                            None,
+                            [
+                                (r["body"] or "").rstrip("\n"),
+                                *[
+                                    f"~project:{pr['slug']}"
+                                    + (f"|{pr['title']}" if pr["title"] else "")
+                                    for pr in entry_projects(r["id"], db=db)
+                                ],
+                            ],
+                        )
+                    ).rstrip("\n")
+                    if r["kind"] == "post"
+                    else r["body"],
+                }
+            )(dict(row))
+        ),
+        title=get_setting("site_name", "po.etr.ist"),
     )
 
 
