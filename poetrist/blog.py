@@ -1086,8 +1086,32 @@ def paginate(base_sql: str, params: tuple, *, page: int, per_page: int, db):
 
 
 def extract_tags(text: str) -> set[str]:
-    """Return a **lower-cased** set of #tags found in *text*."""
-    return {m.lower() for m in TAG_RE.findall(text or "")}
+    """
+    Return a **lower-cased** set of #tags found in *text*, ignoring code blocks.
+    """
+    if not text:
+        return set()
+
+    out_lines: list[str] = []
+    in_code, fence = False, ""
+    for ln in text.splitlines():
+        m_f = _CODE_FENCE_RE.match(ln)
+        if m_f:
+            tok = m_f.group(1)
+            if not in_code:
+                in_code, fence = True, tok
+            elif tok == fence:
+                in_code, fence = False, ""
+            continue  # skip fence lines
+
+        if in_code:
+            continue  # skip content inside fenced code
+
+        # strip inline `code` spans so hashtags inside are ignored
+        out_lines.append(re.sub(r"`[^`]*`", "", ln))
+
+    clean = "\n".join(out_lines)
+    return {m.lower() for m in TAG_RE.findall(clean)}
 
 
 def sync_tags(entry_id: int, tags: set[str], *, db):
