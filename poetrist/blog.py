@@ -1584,21 +1584,21 @@ html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Rob
 {%- endmacro %}
 <div class="container h-feed" style="max-width: 60rem; margin: 3rem auto;">
     <h1 id="page-top" style="margin-top:0;"><a href="{{ url_for('index') }}" style="color:{{ theme_color() }};">{{title or 'po.etr.ist'}}</a></h1>
-    <nav style="margin-bottom:1rem;display:flex;align-items:flex-end;font-size:.9em;">
+    <nav aria-label="Primary" style="margin-bottom:1rem;display:flex;align-items:flex-end;font-size:.9em;">
         <!-- LEFT : two stacked rows -->
         <div style="display:flex; flex-direction:column; gap:.25rem;">
             <div>
                 <a href="{{ url_for('by_kind', slug=kind_to_slug('say')) }}"
-                {% if kind=='say' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
+                {% if kind=='say' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
                 Says</a>&nbsp;&nbsp;
                 <a href="{{ url_for('by_kind', slug=kind_to_slug('post')) }}"
-                {% if kind=='post' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
+                {% if kind=='post' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
                 Posts</a>&nbsp;&nbsp;
                 <a href="{{ url_for('by_kind', slug=kind_to_slug('pin')) }}"
-                {% if kind=='pin' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
+                {% if kind=='pin' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
                 Pins</a>&nbsp;&nbsp;
                 <a href="{{ tags_href() }}"
-                {% if kind=='tags' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
+                {% if kind=='tags' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
                 Tags</a>&nbsp;&nbsp;
             </div>
             {% if active_verbs() %}
@@ -1606,7 +1606,7 @@ html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Rob
                 {% for v in active_verbs() %}
                     {% set label = {'read':'Read','watch':'Watch','listen':'Listen','play':'Play','visit':'Visit', "use": "Use"}[v] %}
                     <a href="{{ url_for('by_kind', slug=kind_to_slug(v)) }}"
-                    {% if verb==v %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
+                    {% if verb==v %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
                     {{ label }}</a>{% if not loop.last %}&nbsp;&nbsp;{% endif %}
                 {% endfor %}
             </div>
@@ -1618,17 +1618,17 @@ html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Rob
             <div style="white-space:nowrap;">
                 {% if session.get('logged_in') %}
                     <a href="{{ settings_href() }}"
-                    {% if request.path==settings_href() %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
+                    {% if request.path==settings_href() %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
                     Settings</a>
                 {% else %}
                     <a href="{{ url_for('login') }}"
-                    {% if request.endpoint=='login' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;"{% endif %}>
+                    {% if request.endpoint=='login' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
                     Login</a>
                 {% endif %}
             </div>
             <div>
                 <form action="{{ url_for('search') }}" method="get" style="margin:0;">
-                    <input type="search" name="q" placeholder="Search" value="{{ request.args.get('q','') }}"
+                    <input type="search" name="q" aria-label="Search entries" placeholder="Search" value="{{ request.args.get('q','') }}"
                         style="width:13rem;font-size:.8em; padding:.2em .6em; margin:0;">
                 </form>
             </div>
@@ -1638,7 +1638,7 @@ html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Rob
     {% with msgs = get_flashed_messages() %}
     {% if msgs %}
         {# --- toast ----------------------------------------------------------- #}
-        <div style="position:fixed;top:1rem; right:1rem;background:#323232; color:#fff;padding:.75rem 1rem;border-radius:.4rem;font-size:.9rem; line-height:1.3;box-shadow:0 2px 6px rgba(0,0,0,.4);max-width:24rem; z-index:999;">
+        <div role="status" aria-live="polite" aria-atomic="true" style="position:fixed;top:1rem; right:1rem;background:#323232; color:#fff;padding:.75rem 1rem;border-radius:.4rem;font-size:.9rem; line-height:1.3;box-shadow:0 2px 6px rgba(0,0,0,.4);max-width:24rem; z-index:999;">
         {{ msgs|join('<br>')|safe }}
         </div>
     {% endif %}
@@ -1659,18 +1659,18 @@ TEMPL_EPILOG = """
         </span>
 
         <!-- right-hand side – extra pages -->
-        <nav style="display:inline-block;">
+        <nav aria-label="Footer" style="display:inline-block;">
             {% if has_today() %}
                 <a href="{{ url_for('today') }}"
                 {% if request.endpoint == 'today' %}
-                    style="text-decoration:none;border-bottom:.33rem solid #aaa;"
+                    style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"
                 {% endif %}>
                 Today</a>&nbsp;
             {% endif %}
             {% for p in nav_pages() %}
                 <a href="{{ '/' ~ p['slug'] }}"
                 {% if request.path|trim('/') == p['slug'] %}
-                    style="text-decoration:none;border-bottom:.33rem solid #aaa;align-items:center;"
+                    style="text-decoration:none;border-bottom:.33rem solid #aaa;align-items:center;" aria-current="page"
                 {% endif %}>
                     {{ p['title'] }}</a>{% if not loop.last %}&nbsp;{% endif %}
             {% endfor %}
@@ -1775,9 +1775,9 @@ TEMPL_LOGIN = wrap("""
   {% endif %}
 
   <div style="position:relative;">
-      <input name="token" type="password" autocomplete="current-password"
+      <input id="token" name="token" type="password" autocomplete="current-password"
              style="width:100%;padding-right:7rem;">
-      <label style="position:absolute;right:.5rem;top:40%;transform:translateY(-50%);
+      <label for="token" style="position:absolute;right:.5rem;top:40%;transform:translateY(-50%);
                     pointer-events:none;font-size:.75em;color:#aaa;">token</label>
   </div>
     <div style="margin-top:1rem;display:flex;gap:.6rem;">
