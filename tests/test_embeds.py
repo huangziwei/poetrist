@@ -78,6 +78,35 @@ def test_embed_section_only(client):
     assert "More details here." not in html
 
 
+def test_embed_section_stops_at_next_heading(client):
+    _login(client)
+
+    body = "# Morning\n\n### Side Quest\nCold shower log\n\n## Links\n- later section"
+    client.post(
+        "/posts",
+        data={"title": "Routine", "body": body, "csrf": CSRF},
+        follow_redirects=True,
+    )
+    src = _latest_entry()
+
+    client.post(
+        "/posts",
+        data={
+            "title": "Section embed",
+            "body": f"@entry:{src['slug']}#side-quest",
+            "csrf": CSRF,
+        },
+        follow_redirects=True,
+    )
+    dest = _latest_entry()
+
+    resp = client.get(_detail_url(dest["kind"], dest["slug"]))
+    assert resp.status_code == 200
+    html = resp.data.decode()
+    assert "Cold shower log" in html
+    assert "later section" not in html  # stops before the next heading
+
+
 def test_embed_accepts_full_url(client):
     _login(client)
 

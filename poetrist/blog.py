@@ -416,7 +416,7 @@ def _extract_section(body: str, section: str) -> str | None:
 
     lines = body.splitlines()
     in_code, fence = False, ""
-    start_idx, end_idx, level = None, None, None
+    start_idx, end_idx = None, None
     for idx, ln in enumerate(lines):
         m_f = _CODE_FENCE_RE.match(ln)
         if m_f:
@@ -434,15 +434,13 @@ def _extract_section(body: str, section: str) -> str | None:
         if not h:
             continue
 
-        h_level = len(h.group(1))
-        if start_idx is not None and h_level >= (level or h_level):
+        if start_idx is not None:
             end_idx = idx
             break
 
         slug = _slugify_heading(h.group(2))
         if slug == section:
             start_idx = idx
-            level = h_level
 
     if start_idx is None:
         return None
