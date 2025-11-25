@@ -555,7 +555,7 @@ def render_entry_embed(
         '    <span class="entry-embed__pill">'
         f'      <a href="{kind_url}" style="text-decoration:none; color:inherit;border-bottom:none;">{escape(row["kind"])}</a>'
         "    </span>"
-        f'    <a class="u-url" href="{view_url}" style="text-decoration:none; color:inherit; vertical-align:middle; font-variant-numeric:tabular-nums; white-space:nowrap;">'
+        f'    <a class="u-url u-uid" href="{view_url}" style="text-decoration:none; color:inherit; vertical-align:middle; font-variant-numeric:tabular-nums; white-space:nowrap;">'
         f'      <time class="dt-published" datetime="{escape(row["created_at"])}">{escape(ts)}</time>'
         "    </a>"
         f"    {section_label}"
@@ -1634,7 +1634,9 @@ html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Rob
             </div>
         </div>
     </nav>
-    <span class="p-author h-card" style="display:none;">{{ username }}</span>
+    <a class="p-author h-card u-url" href="{{ url_for('index') }}" rel="me" style="display:none;">
+        <span class="p-name">{{ username }}</span>
+    </a>
     {% with msgs = get_flashed_messages() %}
     {% if msgs %}
         {# --- toast ----------------------------------------------------------- #}
@@ -2731,13 +2733,23 @@ TEMPL_INDEX = wrap("""{% block body %}
                    {{ e['kind'] }}
                 </a>
             </span>
-            <a class="u-url" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
+            <a class="u-url u-uid" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
                 style="text-decoration:none; color:inherit;vertical-align:middle;font-variant-numeric:tabular-nums;white-space:nowrap;">
                 <time class="dt-published" datetime="{{ e['created_at'] }}">{{ e['created_at']|ts }}</time>
             </a>&nbsp;
             {% if session.get('logged_in') %}
                 <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
                 <a href="{{ url_for('delete_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Delete</a>
+            {% endif %}
+            {% set tags = entry_tags(e.id) %}
+            {% if tags %}
+                &nbsp;·&nbsp;
+                {% for tag in tags %}
+                    <a class="p-category" rel="tag" href="{{ tags_href(tag) }}"
+                       style="text-decoration:none;margin-right:.35em;color:{{ theme_color() }};vertical-align:middle;">
+                        #{{ tag }}
+                    </a>
+                {% endfor %}
             {% endif %}
         </small>
     </article>
@@ -3234,13 +3246,23 @@ TEMPL_LIST = wrap("""
                         {{ e['action'] or e['kind'] }}
                     </a>
                 </span>
-                <a class="u-url" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
+                <a class="u-url u-uid" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
                     style="text-decoration:none; color:inherit;vertical-align:middle;font-variant-numeric:tabular-nums;white-space:nowrap;">
                     <time class="dt-published" datetime="{{ e['created_at'] }}">{{ e['created_at']|ts }}</time>
                 </a>&nbsp;
                 {% if session.get('logged_in') %}
                     <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
                     <a href="{{ url_for('delete_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Delete</a>
+                {% endif %}
+                {% set tags = entry_tags(e.id) %}
+                {% if tags %}
+                    &nbsp;·&nbsp;
+                    {% for tag in tags %}
+                        <a class="p-category" rel="tag" href="{{ tags_href(tag) }}"
+                           style="text-decoration:none;margin-right:.35em;color:{{ theme_color() }};vertical-align:middle;">
+                            #{{ tag }}
+                        </a>
+                    {% endfor %}
                 {% endif %}
             </small>
         </article>
@@ -3268,7 +3290,10 @@ TEMPL_LIST = wrap("""
 TEMPL_PAGE = wrap("""
 {% block body %}
 <hr>
-<article>
+<article class="h-entry">
+  <span class="p-name" style="position:absolute;left:-9999px;">{{ e['title'] or e['slug'] }}</span>
+  <a class="u-url u-uid" href="{{ '/' ~ e['slug'] }}" style="display:none;">{{ '/' ~ e['slug'] }}</a>
+  <time class="dt-published" datetime="{{ e['created_at'] }}" style="display:none;">{{ e['created_at'] }}</time>
   <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md(e['slug']) }}</div>
   {% if session.get('logged_in') %}
       <small>
@@ -3651,7 +3676,7 @@ TEMPL_ENTRY_DETAIL = wrap("""
             </span>
 
             {# —— timestamp & author ———————————————————————— #}
-            <a class="u-url" href="{{ url_for('entry_detail',
+            <a class="u-url u-uid" href="{{ url_for('entry_detail',
                                  kind_slug=kind_to_slug(e['kind']),
                                  entry_slug=e['slug']) }}"
                style="text-decoration:none; color:inherit;vertical-align:middle;font-variant-numeric:tabular-nums;white-space:nowrap;">
@@ -3669,6 +3694,16 @@ TEMPL_ENTRY_DETAIL = wrap("""
                                     kind_slug=kind_to_slug(e['kind']),
                                     entry_slug=e['slug']) }}"
                    style="vertical-align:middle;">Delete</a>
+            {% endif %}
+            {% set tags = entry_tags(e.id) %}
+            {% if tags %}
+                &nbsp;·&nbsp;
+                {% for tag in tags %}
+                    <a class="p-category" rel="tag" href="{{ tags_href(tag) }}"
+                       style="text-decoration:none;margin-right:.35em;color:{{ theme_color() }};vertical-align:middle;">
+                        #{{ tag }}
+                    </a>
+                {% endfor %}
             {% endif %}
             </small>
         </article>
@@ -4041,7 +4076,7 @@ TEMPL_TAGS = wrap("""
 <!-- —— Tag-cloud as selectable pills ——————————————— -->
 <div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
 {% for t in tags %}
-    <a href="{{ t.href }}"
+    <a class="p-category" rel="tag" href="{{ t.href }}"
         style="text-decoration:none !important;
                 border-bottom:none!important;
                 display:inline-flex;  
@@ -4147,13 +4182,23 @@ TEMPL_TAGS = wrap("""
                 ">
                     {{ e['kind'] }}
                 </span>
-                <a class="u-url" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
+                <a class="u-url u-uid" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
                     style="text-decoration:none; color:inherit;vertical-align:middle;">
                     <time class="dt-published" datetime="{{ e['created_at'] }}">{{ e['created_at']|ts }}</time>
                 </a>&nbsp;
                 {% if session.get('logged_in') %}
                     <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
                     <a href="{{ url_for('delete_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Delete</a>
+                {% endif %}
+                {% set tags = entry_tags(e.id) %}
+                {% if tags %}
+                    &nbsp;·&nbsp;
+                    {% for tag in tags %}
+                        <a class="p-category" rel="tag" href="{{ tags_href(tag) }}"
+                           style="text-decoration:none;margin-right:.35em;color:{{ theme_color() }};vertical-align:middle;">
+                            #{{ tag }}
+                        </a>
+                    {% endfor %}
                 {% endif %}
             </small>
         </article>
@@ -4586,7 +4631,7 @@ TEMPL_ITEM_DETAIL = wrap("""
         {% endif %}
 
         {# —— timestamp & author ———————————————————————— #}
-        <a class="u-url" href="{{ url_for('entry_detail',
+        <a class="u-url u-uid" href="{{ url_for('entry_detail',
                                 kind_slug=kind_to_slug(e['kind']),
                                 entry_slug=e['slug']) }}"
             style="text-decoration:none;color:inherit;vertical-align:middle;">
@@ -4603,6 +4648,16 @@ TEMPL_ITEM_DETAIL = wrap("""
                             kind_slug=kind_to_slug(e['kind']),
                             entry_slug=e['slug']) }}"
             style="vertical-align:middle;">Delete</a>
+        {% endif %}
+        {% set tags = entry_tags(e.id) %}
+        {% if tags %}
+            &nbsp;·&nbsp;
+            {% for tag in tags %}
+                <a class="p-category" rel="tag" href="{{ tags_href(tag) }}"
+                   style="text-decoration:none;margin-right:.35em;color:{{ theme_color() }};vertical-align:middle;">
+                    #{{ tag }}
+                </a>
+            {% endfor %}
         {% endif %}
     </small>
 </article>
@@ -5196,12 +5251,12 @@ TEMPL_SEARCH_ENTRIES = wrap("""
                     {{ e['kind'] | smartcap }}
                 </span>
                 {% if e['kind'] == 'page' %}
-                    <a class="u-url" href="{{ '/' ~ e['slug'] }}"
+                    <a class="u-url u-uid" href="{{ '/' ~ e['slug'] }}"
                         style="text-decoration:none; color:inherit;vertical-align:middle;">
                         <time class="dt-published" datetime="{{ e['created_at'] }}">{{ e['created_at']|ts }}</time>
                     </a>&nbsp;
                 {% else %}
-                <a class="u-url" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
+                <a class="u-url u-uid" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
                     style="text-decoration:none; color:inherit;vertical-align:middle;">
                     <time class="dt-published" datetime="{{ e['created_at'] }}">{{ e['created_at']|ts }}</time>
                 </a>&nbsp;
@@ -5211,6 +5266,16 @@ TEMPL_SEARCH_ENTRIES = wrap("""
                         style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
                     <a href="{{ url_for('delete_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" 
                         style="vertical-align:middle;">Delete</a>
+                {% endif %}
+                {% set tags = entry_tags(e.id) %}
+                {% if tags %}
+                    &nbsp;·&nbsp;
+                    {% for tag in tags %}
+                        <a class="p-category" rel="tag" href="{{ tags_href(tag) }}"
+                           style="text-decoration:none;margin-right:.35em;color:{{ theme_color() }};vertical-align:middle;">
+                            #{{ tag }}
+                        </a>
+                    {% endfor %}
                 {% endif %}
             </small>
         </article>
