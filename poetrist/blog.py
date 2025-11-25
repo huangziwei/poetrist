@@ -174,6 +174,7 @@ _TOKEN_CHARS = r"0-9A-Za-z\u0080-\uFFFF_"
 TOKEN_RE = re.compile(f"[{_TOKEN_CHARS}]+")
 TAG_CHARS = r"[\w./-]+"
 TAG_RE = re.compile(rf"(?<!\w)#({TAG_CHARS})")
+PROJECT_RE = re.compile(r"^\s*~project:([A-Za-z0-9_-]+)(?:\|(.*))?$")
 HASH_LINK_RE = re.compile(
     rf"""
     (?<![A-Za-z0-9_="'&]) \#
@@ -772,6 +773,26 @@ def init_db():
                    ('timezone','{TZ_DFLT}');
 
         ------------------------------------------------------------
+        -- 4.  Projects (post collections)
+        ------------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS project (
+            id    INTEGER PRIMARY KEY AUTOINCREMENT,
+            slug  TEXT UNIQUE NOT NULL,
+            title TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS project_entry (
+            project_id INTEGER NOT NULL,
+            entry_id   INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (project_id, entry_id),
+            FOREIGN KEY (project_id) REFERENCES project(id) ON DELETE CASCADE,
+            FOREIGN KEY (entry_id)   REFERENCES entry(id)   ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_project_entry_entry ON project_entry(entry_id);
+
+        ------------------------------------------------------------
         -- 4.  Tags
         ------------------------------------------------------------
         CREATE TABLE IF NOT EXISTS tag (
@@ -1093,6 +1114,116 @@ def sync_tags(entry_id: int, tags: set[str], *, db):
         "DELETE FROM tag WHERE id NOT IN (SELECT DISTINCT tag_id FROM entry_tag)"
     )
     db.commit()
+
+
+def parse_projects(text: str) -> tuple[str, list[dict[str, str]]]:
+    """
+    Extract ~project:slug|Title lines from *text* and return (clean_body, projects).
+    Projects are deduped by slug (first title wins).
+    """
+    projects: dict[str, str] = {}
+    clean_lines: list[str] = []
+    for ln in (text or "").splitlines():
+        m = PROJECT_RE.match(ln)
+        if not m:
+            clean_lines.append(ln)
+            continue
+        slug = m.group(1).lower()
+        title = (m.group(2) or "").strip()
+        projects.setdefault(slug, title)
+    return "\n".join(clean_lines), [{"slug": s, "title": t} for s, t in projects.items()]
+
+
+def sync_projects(entry_id: int, projects: list[dict[str, str]], *, db):
+    """
+    Bring project ↔ entry links in sync (many-to-many). Creates projects on demand.
+    """
+    # current projects for this entry
+    cur = {
+        r["slug"]: r["project_id"]
+        for r in db.execute(
+            """SELECT p.id AS project_id, p.slug
+                 FROM project p
+                 JOIN project_entry pe ON pe.project_id = p.id
+                WHERE pe.entry_id = ?""",
+            (entry_id,),
+        )
+    }
+
+    wanted = {p["slug"]: p.get("title", "") for p in projects if p.get("slug")}
+    add = set(wanted) - set(cur)
+    remove = set(cur) - set(wanted)
+
+    # ensure projects exist + link
+    created_at = (
+        db.execute("SELECT created_at FROM entry WHERE id=?", (entry_id,)).fetchone()[
+            "created_at"
+        ]
+        or utc_now().isoformat(timespec="seconds")
+    )
+
+    for slug in add:
+        title = wanted[slug] or slug
+        db.execute(
+            "INSERT OR IGNORE INTO project (slug, title) VALUES (?, ?)",
+            (slug, title),
+        )
+        # backfill title if it was empty
+        if title:
+            db.execute(
+                "UPDATE project SET title=? WHERE slug=? AND (title IS NULL OR title='')",
+                (title, slug),
+            )
+        proj_id = db.execute("SELECT id FROM project WHERE slug=?", (slug,)).fetchone()[
+            "id"
+        ]
+        db.execute(
+            "INSERT OR IGNORE INTO project_entry (project_id, entry_id, created_at) VALUES (?,?,?)",
+            (proj_id, entry_id, created_at),
+        )
+
+    # remove stale links
+    for slug in remove:
+        proj_id = cur[slug]
+        db.execute(
+            "DELETE FROM project_entry WHERE project_id=? AND entry_id=?",
+            (proj_id, entry_id),
+        )
+
+    # garbage-collect unused projects
+    db.execute(
+        "DELETE FROM project WHERE id NOT IN (SELECT DISTINCT project_id FROM project_entry)"
+    )
+    db.commit()
+
+
+def entry_projects(entry_id: int, *, db):
+    """Return sorted list of (slug, title) mappings for one entry."""
+    rows = db.execute(
+        """SELECT p.slug, COALESCE(p.title, p.slug) AS title
+             FROM project p
+             JOIN project_entry pe ON pe.project_id = p.id
+            WHERE pe.entry_id=?
+            ORDER BY LOWER(COALESCE(p.title, p.slug))""",
+        (entry_id,),
+    )
+    return rows.fetchall()
+
+
+def project_filters(*, db):
+    """Projects with post counts, sorted by count desc then title."""
+    return db.execute(
+        """SELECT p.slug,
+                  COALESCE(p.title, p.slug) AS title,
+                  COUNT(pe.entry_id)        AS cnt
+             FROM project p
+             JOIN project_entry pe ON pe.project_id = p.id
+             JOIN entry e         ON e.id = pe.entry_id
+            WHERE e.kind='post'
+         GROUP BY p.id
+           HAVING cnt > 0
+         ORDER BY cnt DESC, LOWER(COALESCE(p.title, p.slug))"""
+    ).fetchall()
 
 
 def entry_tags(entry_id: int, *, db) -> list[str]:
@@ -1448,6 +1579,7 @@ app.jinja_env.globals["external_icon"] = lambda: Markup("""
     </svg>""")
 app.jinja_env.globals["PAGE_DEFAULT"] = PAGE_DEFAULT
 app.jinja_env.globals["entry_tags"] = lambda eid: entry_tags(eid, db=get_db())
+app.jinja_env.globals["entry_projects"] = lambda eid: entry_projects(eid, db=get_db())
 app.jinja_env.globals["nav_pages"] = nav_pages
 app.jinja_env.globals["version"] = __version__
 app.jinja_env.globals.update(
@@ -2815,7 +2947,12 @@ def by_kind(slug):
         form_body = request.form.get("body", "")
         body_input = form_body.strip()
 
-        body_parsed, blocks, errors = parse_trigger(body_input)
+        project_specs: list[dict[str, str]] = []
+        body_for_parse = body_input
+        if kind == "post":
+            body_for_parse, project_specs = parse_projects(body_input)
+
+        body_parsed, blocks, errors = parse_trigger(body_for_parse)
 
         # final kind used for insertion: caret verb wins, then explicit page
         entry_kind = kind
@@ -2871,6 +3008,10 @@ def by_kind(slug):
                 )
                 entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
                 sync_tags(entry_id, extract_tags(body_parsed), db=db)
+                if entry_kind == "post":
+                    sync_projects(entry_id, project_specs, db=db)
+                else:
+                    sync_projects(entry_id, [], db=db)
 
                 for idx, blk in enumerate(blocks):
                     item_id, slug_i, uuid_i = get_or_create_item(
@@ -3157,15 +3298,41 @@ def by_kind(slug):
             title=get_setting("site_name", "po.etr.ist"),
         )
 
-    BASE_SQL = """
+    project_filters_list = []
+    selected_project = request.args.get("project", "").strip().lower()
+    total_posts = None
+    project_join = ""
+    project_where = ""
+    params: list[str] = [kind]
+
+    if kind == "post":
+        project_filters_list = project_filters(db=db)
+        valid_slugs = {p["slug"] for p in project_filters_list}
+        if selected_project and selected_project not in valid_slugs:
+            selected_project = ""
+        total_posts = db.execute(
+            "SELECT COUNT(*) AS c FROM entry WHERE kind='post'"
+        ).fetchone()["c"]
+        if selected_project:
+            project_join = (
+                " JOIN project_entry pe ON pe.entry_id = e.id"
+                " JOIN project p ON p.id = pe.project_id"
+            )
+            project_where = " AND p.slug=?"
+            params.append(selected_project)
+
+    BASE_SQL = f"""
         SELECT e.*, ei.action
           FROM entry e
           LEFT JOIN entry_item ei ON ei.entry_id = e.id
-         WHERE e.kind = ?
+          {project_join}
+         WHERE e.kind = ?{project_where}
          ORDER BY e.created_at DESC
     """
 
-    entries, total_pages = paginate(BASE_SQL, (kind,), page=page, per_page=ps, db=db)
+    entries, total_pages = paginate(
+        BASE_SQL, tuple(params), page=page, per_page=ps, db=db
+    )
     pages = list(range(1, total_pages + 1))
 
     back_map = backlinks(entries, db=db)
@@ -3182,6 +3349,9 @@ def by_kind(slug):
         form_link=form_link,
         form_body=form_body,
         backlinks=back_map,
+        project_filters=project_filters_list,
+        selected_project=selected_project,
+        total_posts=total_posts,
     )
 
 
@@ -3217,6 +3387,46 @@ TEMPL_LIST = wrap("""
         {% endif %}
         <hr>
         {% if kind == 'post' %}
+            {% if project_filters %}
+            <div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem; margin-bottom:.75rem;">
+                <a href="{{ url_for('by_kind', slug=kind_to_slug('post')) }}"
+                   style="text-decoration:none !important;
+                          border-bottom:none!important;
+                          display:inline-flex;
+                          margin:.15rem 0;
+                          padding:.15rem .6rem;
+                          border-radius:1rem;
+                          white-space:nowrap;
+                          font-size:.8em;
+                          {% if not selected_project %}
+                              background:{{ theme_color() }}; color:#000;
+                          {% else %}
+                              background:#444;   color:{{ theme_color() }};
+                          {% endif %}">
+                    All
+                    <sup style="font-size:.5em;">{{ total_posts }}</sup>
+                </a>
+                {% for pr in project_filters %}
+                <a href="{{ url_for('by_kind', slug=kind_to_slug('post'), project=pr['slug']) }}"
+                   style="text-decoration:none !important;
+                          border-bottom:none!important;
+                          display:inline-flex;
+                          margin:.15rem 0;
+                          padding:.15rem .6rem;
+                          border-radius:1rem;
+                          white-space:nowrap;
+                          font-size:.8em;
+                          {% if selected_project == pr['slug'] %}
+                              background:{{ theme_color() }}; color:#000;
+                          {% else %}
+                              background:#444;   color:{{ theme_color() }};
+                          {% endif %}">
+                    {{ pr['title'] }}
+                    <sup style="font-size:.5em;">{{ pr['cnt'] }}</sup>
+                </a>
+                {% endfor %}
+            </div>
+            {% endif %}
             <ul style="list-style:none; padding:0; margin:0;">
             {% for e in rows %}
                 <li class="h-entry" style="margin:1em 0;">
@@ -3326,7 +3536,7 @@ TEMPL_LIST = wrap("""
                     {% if p == page %}
                         <span style="border-bottom:0.33rem solid #aaa;">{{ p }}</span>
                     {% else %}
-                        <a href="{{ request.path }}?page={{ p }}">{{ p }}</a>
+                        <a href="{% if kind == 'post' %}{{ url_for('by_kind', slug=kind_to_slug('post'), project=selected_project or None, page=p) }}{% else %}{{ request.path }}?page={{ p }}{% endif %}">{{ p }}</a>
                     {% endif %}
                     {# add thin spacing between numbers #}
                     {% if not loop.last %}&nbsp;{% endif %}
@@ -3607,6 +3817,109 @@ TEMPL_ITEM_LIST = wrap("""
 """)
 
 
+TEMPL_PROJECT_PAGE = wrap("""
+{% block body %}
+<hr>
+<div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
+    <h2 style="margin:0;">{{ project['title'] or project['slug'] }}</h2>
+    <div style="display:flex; gap:.5rem; font-size:.9em;">
+        <a href="{{ url_for('project_detail', project_slug=project['slug'], sort='old') }}"
+           style="text-decoration:none; padding:.15rem .6rem; border-radius:1rem; border:1px solid #555;
+                  {% if sort != 'new' %}background:{{ theme_color() }};color:#000;{% else %}color:#fff;{% endif %}">
+           Oldest
+        </a>
+        <a href="{{ url_for('project_detail', project_slug=project['slug'], sort='new') }}"
+           style="text-decoration:none; padding:.15rem .6rem; border-radius:1rem; border:1px solid #555;
+                  {% if sort == 'new' %}background:{{ theme_color() }};color:#000;{% else %}color:#fff;{% endif %}">
+           Newest
+        </a>
+    </div>
+</div>
+
+<ul style="list-style:none; padding:0; margin:1rem 0 0;">
+{% for e in rows %}
+  <li class="h-entry" style="margin:1em 0;">
+    <a class="p-name u-url u-uid"
+       href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
+       style="display:inline-block; font-weight:normal; line-height:1.25;">
+        {{ e['title'] or e['slug'] }}
+    </a>
+    <div style="display:flex;
+                flex-wrap:wrap;
+                align-items:center;
+                margin-top:.25rem;
+                gap:.35rem;
+                font-size:1rem;
+                color:#888;">
+        <span style="white-space:nowrap;font-size:1rem;">
+            {{ e['created_at']|ts }}
+        </span>
+        {% set tags = entry_tags(e.id) %}
+        {% if tags %}
+            <span aria-hidden="true">•</span>
+            {% for tag in tags %}
+                <a class="p-category" rel="tag" href="{{ tags_href(tag) }}"
+                   style="text-decoration:none;color:{{ theme_color() }};border-bottom:0.1px dotted currentColor;">
+                    #{{ tag }}
+                </a>
+            {% endfor %}
+        {% endif %}
+    </div>
+  </li>
+{% else %}
+  <p>No posts in this project yet.</p>
+{% endfor %}
+</ul>
+
+{% if pages|length > 1 %}
+    <nav style="margin-top:2em;padding-top:2em;font-size:.75em;border-top:1px solid #444;">
+      {% for p in pages %}
+        {% if p == page %}
+          <span style="border-bottom:.33rem solid #aaa;">{{ p }}</span>
+        {% else %}
+          <a href="{{ url_for('project_detail', project_slug=project['slug'], sort=sort, page=p) }}">{{ p }}</a>
+        {% endif %}
+        {% if not loop.last %}&nbsp;{% endif %}
+      {% endfor %}
+    </nav>
+{% endif %}
+{% endblock %}
+""")
+
+
+@app.route("/projects/<project_slug>")
+def project_detail(project_slug):
+    db = get_db()
+    proj = db.execute("SELECT * FROM project WHERE slug=?", (project_slug,)).fetchone()
+    if not proj:
+        abort(404)
+
+    sort = request.args.get("sort", "old").lower()
+    order = "DESC" if sort == "new" else "ASC"
+    page = max(int(request.args.get("page", 1)), 1)
+    ps = page_size()
+
+    base_sql = f"""
+        SELECT e.*
+          FROM project_entry pe
+          JOIN entry e ON e.id = pe.entry_id
+         WHERE pe.project_id=? AND e.kind='post'
+         ORDER BY e.created_at {order}
+    """
+    rows, total_pages = paginate(base_sql, (proj["id"],), page=page, per_page=ps, db=db)
+    pages = list(range(1, total_pages + 1))
+
+    return render_template_string(
+        TEMPL_PROJECT_PAGE,
+        project=proj,
+        rows=rows,
+        page=page,
+        pages=pages,
+        sort="new" if sort == "new" else "old",
+        title=get_setting("site_name", "po.etr.ist"),
+    )
+
+
 ###############################################################################
 # Entries (Say, Post, Pin)
 ###############################################################################
@@ -3745,6 +4058,16 @@ TEMPL_ENTRY_DETAIL = wrap("""
                                     entry_slug=e['slug']) }}"
                    style="vertical-align:middle;">Delete</a>
             {% endif %}
+            {% set projects = entry_projects(e.id) %}
+            {% if projects %}
+                &nbsp;·&nbsp;
+                {% for pr in projects %}
+                    <a href="{{ url_for('project_detail', project_slug=pr['slug']) }}"
+                       style="text-decoration:none;margin-right:.35em;color:{{ theme_color() }};vertical-align:middle;">
+                        {{ pr['title'] }}
+                    </a>
+                {% endfor %}
+            {% endif %}
             {% set tags = entry_tags(e.id) %}
             {% if tags %}
                 &nbsp;·&nbsp;
@@ -3780,8 +4103,10 @@ def edit_entry(kind_slug, entry_slug):
         link = request.form.get("link", "").strip() or None
         new_slug = request.form.get("slug", "").strip() or row["slug"]
 
+        body_for_parse, project_specs = parse_projects(body_trimmed)
+
         # ── single pass ───────────────────────────────────────────────
-        body_parsed, blocks, errors = parse_trigger(body_trimmed)  # ← only call once
+        body_parsed, blocks, errors = parse_trigger(body_for_parse)  # ← only call once
 
         if errors:
             flash("Errors in caret blocks found. Entry was not saved.")
@@ -3869,6 +4194,10 @@ def edit_entry(kind_slug, entry_slug):
 
         # 4️⃣  Tags
         sync_tags(row["id"], extract_tags(body_parsed), db=db)
+        if new_kind == "post":
+            sync_projects(row["id"], project_specs, db=db)
+        else:
+            sync_projects(row["id"], [], db=db)
         db.commit()
 
         if new_kind == "page":

@@ -12,6 +12,7 @@ migrate.py  –  generic “from-backup” data migrator.
 
 Run once, then start the server as usual.
 """
+
 import sqlite3
 import sys
 from pathlib import Path
@@ -21,9 +22,9 @@ import poetrist.blog as blog
 # ----------------------------------------------------------------------
 # 0.  locations + sanity checks
 # ----------------------------------------------------------------------
-ROOT     = Path(__file__).parent
-BACKUP   = ROOT / "poetrist/blog.sqlite3.backup"
-TARGET   = ROOT / "poetrist/blog.sqlite3"
+ROOT = Path(__file__).parent
+BACKUP = ROOT / "poetrist/blog.sqlite3.backup"
+TARGET = ROOT / "poetrist/blog.sqlite3"
 
 
 if not BACKUP.exists():
@@ -35,7 +36,7 @@ if TARGET.exists():
 # 1.  create an empty brand-new DB by importing poetrist and calling init_db()
 # ----------------------------------------------------------------------
 with blog.app.app_context():
-    blog.init_db()    # writes TARGET to disk
+    blog.init_db()  # writes TARGET to disk
 
 # ----------------------------------------------------------------------
 # 2.  open connections
@@ -44,8 +45,8 @@ src = sqlite3.connect(f"file:{BACKUP}?mode=ro", uri=True)
 src.row_factory = sqlite3.Row
 
 with blog.app.app_context():
-    dst = blog.get_db()               # strip_caret() is already registered
-    dst.execute("PRAGMA foreign_keys=OFF;")   # easier while bulk-copying
+    dst = blog.get_db()  # strip_caret() is already registered
+    dst.execute("PRAGMA foreign_keys=OFF;")  # easier while bulk-copying
 
     def dst_cols(table: str) -> list[str]:
         """Column list in the *destination* table (correct order)."""
@@ -58,7 +59,7 @@ with blog.app.app_context():
     def copy_table(table: str):
         if not src_cols(table):
             print(f"  • {table:12}  (absent in backup – skipped)")
-            return                      # whole table vanished in new schema
+            return  # whole table vanished in new schema
 
         common = [c for c in dst_cols(table) if c in src_cols(table)]
         if not common:
@@ -70,11 +71,11 @@ with blog.app.app_context():
             dst.execute("DELETE FROM settings")
 
         col_list = ",".join(common)
-        qms      = ",".join("?" * len(common))
-        rows     = src.execute(f"SELECT {col_list} FROM {table}")
+        qms = ",".join("?" * len(common))
+        rows = src.execute(f"SELECT {col_list} FROM {table}")
         dst.executemany(
             f"INSERT INTO {table} ({col_list}) VALUES ({qms})",
-            (tuple(r[c] for c in common) for r in rows)
+            (tuple(r[c] for c in common) for r in rows),
         )
         cnt = dst.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         print(f"  • {table:12}  ({cnt} rows)")
@@ -82,11 +83,16 @@ with blog.app.app_context():
     print("→ copying compatible tables/columns")
     # Any sensible order that keeps FK parents before children
     for tbl in (
-        "user", "settings",
+        "user",
+        "settings",
         "object",
-        "item", "item_meta",
+        "item",
+        "item_meta",
         "entry",
-        "tag", "entry_tag",
+        "project",
+        "project_entry",
+        "tag",
+        "entry_tag",
         "entry_item",
         "passkey",
     ):
