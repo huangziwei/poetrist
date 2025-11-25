@@ -4365,6 +4365,11 @@ def tags_rss_custom(custom_tags_slug: str, tag_list: str):
 ###############################################################################
 @app.route("/<verb>/<item_type>/<slug>", methods=["GET", "POST"])
 def item_detail(verb, item_type, slug):
+    # Prevent custom tag slugs with 2 segments (e.g., /tagging/foo/bar) from
+    # being misrouted here; hand them to the tag view instead.
+    if verb == tags_slug():
+        return _render_tags(f"{item_type}/{slug}")
+
     verb = slug_to_kind(verb)
     if verb not in VERB_KINDS:
         abort(404)
