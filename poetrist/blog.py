@@ -360,6 +360,15 @@ def _postprocess_html(html: str, *, theme_col: str) -> str:
     Apply hashtag links, mark styling, MathML conversion, footnote popups,
     and add u-photo class to images.
     """
+    code_spans = {}
+
+    def _extract_code(m):
+        key = f"__CODE{len(code_spans)}__"
+        code_spans[key] = m.group(0)
+        return key
+
+    # temporarily mask inline code so hashtags inside are untouched
+    html = re.sub(r"<code[^>]*>.*?</code>", _extract_code, html, flags=re.S)
 
     def _hashtag_repl(match):
         orig_tag = match.group(1)
@@ -368,6 +377,8 @@ def _postprocess_html(html: str, *, theme_col: str) -> str:
         return f'<a href="{href}" style="text-decoration:none;color:{theme_col};border-bottom:0.1px dotted currentColor;">#{orig_tag}</a>'
 
     html = HASH_LINK_RE.sub(_hashtag_repl, html)
+    for k, v in code_spans.items():
+        html = html.replace(k, v, 1)
     html = re.sub(
         r"(<mark)(>)",
         rf'\1 style="background:{theme_col};color:#000;padding:0 .15em;"\2',
