@@ -1621,7 +1621,7 @@ def backlinks(entries, *, db) -> dict[int, list]:
           FROM entry_fts                      -- trigram index
           JOIN entry src    ON src.id = entry_fts.rowid
           JOIN entry target ON target.slug IN ({q_marks})
-         WHERE entry_fts MATCH target.slug
+         WHERE entry_fts MATCH ('\"' || target.slug || '\"')
            AND src.id != target.id
     """
     rows = db.execute(sql, tuple(slug_to_id)).fetchall()
