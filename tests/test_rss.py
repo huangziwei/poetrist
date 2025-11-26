@@ -3,6 +3,7 @@ tests/test_rss.py
 """
 from __future__ import annotations
 
+import uuid
 import xml.etree.ElementTree as ET
 
 import poetrist.blog as blog
@@ -16,7 +17,7 @@ def _add_entry(
     title: str | None = None,
     body: str = "",
     link: str | None = None,
-) -> None:
+) -> tuple[str, int]:
     """
     Insert one entry directly into the test database **and**
     keep the tag tables in sync (needed for /tags/…/rss).
@@ -24,7 +25,7 @@ def _add_entry(
     db = get_db()
     now_dt = blog.utc_now()
     now_iso = now_dt.isoformat(timespec="seconds")
-    slug = now_dt.strftime("%Y%m%d%H%M%S")
+    slug = now_dt.strftime("%Y%m%d%H%M%S%f")
 
     db.execute(
         """
@@ -36,6 +37,39 @@ def _add_entry(
     entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
     sync_tags(entry_id, extract_tags(body), db=db)
     db.commit()
+    return slug, entry_id
+
+
+def _add_checkin(
+    *,
+    item_title: str = "Checkin Book",
+    item_slug: str = "checkin-book",
+    kind: str = "read",
+    action: str = "reading",
+    progress: str = "42%",
+    body: str = "",
+) -> tuple[str, int]:
+    """Insert an item + one check-in entry linked to it."""
+    db = get_db()
+    db.execute(
+        "INSERT INTO item (uuid, slug, item_type, title) VALUES (?,?,?,?)",
+        (str(uuid.uuid4()), item_slug, "book", item_title),
+    )
+    item_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    slug, entry_id = _add_entry(
+        kind=kind,
+        title=None,
+        body=body,
+    )
+
+    db.execute(
+        "INSERT INTO entry_item (entry_id, item_id, verb, action, progress) "
+        "VALUES (?,?,?,?,?)",
+        (entry_id, item_id, kind, action, progress),
+    )
+    db.commit()
+    return slug, entry_id
 
 
 def _xml(resp) -> ET.Element:
@@ -48,6 +82,15 @@ def _xml(resp) -> ET.Element:
 def _item_titles(root: ET.Element) -> list[str]:
     """Return a list of all <item>/<title> texts in the feed."""
     return [t.text or "" for t in root.findall("./channel/item/title")]
+
+
+def _item_by_slug(root: ET.Element, slug: str) -> ET.Element | None:
+    """Return the <item> element whose link contains the given slug."""
+    for itm in root.findall("./channel/item"):
+        link = (itm.findtext("link") or "").strip()
+        if slug in link:
+            return itm
+    return None
 
 
 # ───────────────────────── tests ──────────────────────────────────────
@@ -98,3 +141,28 @@ def test_tags_rss_filters_by_tag(client):
 
     # ensure that an unrelated entry does **not** creep in
     assert not any("Global-RSS-Test" in t for t in titles)
+
+
+def test_rss_titles_include_checkin_context(client):
+    slug, _ = _add_checkin(body="#logtag progress note")
+    root = _xml(client.get(f"/{kind_to_slug('read')}/rss"))
+
+    item = _item_by_slug(root, slug)
+    assert item is not None
+    title = item.findtext("title") or ""
+    assert "Checkin Book" in title
+    assert "42%" in title
+
+    cats = [c.text for c in item.findall("category")]
+    assert "logtag" in cats
+
+
+def test_rss_titles_fall_back_to_excerpt_for_says(client):
+    slug, _ = _add_entry(kind="say", body="hello rss world without a heading")
+    root = _xml(client.get("/rss"))
+
+    item = _item_by_slug(root, slug)
+    assert item is not None
+    title = item.findtext("title") or ""
+    assert title.startswith("Say:")
+    assert "hello rss world" in title

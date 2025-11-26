@@ -4748,6 +4748,57 @@ def _rss(entries, *, title, feed_url, site_url, feed_kind: str | None = None):
     Build a valid RSS 2.0 document (single string).
     `entries` is an iterable of rows from the `entry` table.
     """
+    db = get_db()
+
+    def _item_ctx(entry_id: int):
+        """
+        Return one linked item row (if any) with minimal metadata.
+        """
+        return db.execute(
+            """
+            SELECT i.title   AS item_title,
+                   i.slug    AS item_slug,
+                   i.item_type,
+                   ei.action AS item_action,
+                   ei.progress,
+                   MIN(CASE
+                        WHEN im.k = 'date'
+                             AND LENGTH(im.v) >= 4
+                        THEN SUBSTR(im.v, 1, 4)
+                   END)      AS item_year
+              FROM entry_item ei
+              JOIN item      i  ON i.id = ei.item_id
+              LEFT JOIN item_meta im ON im.item_id = i.id
+             WHERE ei.entry_id=?
+          GROUP BY i.id, ei.action, ei.progress
+             LIMIT 1
+            """,
+            (entry_id,),
+        ).fetchone()
+
+    def _body_excerpt(text: str | None, limit: int = 80) -> str:
+        clean = re.sub(r"\s+", " ", strip_caret(text)).strip()
+        if not clean:
+            return ""
+        return clean if len(clean) <= limit else clean[:limit].rstrip() + "…"
+
+    def _checkin_title(kind: str, itm) -> str:
+        label = smartcap(itm["item_action"] or kind)
+        base = f"{label}: {itm['item_title'] or itm['item_slug']}"
+        extras = [p for p in (itm["progress"], itm["item_year"]) if p]
+        if extras:
+            base += f" ({' · '.join(extras)})"
+        return base
+
+    def _pin_title(e) -> str:
+        if e["title"]:
+            core = e["title"]
+        elif e["link"]:
+            core = urlparse(e["link"]).netloc or e["slug"]
+        else:
+            core = e["slug"]
+        return f"Pin: {core}"
+
     items = []
     for e in entries:
         if e["kind"] == "page":
@@ -4765,12 +4816,58 @@ def _rss(entries, *, title, feed_url, site_url, feed_kind: str | None = None):
         ts_rfc = _rfc2822(ts_iso)
         guid = f"{link}#{ts_iso}"
 
-        body_html = render_markdown_html(e["body"], source_slug=e["slug"])
-        rss_title = e["title"] if e["title"] else e["slug"]
+        itm = _item_ctx(e["id"])
+        tags = entry_tags(e["id"], db=db) if "id" in e.keys() else []
+
+        # ── title crafting ─────────────────────────────────────────────
+        if e["kind"] in VERB_KINDS and itm:
+            rss_title = _checkin_title(e["kind"], itm)
+        elif e["kind"] == "pin":
+            rss_title = _pin_title(e)
+        elif e["title"]:
+            rss_title = e["title"]
+        else:
+            excerpt = _body_excerpt(e["body"])
+            rss_title = (
+                f"{smartcap(e['kind'])}: {excerpt}" if excerpt else e["slug"]
+            )
+
         if feed_kind:
             kind_slug = kind_to_slug(feed_kind)
             if not rss_title.lower().startswith(kind_slug.lower()):
                 rss_title = f"{kind_slug}/{rss_title}"
+
+        # ── description preamble ───────────────────────────────────────
+        body_html = render_markdown_html(e["body"], source_slug=e["slug"])
+        preamble = ""
+        if e["kind"] in VERB_KINDS and itm:
+            item_url = url_for(
+                "item_detail",
+                verb=kind_to_slug(e["kind"]),
+                item_type=itm["item_type"],
+                slug=itm["item_slug"],
+                _external=True,
+            )
+            meta_bits = [b for b in (itm["item_action"], itm["progress"]) if b]
+            preamble = (
+                f"<p><strong>{escape(smartcap(e['kind']))}</strong>: "
+                f'<a href="{item_url}">{escape(itm["item_title"])}</a>'
+            )
+            if meta_bits:
+                preamble += f" ({' · '.join(escape(b) for b in meta_bits)})"
+            if itm["item_year"]:
+                preamble += f" – {escape(itm['item_year'])}"
+            preamble += "</p>"
+        elif e["kind"] == "pin" and e["link"]:
+            pin_label = e["title"] or urlparse(e["link"]).netloc or e["slug"]
+            preamble = (
+                f"<p><strong>Pin</strong>: "
+                f'<a href="{escape(e["link"])}">{escape(pin_label)}</a></p>'
+            )
+
+        desc_html = preamble + body_html if preamble else body_html
+        cat_xml = "".join(f"<category>{escape(t)}</category>" for t in tags)
+
         items.append(
             f"""
         <item>
@@ -4778,7 +4875,8 @@ def _rss(entries, *, title, feed_url, site_url, feed_kind: str | None = None):
           <link>{link}</link>
           <guid isPermaLink="false">{guid}</guid>
           <pubDate>{ts_rfc}</pubDate>
-          <description><![CDATA[{body_html}]]></description>
+          {cat_xml}
+          <description><![CDATA[{desc_html}]]></description>
         </item>"""
         )
 
