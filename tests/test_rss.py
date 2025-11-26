@@ -166,3 +166,32 @@ def test_rss_titles_fall_back_to_excerpt_for_says(client):
     title = item.findtext("title") or ""
     assert title.startswith("Say:")
     assert "hello rss world" in title
+
+
+def test_rss_image_excerpts_drop_image_urls(client):
+    slug, _ = _add_entry(
+        kind="say",
+        body='![alt text](https://example.com/img.png) some copy',
+    )
+    root = _xml(client.get("/rss"))
+
+    item = _item_by_slug(root, slug)
+    assert item is not None
+    title = item.findtext("title") or ""
+    assert "img.png" not in title
+    assert "alt text" in title
+
+
+def test_rss_strips_embed_markers_from_titles(client):
+    # create the embedded target first
+    embed_slug, _ = _add_entry(kind="say", body="embedded target")
+    slug, _ = _add_entry(
+        kind="say",
+        body=f"Lead in sentence @entry:{embed_slug} tail text",
+    )
+    root = _xml(client.get("/rss"))
+
+    item = _item_by_slug(root, slug)
+    assert item is not None
+    title = item.findtext("title") or ""
+    assert "@entry:" not in title

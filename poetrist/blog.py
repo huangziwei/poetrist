@@ -502,6 +502,43 @@ def render_entry_embed(
     """
     Resolve @entry:slug embeds, optionally scoped to a heading section.
     """
+    use_external = bool(getattr(g, "_absolute_links", False))
+    is_rss = use_external  # treat absolute-link renders as feed/rich preview
+
+    def _item_ctx(entry_id: int):
+        return (
+            get_db()
+            .execute(
+                """
+                SELECT i.title   AS item_title,
+                       i.slug    AS item_slug,
+                       i.item_type,
+                       ei.action AS item_action,
+                       ei.progress,
+                       MIN(CASE
+                            WHEN im.k = 'date'
+                                 AND LENGTH(im.v) >= 4
+                            THEN SUBSTR(im.v, 1, 4)
+                       END)      AS item_year
+                  FROM entry_item ei
+                  JOIN item      i  ON i.id = ei.item_id
+                  LEFT JOIN item_meta im ON im.item_id = i.id
+                 WHERE ei.entry_id=?
+              GROUP BY i.id, ei.action, ei.progress
+                 LIMIT 1
+                """,
+                (entry_id,),
+            )
+            .fetchone()
+        )
+
+    def _checkin_title(kind: str, itm) -> str:
+        label = smartcap(itm["item_action"] or kind)
+        base = f"{label}: {itm['item_title'] or itm['item_slug']}"
+        extras = [p for p in (itm["progress"], itm["item_year"]) if p]
+        if extras:
+            base += f" ({' · '.join(extras)})"
+        return base
     slug, section, parse_err = _parse_embed_target(slug, section)
     if parse_err:
         return _embed_error(parse_err)
@@ -549,12 +586,17 @@ def render_entry_embed(
         ctx["depth"] -= 1
 
     url = url_for(
-        "entry_detail", kind_slug=kind_to_slug(row["kind"]), entry_slug=row["slug"]
+        "entry_detail",
+        kind_slug=kind_to_slug(row["kind"]),
+        entry_slug=row["slug"],
+        _external=use_external,
     )
     view_url = f"{url}#{section_key}" if section_key else url
     ts = ts_filter(row["created_at"])
     section_label = ""
-    kind_url = url_for("by_kind", slug=kind_to_slug(row["kind"]))
+    kind_url = url_for(
+        "by_kind", slug=kind_to_slug(row["kind"]), _external=use_external
+    )
 
     title_html = ""
     if row["title"]:
@@ -564,6 +606,22 @@ def render_entry_embed(
             f"{escape(row['title'])}"
             "</a>"
             "</div>"
+        )
+
+    if is_rss:
+        # keep feed embeds lightweight and clearly marked
+        itm = _item_ctx(row["id"])
+        if row["kind"] in VERB_KINDS and itm:
+            label = _checkin_title(row["kind"], itm)
+        else:
+            label = row["title"] or row["slug"]
+        return (
+            '<blockquote class="entry-embed-rss" '
+            'style="border-left:4px solid #666;padding-left:.75em;margin:1em 0;">'
+            f'<div style="font-weight:700;"><a href="{view_url}">{escape(label)}</a></div>'
+            f'<div>{inner_html}</div>'
+            f'<div style="font-size:.85em;color:#888;">Published {escape(ts)}</div>'
+            "</blockquote>"
         )
 
     footer_html = (
@@ -592,13 +650,19 @@ def render_markdown_html(
     *,
     source_slug: str | None = None,
     renderer=None,
+    absolute_links: bool = False,
 ) -> str:
     """
     Shared Markdown renderer used across filters and RSS.
     """
     clean = _drop_caret_meta((text or ""))
     ctx = _new_embed_ctx(source_slug)
-    html = _render_markdown(clean, ctx=ctx, renderer=renderer)
+    prev_abs = getattr(g, "_absolute_links", False)
+    g._absolute_links = absolute_links
+    try:
+        html = _render_markdown(clean, ctx=ctx, renderer=renderer)
+    finally:
+        g._absolute_links = prev_abs
     return _postprocess_html(html, theme_col=theme_color())
 
 
@@ -4777,7 +4841,13 @@ def _rss(entries, *, title, feed_url, site_url, feed_kind: str | None = None):
         ).fetchone()
 
     def _body_excerpt(text: str | None, limit: int = 80) -> str:
-        clean = re.sub(r"\s+", " ", strip_caret(text)).strip()
+        clean = strip_caret(text)
+        # strip markdown/HTML images entirely (leave alt text if present)
+        clean = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", clean)
+        clean = re.sub(r"<img[^>]*alt=['\"]([^'\"]+)['\"][^>]*>", r"\1", clean)
+        clean = re.sub(r"<img\b[^>]*>", "", clean)
+        clean = re.sub(r"@entry:[^\s]+", "", clean)  # drop inline embed markers
+        clean = re.sub(r"\s+", " ", clean).strip()
         if not clean:
             return ""
         return clean if len(clean) <= limit else clean[:limit].rstrip() + "…"
@@ -4838,27 +4908,11 @@ def _rss(entries, *, title, feed_url, site_url, feed_kind: str | None = None):
                 rss_title = f"{kind_slug}/{rss_title}"
 
         # ── description preamble ───────────────────────────────────────
-        body_html = render_markdown_html(e["body"], source_slug=e["slug"])
+        body_html = render_markdown_html(
+            e["body"], source_slug=e["slug"], absolute_links=True
+        )
         preamble = ""
-        if e["kind"] in VERB_KINDS and itm:
-            item_url = url_for(
-                "item_detail",
-                verb=kind_to_slug(e["kind"]),
-                item_type=itm["item_type"],
-                slug=itm["item_slug"],
-                _external=True,
-            )
-            meta_bits = [b for b in (itm["item_action"], itm["progress"]) if b]
-            preamble = (
-                f"<p><strong>{escape(smartcap(e['kind']))}</strong>: "
-                f'<a href="{item_url}">{escape(itm["item_title"])}</a>'
-            )
-            if meta_bits:
-                preamble += f" ({' · '.join(escape(b) for b in meta_bits)})"
-            if itm["item_year"]:
-                preamble += f" – {escape(itm['item_year'])}"
-            preamble += "</p>"
-        elif e["kind"] == "pin" and e["link"]:
+        if e["kind"] == "pin" and e["link"]:
             pin_label = e["title"] or urlparse(e["link"]).netloc or e["slug"]
             preamble = (
                 f"<p><strong>Pin</strong>: "
