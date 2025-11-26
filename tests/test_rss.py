@@ -43,7 +43,7 @@ def _add_entry(
 def _add_checkin(
     *,
     item_title: str = "Checkin Book",
-    item_slug: str = "checkin-book",
+    item_slug: str | None = None,
     kind: str = "read",
     action: str = "reading",
     progress: str = "42%",
@@ -51,6 +51,7 @@ def _add_checkin(
 ) -> tuple[str, int]:
     """Insert an item + one check-in entry linked to it."""
     db = get_db()
+    item_slug = item_slug or f"checkin-{uuid.uuid4().hex[:8]}"
     db.execute(
         "INSERT INTO item (uuid, slug, item_type, title) VALUES (?,?,?,?)",
         (str(uuid.uuid4()), item_slug, "book", item_title),
@@ -114,16 +115,13 @@ def test_kind_rss_only_shows_that_kind(client):
 
     root = _xml(client.get(f"/{kind_to_slug('post')}/rss"))
 
-    # every <item> in a /posts/rss feed must have either the title we added
-    # or originate from another *post* created in earlier tests – never from
-    # says or pins
+    # our added post shows up
     assert any(kind_title in t for t in _item_titles(root))
-    assert all(
-        slug_part.startswith(kind_to_slug("post"))
-        or "Post" in t  # our own post title
-        for t in _item_titles(root)
-        for slug_part in [t.lower()]
-    )
+
+    # every item link should point to the post slug namespace
+    links = [lnk.text or "" for lnk in root.findall("./channel/item/link")]
+    post_slug = f"/{kind_to_slug('post')}/"
+    assert links and all(post_slug in lnk for lnk in links)
 
 
 def test_tags_rss_filters_by_tag(client):
@@ -195,3 +193,14 @@ def test_rss_strips_embed_markers_from_titles(client):
     assert item is not None
     title = item.findtext("title") or ""
     assert "@entry:" not in title
+
+
+def test_kind_feed_does_not_prefix_titles(client):
+    slug, _ = _add_checkin(kind="read", action="to-read", progress=None)
+    root = _xml(client.get(f"/{kind_to_slug('read')}/rss"))
+
+    item = _item_by_slug(root, slug)
+    assert item is not None
+    title = item.findtext("title") or ""
+    assert not title.lower().startswith(f"{kind_to_slug('read')}/")
+    assert title.lower().startswith("to-read")

@@ -4902,11 +4902,6 @@ def _rss(entries, *, title, feed_url, site_url, feed_kind: str | None = None):
                 f"{smartcap(e['kind'])}: {excerpt}" if excerpt else e["slug"]
             )
 
-        if feed_kind:
-            kind_slug = kind_to_slug(feed_kind)
-            if not rss_title.lower().startswith(kind_slug.lower()):
-                rss_title = f"{kind_slug}/{rss_title}"
-
         # ── description preamble ───────────────────────────────────────
         body_html = render_markdown_html(
             e["body"], source_slug=e["slug"], absolute_links=True
