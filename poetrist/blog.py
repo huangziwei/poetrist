@@ -142,6 +142,7 @@ ALIASES = {
     "pg": "progress",
     "i": "item_type",
     "it": "item_type",
+    "item": "item_type",
     "a": "action",
     "at": "action",
     "v": "verb",
@@ -1725,7 +1726,7 @@ def _verbose_block(blk, uuid_):
 
     parts = [
         f"^uuid:{uuid_}",
-        f"^item_type:{blk['item_type']}",
+        f"^item:{blk['item_type']}",
         f"^title:{q(blk['title'])}" if blk["title"] else "",
         f"^action:{blk['action']}",
         f"^verb:{blk['verb']}",

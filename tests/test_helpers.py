@@ -80,6 +80,15 @@ def test_parse_trigger_treats_unknown_prefix_as_action():
     assert blk["action"] == "finished"
     assert blk["progress"] == "5%"
 
+def test_parse_trigger_accepts_item_alias():
+    body, blocks, errors = parse_trigger('^action:reading\n^item:book\n^title:"Foo"')
+    assert errors == []
+    assert body == "^book:$PENDING$0$"
+    blk = blocks[0]
+    assert blk["item_type"] == "book"
+    assert blk["verb"] == "read"
+    assert blk["title"] == "Foo"
+
 def test_parse_trigger_allows_custom_action_with_verb_hint():
     body, blocks, errors = parse_trigger('^afterthought:book:"Foo"', verb_hint="read")
     assert errors == []
