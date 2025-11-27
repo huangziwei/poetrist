@@ -1413,7 +1413,7 @@ def _resolve_verb(
         return (
             None,
             f"action '{action_lc}' exists for multiple verbs ({verb_list}); "
-            "prefix it like ^<verb>:action:…",
+            "prefix with a verb, e.g., ^verb:action:…",
         )
 
     if hint_lc in VERB_MAP:
