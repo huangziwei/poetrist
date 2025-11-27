@@ -1342,18 +1342,19 @@ def nav_pages():
     ).fetchall()
 
 
-# ── compact one-liner (verb:item:identifier[:progress]) ──────────────
+# ── compact one-liner ([verb:]action:item:identifier[:progress]) ─────
 CARET_COMPACT_RE = re.compile(
     r"""
     ^\^
-    (?:"([^"]+)"|([a-z0-9_-]+)) :      # ➊ action  (grp 1 if quoted, grp 2 plain)
-    (?:"([^"]+)"|([a-z0-9_-]+)) :      # ➋ item_type (grp 3 or grp 4)
+    (?:(?:"([^"]+)"|([a-z0-9_-]+))\:)?    # ➊ verb (optional; grp 1 quoted, 2 plain)
+    (?:"([^"]+)"|([a-z0-9_-]+)) :         # ➋ action (grp 3/4)
+    (?:"([^"]+)"|([a-z0-9_-]+)) :         # ➌ item_type (grp 5/6)
     (?:
-        "([^"]+)"                      # ➌ title — quoted         (grp 5)
-      | ([^":\s]+)                     #     title — **un-quoted** (grp 6)
-      | ([0-9a-f-]{36}|[a-z0-9_-]+)    #     slug/uuid             (grp 7)
+        "([^"]+)"                         # ➍ title — quoted          (grp 7)
+      | ([^":\s]+)                        #     title — **un-quoted** (grp 8)
+      | ([0-9a-f-]{36}|[a-z0-9_-]+)       #     slug/uuid             (grp 9)
     )
-    (?:\s*:\s*(?:"([^"]+)"|([^":\s]+)))?  # ➍ progress (grp 8/9)
+    (?:\s*:\s*(?:"([^"]+)"|([^":\s]+)))?  # ➎ progress (grp 10/11)
 """,
     re.X | re.I | re.U,
 )
@@ -1376,20 +1377,48 @@ _CODE_FENCE_RE = re.compile(r"^\s*(```|~~~)")
 
 def _resolve_verb(
     action_lc: str, *, explicit: str | None = None, verb_hint: str | None = None
-) -> str | None:
-    """Return a known verb using explicit value, action lookup, or a provided hint."""
+) -> tuple[str | None, str | None]:
+    """
+    Return (verb, error_msg). If the action maps to multiple verbs and no
+    disambiguation is available, verb is None and error_msg explains why.
+    """
     explicit_lc = (explicit or "").lower()
     if explicit_lc:
-        return explicit_lc if explicit_lc in VERB_MAP else None
-
-    mapped = next((vb for vb, acts in VERB_MAP.items() if action_lc in acts), None)
-    if mapped:
-        return mapped
+        if explicit_lc not in VERB_MAP:
+            return None, f"verb '{explicit_lc}' is not supported"
+        matches = [vb for vb, acts in VERB_MAP.items() if action_lc in acts]
+        if matches and explicit_lc not in matches:
+            return (
+                None,
+                f"action '{action_lc}' is not valid for verb '{explicit_lc}'",
+            )
+        if not matches:
+            return (
+                None,
+                f"action '{action_lc}' is unknown for verb '{explicit_lc}'",
+            )
+        return explicit_lc, None
 
     hint_lc = (verb_hint or "").lower()
+    matches = [vb for vb, acts in VERB_MAP.items() if action_lc in acts]
+
     if hint_lc in VERB_MAP:
-        return hint_lc
-    return None
+        if not matches or hint_lc in matches:
+            return hint_lc, None
+
+    if len(matches) == 1:
+        return matches[0], None
+    if len(matches) > 1:
+        verb_list = ", ".join(matches)
+        return (
+            None,
+            f"action '{action_lc}' exists for multiple verbs ({verb_list}); "
+            "prefix it like ^<verb>:action:…",
+        )
+
+    if hint_lc in VERB_MAP:
+        return hint_lc, None
+    return None, None
 
 
 def parse_trigger(
@@ -1407,6 +1436,8 @@ def parse_trigger(
     - action and a verb from VERB_KINDS (explicit, inferred from the action,
       or provided via *verb_hint*)
     - either a title or a slug/uuid (so an item can be resolved/created)
+    The compact syntax also accepts an optional leading verb to disambiguate
+    actions that are shared across verbs (e.g., ^watch:abandoned:movie:"Foo").
     """
     errors: list[str] = []
     verb_hint_lc = (verb_hint or "").lower()
@@ -1418,11 +1449,11 @@ def parse_trigger(
 
         # action present → derive verb the same way parse does
         action_lc = (blk.get("action") or "").lower()
-        verb = _resolve_verb(
+        verb, err_msg = _resolve_verb(
             action_lc, explicit=blk.get("verb"), verb_hint=verb_hint_lc
         )
         if not verb:
-            return "caret block has an unknown action/verb"
+            return err_msg or "caret block has an unknown action/verb"
 
         # need at least a title or an identifier
         if not (blk.get("title") or blk.get("slug")):
@@ -1478,21 +1509,48 @@ def parse_trigger(
         m = CARET_COMPACT_RE.match(line)
         if m:
             start_idx = i
-            action = m.group(1) or m.group(2)
-            item_type = m.group(3) or m.group(4)
-            title = m.group(5) or m.group(6)  # quoted OR un-quoted
-            slug = m.group(7)  # stays the same meaning
-            prog = m.group(8) or m.group(9)  # quoted OR un-quoted
+            first_tok = m.group(1) or m.group(2)
+            action_tok = m.group(3) or m.group(4)
+            item_tok = m.group(5) or m.group(6)
+            title_tok = m.group(7) or m.group(8)  # quoted OR un-quoted
+            slug_tok = m.group(9)  # stays the same meaning
+            prog = m.group(10) or m.group(11)  # quoted OR un-quoted
+
+            # Decide mapping based on whether the first token is a known verb
+            is_explicit_verb = first_tok and first_tok.lower() in VERB_MAP
+            if is_explicit_verb:
+                explicit_verb = first_tok
+                action = action_tok
+                item_type = item_tok
+                title = title_tok or None
+                slug = slug_tok
+                progress_val = prog
+            elif first_tok:
+                explicit_verb = None
+                action = first_tok or action_tok
+                item_type = action_tok
+                title = item_tok or None
+                slug = slug_tok
+                progress_val = prog or title_tok
+            else:
+                explicit_verb = None
+                action = action_tok
+                item_type = item_tok
+                title = title_tok or None
+                slug = slug_tok
+                progress_val = prog
 
             action_lc = (action or "").lower()
-            verb = _resolve_verb(action_lc, verb_hint=verb_hint_lc)
+            verb, err_msg = _resolve_verb(
+                action_lc, explicit=explicit_verb, verb_hint=verb_hint_lc
+            )
             blk = {
                 "verb": verb,
                 "action": action_lc,
                 "item_type": item_type,
                 "title": title,
                 "slug": slug,
-                "progress": prog,
+                "progress": progress_val,
                 "meta": {},
             }
 
@@ -1520,7 +1578,7 @@ def parse_trigger(
                 j += 1
 
             i = j
-            err = _block_error(blk)
+            err = err_msg or _block_error(blk)
             if not err:
                 out_blocks.append(blk)
                 new_lines.append(f"^{item_type}:$PENDING${len(out_blocks) - 1}$")
@@ -1577,10 +1635,10 @@ def parse_trigger(
                 i += 1
 
             action_lc = (tmp["action"] or "").lower()
-            tmp["verb"] = _resolve_verb(
+            tmp["verb"], verb_err = _resolve_verb(
                 action_lc, explicit=tmp["verb"], verb_hint=verb_hint_lc
             )
-            err = _block_error(tmp)
+            err = verb_err or _block_error(tmp)
             if not err:
                 out_blocks.append(tmp)
                 new_lines.append(f"^{tmp['item_type']}:$PENDING${len(out_blocks) - 1}$")
@@ -6489,9 +6547,10 @@ def import_item_json(url: str, *, action: str):
         raise ValueError("Malformed URL")
 
     verb_from_url = path_parts[0].lower()
-    verb_from_action = _resolve_verb(action.lower(), verb_hint=verb_from_url)
+    verb_from_action, err_msg = _resolve_verb(action.lower(), verb_hint=verb_from_url)
     if verb_from_action != verb_from_url:
-        raise ValueError("Verb/action mismatch")
+        reason = err_msg or "Verb/action mismatch"
+        raise ValueError(reason)
 
     # ------------------------------------------------------------------ #
     # 4 . craft block-dict for caller

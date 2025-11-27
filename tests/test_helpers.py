@@ -53,7 +53,32 @@ def test_parse_trigger_preserves_meta_case():
 
 def test_parse_trigger_rejects_unknown_action_without_hint():
     _, _, errors = parse_trigger('^afterthought:book:"Foo"')
-    assert errors and "unknown action/verb" in errors[0].lower()
+    assert errors and "unknown" in errors[0].lower()
+
+def test_parse_trigger_flags_shared_action_without_verb():
+    _, _, errors = parse_trigger('^abandoned:movie:"Foo"')
+    assert errors and "multiple verbs" in errors[0].lower()
+
+def test_parse_trigger_allows_action_with_explicit_verb_prefix():
+    body, blocks, errors = parse_trigger('^watch:abandoned:movie:"Foo"')
+    assert errors == []
+    assert body == "^movie:$PENDING$0$"
+    blk = blocks[0]
+    assert blk["verb"] == "watch"
+    assert blk["action"] == "abandoned"
+
+def test_parse_trigger_rejects_action_not_in_map_with_explicit_verb():
+    _, _, errors = parse_trigger('^read:book:"Foo":5%')
+    assert errors and "action 'book' is unknown for verb 'read'" in errors[0]
+
+def test_parse_trigger_treats_unknown_prefix_as_action():
+    body, blocks, errors = parse_trigger('^finished:book:"Foo":5%')
+    assert errors == []
+    assert body == "^book:$PENDING$0$"
+    blk = blocks[0]
+    assert blk["verb"] == "read"  # inferred from action
+    assert blk["action"] == "finished"
+    assert blk["progress"] == "5%"
 
 def test_parse_trigger_allows_custom_action_with_verb_hint():
     body, blocks, errors = parse_trigger('^afterthought:book:"Foo"', verb_hint="read")
