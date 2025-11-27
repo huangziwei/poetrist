@@ -51,6 +51,18 @@ def test_parse_trigger_preserves_meta_case():
     # ensure we did not downcase the key
     assert "isbn-13" not in blk["meta"]
 
+def test_parse_trigger_rejects_unknown_action_without_hint():
+    _, _, errors = parse_trigger('^afterthought:book:"Foo"')
+    assert errors and "unknown action/verb" in errors[0].lower()
+
+def test_parse_trigger_allows_custom_action_with_verb_hint():
+    body, blocks, errors = parse_trigger('^afterthought:book:"Foo"', verb_hint="read")
+    assert errors == []
+    assert body == "^book:$PENDING$0$"
+    blk = blocks[0]
+    assert blk["verb"] == "read"
+    assert blk["action"] == "afterthought"
+
 
 # ──────────────────────────────────────────────────────────────
 # slug helpers

@@ -1374,7 +1374,27 @@ IMPORT_RE = re.compile(
 _CODE_FENCE_RE = re.compile(r"^\s*(```|~~~)")
 
 
-def parse_trigger(text: str) -> tuple[str, list[dict], list[str]]:
+def _resolve_verb(
+    action_lc: str, *, explicit: str | None = None, verb_hint: str | None = None
+) -> str | None:
+    """Return a known verb using explicit value, action lookup, or a provided hint."""
+    explicit_lc = (explicit or "").lower()
+    if explicit_lc:
+        return explicit_lc if explicit_lc in VERB_MAP else None
+
+    mapped = next((vb for vb, acts in VERB_MAP.items() if action_lc in acts), None)
+    if mapped:
+        return mapped
+
+    hint_lc = (verb_hint or "").lower()
+    if hint_lc in VERB_MAP:
+        return hint_lc
+    return None
+
+
+def parse_trigger(
+    text: str, *, verb_hint: str | None = None
+) -> tuple[str, list[dict], list[str]]:
     """
     Parse caret-trigger lines from free text and return a tuple of
     (rewritten_body, blocks, errors).
@@ -1384,10 +1404,12 @@ def parse_trigger(text: str) -> tuple[str, list[dict], list[str]]:
     error is collected so callers can surface it to the user. A valid
     block must include:
     - item_type (non-empty)
-    - action and a verb that maps to one of VERB_KINDS
+    - action and a verb from VERB_KINDS (explicit, inferred from the action,
+      or provided via *verb_hint*)
     - either a title or a slug/uuid (so an item can be resolved/created)
     """
     errors: list[str] = []
+    verb_hint_lc = (verb_hint or "").lower()
 
     def _block_error(blk: dict) -> str | None:
         # item_type present
@@ -1396,11 +1418,10 @@ def parse_trigger(text: str) -> tuple[str, list[dict], list[str]]:
 
         # action present → derive verb the same way parse does
         action_lc = (blk.get("action") or "").lower()
-        verb = (blk.get("verb") or "").lower() or next(
-            (vb for vb, acts in VERB_MAP.items() if action_lc in acts),
-            action_lc,
+        verb = _resolve_verb(
+            action_lc, explicit=blk.get("verb"), verb_hint=verb_hint_lc
         )
-        if not verb or verb not in VERB_MAP:
+        if not verb:
             return "caret block has an unknown action/verb"
 
         # need at least a title or an identifier
@@ -1464,9 +1485,7 @@ def parse_trigger(text: str) -> tuple[str, list[dict], list[str]]:
             prog = m.group(8) or m.group(9)  # quoted OR un-quoted
 
             action_lc = (action or "").lower()
-            verb = next(
-                (vb for vb, acts in VERB_MAP.items() if action_lc in acts), action_lc
-            )
+            verb = _resolve_verb(action_lc, verb_hint=verb_hint_lc)
             blk = {
                 "verb": verb,
                 "action": action_lc,
@@ -1557,12 +1576,10 @@ def parse_trigger(text: str) -> tuple[str, list[dict], list[str]]:
                     tmp["meta"][k] = v
                 i += 1
 
-            if "verb" not in tmp or not tmp["verb"]:
-                action_lc = (tmp["action"] or "").lower()
-                tmp["verb"] = next(
-                    (vb for vb, acts in VERB_MAP.items() if action_lc in acts),
-                    action_lc,
-                )
+            action_lc = (tmp["action"] or "").lower()
+            tmp["verb"] = _resolve_verb(
+                action_lc, explicit=tmp["verb"], verb_hint=verb_hint_lc
+            )
             err = _block_error(tmp)
             if not err:
                 out_blocks.append(tmp)
@@ -1643,7 +1660,7 @@ def active_verbs() -> list[str]:
 
 
 def _verbose_block(blk, uuid_):
-    """Return the 5-line caret block​ string for one check-in."""
+    """Return the verbose caret block string for one check-in."""
 
     def q(s):
         return f'"{s}"' if " " in s else s  # quote if it contains spaces
@@ -1653,6 +1670,7 @@ def _verbose_block(blk, uuid_):
         f"^item_type:{blk['item_type']}",
         f"^title:{q(blk['title'])}" if blk["title"] else "",
         f"^action:{blk['action']}",
+        f"^verb:{blk['verb']}",
         f"^progress:{q(blk['progress'])}" if blk["progress"] else "",
     ]
     return "\n".join(p for p in parts if p)
@@ -3052,7 +3070,10 @@ def by_kind(slug):
         if kind == "post":
             body_for_parse, project_specs = parse_projects(body_input)
 
-        body_parsed, blocks, errors = parse_trigger(body_for_parse)
+        kind_hint = kind if kind in VERB_KINDS else None
+        body_parsed, blocks, errors = parse_trigger(
+            body_for_parse, verb_hint=kind_hint
+        )
 
         # final kind used for insertion: caret verb wins, then explicit page
         entry_kind = kind
@@ -4275,7 +4296,10 @@ def edit_entry(kind_slug, entry_slug):
         body_for_parse, project_specs = parse_projects(body_trimmed)
 
         # ── single pass ───────────────────────────────────────────────
-        body_parsed, blocks, errors = parse_trigger(body_for_parse)  # ← only call once
+        verb_hint = row["kind"] if row["kind"] in VERB_KINDS else None
+        body_parsed, blocks, errors = parse_trigger(
+            body_for_parse, verb_hint=verb_hint
+        )  # ← only call once
 
         if errors:
             flash("Errors in caret blocks found. Entry was not saved.")
@@ -6465,10 +6489,8 @@ def import_item_json(url: str, *, action: str):
         raise ValueError("Malformed URL")
 
     verb_from_url = path_parts[0].lower()
-    verb_from_action = next(
-        (v for v, acts in VERB_MAP.items() if action.lower() in acts), action.lower()
-    )
-    if verb_from_url != verb_from_action:
+    verb_from_action = _resolve_verb(action.lower(), verb_hint=verb_from_url)
+    if verb_from_action != verb_from_url:
         raise ValueError("Verb/action mismatch")
 
     # ------------------------------------------------------------------ #
