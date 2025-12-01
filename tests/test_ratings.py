@@ -103,3 +103,16 @@ def test_item_list_shows_rating(client):
     resp = client.get(f"/{kind_to_slug('read')}")
     assert resp.status_code == 200
     assert "★★★" in resp.data.decode()
+
+
+def test_item_detail_shows_rating_to_visitors(client):
+    slug, item_id = _seed_item("finished")
+    db = get_db()
+    db.execute("UPDATE item SET rating=4 WHERE id=?", (item_id,))
+    db.commit()
+
+    resp = client.get(f"/read/book/{slug}")
+    body = resp.data.decode()
+    assert resp.status_code == 200
+    assert "★★★★" in body
+    assert "score-star" not in body  # no buttons when logged-out

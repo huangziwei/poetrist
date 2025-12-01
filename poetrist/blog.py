@@ -5468,6 +5468,13 @@ TEMPL_ITEM_DETAIL = wrap("""
     {% endif %}
 </div>
 {% endif %}
+
+{% if rating_value %}
+<div aria-label="Score {{ rating_value }} of 5"
+     style="margin:.35rem 0;display:inline-flex;align-items:center;color:{{ theme_color() }};font-size:1.25rem;">
+    <span style="letter-spacing:1px;">{{ "★" * rating_value }}</span>
+</div>
+{% endif %}
            
 
 {% if session.get('logged_in') %}
