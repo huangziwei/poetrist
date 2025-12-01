@@ -116,3 +116,17 @@ def test_item_detail_shows_rating_to_visitors(client):
     assert resp.status_code == 200
     assert "★★★★" in body
     assert "score-star" not in body  # no buttons when logged-out
+
+
+def test_item_detail_only_one_star_row_for_logged_in(client):
+    slug, item_id = _seed_item("finished")
+    db = get_db()
+    db.execute("UPDATE item SET rating=4 WHERE id=?", (item_id,))
+    db.commit()
+    _login(client)
+
+    resp = client.get(f"/read/book/{slug}")
+    body = resp.data.decode()
+    assert resp.status_code == 200
+    assert "score-star" in body          # interactive row present
+    assert 'aria-label="Score 4 of 5"' not in body  # no duplicate display block
