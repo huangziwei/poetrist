@@ -5409,6 +5409,7 @@ TEMPL_ITEM_DETAIL = wrap("""
     .score-star:hover,
     .score-star:hover ~ .score-star {
         color:#f2c200;
+        background-color:transparent;
     }
     .score-stars[data-score="1"] .score-star:nth-last-child(-n+1),
     .score-stars[data-score="2"] .score-star:nth-last-child(-n+2),
