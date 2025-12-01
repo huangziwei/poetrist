@@ -4011,7 +4011,7 @@ TEMPL_ITEM_LIST = wrap("""
         </span>
         {% if r.rating %}
         <span aria-label="{{ r.rating }} of 5"
-              style="color:#f2a600;font-size:1.2rem;letter-spacing:1px;vertical-align:middle;">
+              style="color:{{ theme_color() }};font-size:1.2rem;letter-spacing:1px;vertical-align:middle;">
             {{ "★" * r.rating }}
         </span>
         {% endif %}
@@ -5416,7 +5416,7 @@ TEMPL_ITEM_DETAIL = wrap("""
     }
     .score-star:hover,
     .score-star:hover ~ .score-star {
-        color:#f2c200;
+        color:{{ theme_color() }};
         background-color:transparent;
     }
     .score-stars[data-score="1"] .score-star:nth-last-child(-n+1),
@@ -5424,7 +5424,7 @@ TEMPL_ITEM_DETAIL = wrap("""
     .score-stars[data-score="3"] .score-star:nth-last-child(-n+3),
     .score-stars[data-score="4"] .score-star:nth-last-child(-n+4),
     .score-stars[data-score="5"] .score-star:nth-last-child(-n+5) {
-        color:#f2a600;
+        color:{{ theme_color() }};
     }
     .score-star:focus-visible {
         outline:2px solid {{ theme_color() }};
