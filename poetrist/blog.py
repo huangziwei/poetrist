@@ -540,6 +540,7 @@ def render_entry_embed(
         if extras:
             base += f" ({' · '.join(extras)})"
         return base
+
     slug, section, parse_err = _parse_embed_target(slug, section)
     if parse_err:
         return _embed_error(parse_err)
@@ -620,7 +621,7 @@ def render_entry_embed(
             '<blockquote class="entry-embed-rss" '
             'style="border-left:4px solid #666;padding-left:.75em;margin:1em 0;">'
             f'<div style="font-weight:700;"><a href="{view_url}">{escape(label)}</a></div>'
-            f'<div>{inner_html}</div>'
+            f"<div>{inner_html}</div>"
             f'<div style="font-size:.85em;color:#888;">Published {escape(ts)}</div>'
             "</blockquote>"
         )
@@ -782,6 +783,9 @@ def url_filter(url: str | None) -> str:
 ###############################################################################
 # Database helpers
 ###############################################################################
+_RATING_COL_CHECKED = False
+
+
 def get_db():
     if "db" not in g:
         g.db = sqlite3.connect(app.config["DATABASE"])
@@ -928,7 +932,8 @@ def init_db():
             uuid        TEXT UNIQUE NOT NULL,        
             slug        TEXT UNIQUE NOT NULL,        
             item_type   TEXT NOT NULL,               
-            title       TEXT NOT NULL
+            title       TEXT NOT NULL,
+            rating      INTEGER                      -- personal 0–5 score
         );
 
         CREATE TABLE IF NOT EXISTS item_meta (       
@@ -970,11 +975,26 @@ def init_db():
             sign_count    INTEGER NOT NULL,
             nickname      TEXT,
             created_at    TEXT    NOT NULL,
-            FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
+        FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
         );
         """
     )
     db.commit()
+
+
+def ensure_item_rating_column(db) -> None:
+    """
+    Add the item.rating column if it does not exist (older DBs).
+    """
+    global _RATING_COL_CHECKED
+    if _RATING_COL_CHECKED:
+        return
+
+    cols = {row["name"] for row in db.execute("PRAGMA table_info(item)")}
+    if "rating" not in cols:
+        db.execute("ALTER TABLE item ADD COLUMN rating INTEGER")
+        db.commit()
+    _RATING_COL_CHECKED = True
 
 
 # -------------------------------------------------------------------------
@@ -1451,7 +1471,7 @@ def parse_trigger(
         # action present → derive verb the same way parse does
         action_lc = (blk.get("action") or "").lower()
         verb, err_msg = _resolve_verb(
-            action_lc, explicit=blk.get("verb"), verb_hint=verb_hint_lc
+            action_lc, explicit=blk.get("_explicit_verb"), verb_hint=verb_hint_lc
         )
         if not verb:
             return err_msg or "caret block has an unknown action/verb"
@@ -1547,6 +1567,7 @@ def parse_trigger(
             )
             blk = {
                 "verb": verb,
+                "_explicit_verb": explicit_verb,
                 "action": action_lc,
                 "item_type": item_type,
                 "title": title,
@@ -1595,6 +1616,7 @@ def parse_trigger(
         if line.startswith("^"):
             tmp = {
                 "verb": None,
+                "_explicit_verb": None,
                 "action": None,
                 "item_type": None,
                 "title": None,
@@ -1616,6 +1638,7 @@ def parse_trigger(
                     tmp["action"] = v
                 elif k == "verb":
                     tmp["verb"] = v
+                    tmp["_explicit_verb"] = v
                 elif k in ("item", "item_type"):
                     tmp["item_type"] = v
                 elif k == "title":
@@ -1690,6 +1713,24 @@ def get_or_create_item(
                 (item_id, k, v, ord),
             )
     return item_id, slug, uuid_
+
+
+def is_completed_action(action: str | None) -> bool:
+    """
+    True if an action represents a completed state (e.g., read, watched).
+    """
+    if not action:
+        return False
+    raw = action.strip().lower()
+    if not raw:
+        return False
+
+    compact = re.sub(r"[\s_-]+", "", raw)
+    if compact in {"read", "reread"}:
+        return True
+    if raw == "finished":
+        return True
+    return compact.endswith("ed")
 
 
 def has_kind(kind: str) -> bool:
@@ -3130,9 +3171,7 @@ def by_kind(slug):
             body_for_parse, project_specs = parse_projects(body_input)
 
         kind_hint = kind if kind in VERB_KINDS else None
-        body_parsed, blocks, errors = parse_trigger(
-            body_for_parse, verb_hint=kind_hint
-        )
+        body_parsed, blocks, errors = parse_trigger(body_for_parse, verb_hint=kind_hint)
 
         # final kind used for insertion: caret verb wins, then explicit page
         entry_kind = kind
@@ -4981,9 +5020,7 @@ def _rss(entries, *, title, feed_url, site_url, feed_kind: str | None = None):
             rss_title = e["title"]
         else:
             excerpt = _body_excerpt(e["body"])
-            rss_title = (
-                f"{smartcap(e['kind'])}: {excerpt}" if excerpt else e["slug"]
-            )
+            rss_title = f"{smartcap(e['kind'])}: {excerpt}" if excerpt else e["slug"]
 
         # ── description preamble ───────────────────────────────────────
         body_html = render_markdown_html(
@@ -5120,17 +5157,52 @@ def item_detail(verb, item_type, slug):
     if verb not in VERB_KINDS:
         abort(404)
     db = get_db()
+    ensure_item_rating_column(db)
     itm = db.execute(
-        "SELECT id, uuid, slug, item_type, title "
+        "SELECT id, uuid, slug, item_type, title, rating "
         "FROM item WHERE slug=? AND item_type=?",
         (slug, item_type),
     ).fetchone()
     if not itm:
         abort(404)
 
+    actions_for_item = db.execute(
+        "SELECT action FROM entry_item WHERE item_id=? AND verb=?", (itm["id"], verb)
+    ).fetchall()
+    finished_actions = [
+        r["action"] for r in actions_for_item if is_completed_action(r["action"])
+    ]
+    rating_ready = bool(finished_actions)
+
     # ──────────────────────────────── POST: quick “check-in” ──────────────
     if request.method == "POST":
         login_required()
+
+        if "rating" in request.form:
+            rating_raw = (request.form.get("rating") or "").strip()
+            if not rating_ready:
+                flash("Add a finished check-in before scoring.")
+                return redirect(request.url)
+            try:
+                rating_val = int(rating_raw)
+            except ValueError:
+                flash("Score must be a number between 0 and 5.")
+                return redirect(request.url)
+
+            if not 0 <= rating_val <= 5:
+                flash("Score must be between 0 and 5.")
+                return redirect(request.url)
+
+            if rating_val == 0:
+                db.execute("UPDATE item SET rating=NULL WHERE id=?", (itm["id"],))
+                flash("Score cleared.")
+            else:
+                db.execute(
+                    "UPDATE item SET rating=? WHERE id=?", (rating_val, itm["id"])
+                )
+                flash(f"Score saved ({rating_val}/5).")
+            db.commit()
+            return redirect(request.url)
 
         # ❶ ── turn the user input into a {key: value} dict -----------------
         raw = request.form["meta"].rstrip()
@@ -5250,12 +5322,15 @@ def item_detail(verb, item_type, slug):
     ).fetchall()
 
     back_map = backlinks(rows, db=db)
+    rating_value = int(itm["rating"]) if itm["rating"] is not None else 0
 
     return render_template_string(
         TEMPL_ITEM_DETAIL,
         item=itm,
         meta=meta,
         entries=rows,
+        can_rate=rating_ready,
+        rating_value=rating_value,
         verb=verb,
         verb_slug=kind_to_slug(verb),
         sort=sort,
@@ -5304,10 +5379,85 @@ TEMPL_ITEM_DETAIL = wrap("""
 
 
 {% if session.get('logged_in') %}
-<a href="{{ url_for('edit_item',
-                verb=verb_slug, item_type=item['item_type'], slug=item['slug']) }}">Edit</a>   
-<a href="{{ url_for('delete_item',
-                verb=verb_slug, item_type=item['item_type'], slug=item['slug']) }}">&nbsp;&nbsp;Delete</a>   
+<div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin:.35rem 0;">
+    <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
+        <a href="{{ url_for('edit_item',
+                        verb=verb_slug, item_type=item['item_type'], slug=item['slug']) }}">Edit</a>
+        <a href="{{ url_for('delete_item',
+                        verb=verb_slug, item_type=item['item_type'], slug=item['slug']) }}">Delete</a>
+    </div>
+
+    {% if can_rate %}
+    <style>
+    .score-stars {
+        display:inline-flex;
+        flex-direction:row-reverse;
+        gap:.35rem;
+    }
+    .score-star {
+        appearance:none;
+        background:none;
+        border:0;
+        padding:0;
+        margin:0;
+        color:#555;
+        font-size:1.5rem;
+        line-height:1;
+        cursor:pointer;
+        transition:color 120ms ease;
+    }
+    .score-star:hover,
+    .score-star:hover ~ .score-star {
+        color:#f2c200;
+    }
+    .score-stars[data-score="1"] .score-star:nth-last-child(-n+1),
+    .score-stars[data-score="2"] .score-star:nth-last-child(-n+2),
+    .score-stars[data-score="3"] .score-star:nth-last-child(-n+3),
+    .score-stars[data-score="4"] .score-star:nth-last-child(-n+4),
+    .score-stars[data-score="5"] .score-star:nth-last-child(-n+5) {
+        color:#f2a600;
+    }
+    .score-star:focus-visible {
+        outline:2px solid {{ theme_color() }};
+        outline-offset:2px;
+    }
+    .score-clear {
+        background:none;
+        border:0;
+        padding:0 .35rem;
+        color:#888;
+        cursor:pointer;
+        font-size:.9rem;
+        text-decoration:underline dotted;
+    }
+    </style>
+    <form method="post"
+          aria-label="Your score for this item"
+          style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;">
+        {% if csrf_token() %}
+            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+        {% endif %}
+        <div class="score-stars"
+             data-score="{{ rating_value }}"
+             role="group"
+             aria-label="Your score for this item">
+            {% for n in range(5,0,-1) %}
+            <button type="submit"
+                    name="rating"
+                    value="{{ n }}"
+                    class="score-star"
+                    aria-label="{{ n }} of 5">
+                ★</button>
+            {% endfor %}
+        </div>
+        {% if rating_value %}
+        <button type="submit" name="rating" value="0" class="score-clear" aria-label="Clear score">
+            Clear
+        </button>
+        {% endif %}
+    </form>
+    {% endif %}
+</div>
 {% endif %}
            
 
