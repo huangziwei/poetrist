@@ -3,7 +3,7 @@ tests/test_ratings.py
 """
 from uuid import uuid4
 
-from poetrist.blog import get_db, utc_now
+from poetrist.blog import get_db, kind_to_slug, utc_now
 
 CSRF = "test-token"
 
@@ -92,3 +92,14 @@ def test_rating_set_and_clear(client):
         is None
     )
     assert b'data-score="0"' in cleared.data
+
+
+def test_item_list_shows_rating(client):
+    slug, item_id = _seed_item("finished")
+    db = get_db()
+    db.execute("UPDATE item SET rating=3 WHERE id=?", (item_id,))
+    db.commit()
+
+    resp = client.get(f"/{kind_to_slug('read')}")
+    assert resp.status_code == 200
+    assert "★★★" in resp.data.decode()

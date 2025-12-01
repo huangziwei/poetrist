@@ -3460,6 +3460,7 @@ def by_kind(slug):
             base_sql = f"""
                 WITH item_rows AS (
                     SELECT i.id, i.title, i.item_type, i.slug,
+                        i.rating,
                         MIN(CASE WHEN im.k='date' AND LENGTH(im.v)>=4
                                     THEN SUBSTR(im.v,1,4) END)         AS year,
                         COUNT(DISTINCT e.id)                           AS cnt,
@@ -3487,6 +3488,7 @@ def by_kind(slug):
             base_sql += " ORDER BY last_at DESC"
             return paginate(base_sql, tuple(params), page=page, per_page=per, db=db)
 
+        ensure_item_rating_column(db)
         rows, total_pages = items_for_verb(
             kind,
             item_type=selected or None,
@@ -4007,6 +4009,12 @@ TEMPL_ITEM_LIST = wrap("""
         <span style="white-space:nowrap;font-size:1rem;">
            • {{ r.cnt }}× • {{ r.last_at|ts }}
         </span>
+        {% if r.rating %}
+        <span aria-label="{{ r.rating }} of 5"
+              style="color:#f2a600;font-size:1.2rem;letter-spacing:1px;vertical-align:middle;">
+            {{ "★" * r.rating }}
+        </span>
+        {% endif %}
       </div>
     </li>
   {% endfor %}
