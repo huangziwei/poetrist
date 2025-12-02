@@ -1397,7 +1397,11 @@ _CODE_FENCE_RE = re.compile(r"^\s*(```|~~~)")
 
 
 def _resolve_verb(
-    action_lc: str, *, explicit: str | None = None, verb_hint: str | None = None
+    action_lc: str,
+    *,
+    explicit: str | None = None,
+    verb_hint: str | None = None,
+    allow_unknown_actions: bool = False,
 ) -> tuple[str | None, str | None]:
     """
     Return (verb, error_msg). If the action maps to multiple verbs and no
@@ -1408,6 +1412,8 @@ def _resolve_verb(
         if explicit_lc not in VERB_MAP:
             return None, f"verb '{explicit_lc}' is not supported"
         matches = [vb for vb, acts in VERB_MAP.items() if action_lc in acts]
+        if allow_unknown_actions:
+            return explicit_lc, None
         if matches and explicit_lc not in matches:
             return (
                 None,
@@ -1422,6 +1428,9 @@ def _resolve_verb(
 
     hint_lc = (verb_hint or "").lower()
     matches = [vb for vb, acts in VERB_MAP.items() if action_lc in acts]
+
+    if allow_unknown_actions and hint_lc in VERB_MAP:
+        return hint_lc, None
 
     if hint_lc in VERB_MAP:
         if not matches or hint_lc in matches:
@@ -1443,7 +1452,7 @@ def _resolve_verb(
 
 
 def parse_trigger(
-    text: str, *, verb_hint: str | None = None
+    text: str, *, verb_hint: str | None = None, allow_unknown_actions: bool = False
 ) -> tuple[str, list[dict], list[str]]:
     """
     Parse caret-trigger lines from free text and return a tuple of
@@ -1471,7 +1480,10 @@ def parse_trigger(
         # action present → derive verb the same way parse does
         action_lc = (blk.get("action") or "").lower()
         verb, err_msg = _resolve_verb(
-            action_lc, explicit=blk.get("_explicit_verb"), verb_hint=verb_hint_lc
+            action_lc,
+            explicit=blk.get("_explicit_verb"),
+            verb_hint=verb_hint_lc,
+            allow_unknown_actions=allow_unknown_actions,
         )
         if not verb:
             return err_msg or "caret block has an unknown action/verb"
@@ -1563,7 +1575,10 @@ def parse_trigger(
 
             action_lc = (action or "").lower()
             verb, err_msg = _resolve_verb(
-                action_lc, explicit=explicit_verb, verb_hint=verb_hint_lc
+                action_lc,
+                explicit=explicit_verb,
+                verb_hint=verb_hint_lc,
+                allow_unknown_actions=allow_unknown_actions,
             )
             blk = {
                 "verb": verb,
@@ -1660,7 +1675,10 @@ def parse_trigger(
 
             action_lc = (tmp["action"] or "").lower()
             tmp["verb"], verb_err = _resolve_verb(
-                action_lc, explicit=tmp["verb"], verb_hint=verb_hint_lc
+                action_lc,
+                explicit=tmp["verb"],
+                verb_hint=verb_hint_lc,
+                allow_unknown_actions=allow_unknown_actions,
             )
             err = verb_err or _block_error(tmp)
             if not err:
@@ -5265,7 +5283,9 @@ def item_detail(verb, item_type, slug):
 
         body_raw = "\n".join(caret_lines)
 
-        body, blocks, errors = parse_trigger(body_raw)  # normal pipeline
+        body, blocks, errors = parse_trigger(
+            body_raw, verb_hint=verb, allow_unknown_actions=True
+        )  # normal pipeline
         if errors:
             raise ValueError(f"Generated caret block invalid: {errors}")
 

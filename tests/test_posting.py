@@ -144,3 +144,28 @@ def test_invalid_caret_is_ignored_no_item_or_link(client):
     if entries_after > entries_before:
         last = db.execute("SELECT kind FROM entry ORDER BY id DESC LIMIT 1").fetchone()
         assert last["kind"]
+
+
+def test_item_detail_allows_custom_action_for_existing_item(client):
+    """
+    Existing items should accept free-form actions on check-in (not limited to VERB_MAP).
+    """
+    _login(client)
+    db = get_db()
+    db.execute(
+        "INSERT INTO item (uuid, slug, item_type, title) VALUES (?,?,?,?)",
+        ("123e4567-e89b-12d3-a456-426614174000", "custom-item", "book", "Custom Book"),
+    )
+    db.commit()
+
+    rv = client.post(
+        "/read/book/custom-item",
+        data={"meta": "^action:afterparty\n^progress:10%", "csrf": CSRF},
+        follow_redirects=True,
+    )
+    assert rv.status_code == 200
+
+    row = db.execute(
+        "SELECT action FROM entry_item ORDER BY rowid DESC LIMIT 1"
+    ).fetchone()
+    assert row and row["action"] == "afterparty"
