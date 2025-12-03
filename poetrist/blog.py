@@ -22,10 +22,12 @@ from typing import DefaultDict
 from urllib.parse import urlencode, urlparse
 from zoneinfo import ZoneInfo, available_timezones
 
+import boto3
 import click
 import latex2mathml.converter as _l2m
 import markdown
 import requests
+from botocore.exceptions import BotoCoreError, ClientError
 from flask import (
     Flask,
     Response,
@@ -41,8 +43,6 @@ from flask import (
 from itsdangerous import BadSignature, SignatureExpired, TimestampSigner
 from markdown.extensions import Extension
 from markupsafe import Markup
-import boto3
-from botocore.exceptions import BotoCoreError, ClientError
 from webauthn import (
     generate_authentication_options,
     generate_registration_options,
@@ -1178,7 +1178,10 @@ def r2_is_configured(cfg: dict[str, str] | None = None) -> bool:
 
 
 def _r2_client(cfg: dict[str, str]):
-    endpoint = cfg.get("R2_ENDPOINT") or f"https://{cfg['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com"
+    endpoint = (
+        cfg.get("R2_ENDPOINT")
+        or f"https://{cfg['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com"
+    )
     return boto3.client(
         "s3",
         endpoint_url=endpoint,
@@ -3264,8 +3267,8 @@ TEMPL_INDEX = wrap("""{% block body %}
                 <input type="file" id="img-upload-input" accept="image/*" style="display:none">
                 <button type="button"
                         id="img-upload-btn"
-                        style="background:#333;color:{{ theme_color() }};border:1px solid #666;">
-                    Upload&nbsp;image
+                        style="background:#333;color:#FFF;border:1px solid #666;">
+                    Images
                 </button>
                 <span id="img-upload-status" style="font-size:.85em;color:#888;"></span>
             </div>
