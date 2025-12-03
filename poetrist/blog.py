@@ -2153,6 +2153,63 @@ TEMPL_EPILOG = """
     </footer>
     <a href="#page-bottom" aria-label="Jump to footer" class="jump-btn jump-down">↓</a>
     <a href="#page-top" aria-label="Jump to top" class="jump-btn jump-up">↑</a>
+    {% if session.get('logged_in') %}
+    <script>
+    (() => {
+        const csrf = document.querySelector('input[name="csrf"]')?.value || '';
+        document.querySelectorAll('.img-upload-btn').forEach(btn => {
+            const form = btn.closest('form');
+            if (!form) return;
+            const input = form.querySelector('.img-upload-input');
+            const status = form.querySelector('.img-upload-status');
+            const ta = form.querySelector('textarea[name="body"]');
+            if (!input || !ta) return;
+
+            btn.addEventListener('click', () => input.click());
+            input.addEventListener('change', async () => {
+                if (!input.files || !input.files.length) return;
+                const file = input.files[0];
+                if (status) status.textContent = 'Uploading...';
+
+                const fd = new FormData();
+                fd.append('file', file);
+                const headers = csrf ? {'X-CSRFToken': csrf} : {};
+
+                try {
+                    const res = await fetch('/upload-image', {
+                        method: 'POST',
+                        headers,
+                        body: fd,
+                    });
+                    const data = await res.json();
+                    if (!res.ok || !data?.url) {
+                        throw new Error(data?.error || 'Upload failed');
+                    }
+                    const alt = (file.name || 'image').replace(/\.[^.]+$/, '') || 'image';
+                    const snippet = `![${alt}](${data.url})\n`;
+                    insertSnippet(ta, snippet);
+                    if (status) status.textContent = 'Inserted image link.';
+                } catch (err) {
+                    if (status) status.textContent = err?.message || 'Upload failed.';
+                } finally {
+                    input.value = '';
+                }
+            });
+        });
+
+        function insertSnippet(ta, snippet) {
+            const start = ta.selectionStart || 0;
+            const end = ta.selectionEnd || 0;
+            const before = ta.value.slice(0, start);
+            const after = ta.value.slice(end);
+            ta.value = before + snippet + after;
+            const pos = before.length + snippet.length;
+            ta.setSelectionRange(pos, pos);
+            ta.focus();
+        }
+    })();
+    </script>
+    {% endif %}
 </div> <!-- container -->
 </body>
 </html>
@@ -3264,68 +3321,15 @@ TEMPL_INDEX = wrap("""{% block body %}
                       placeholder="What's on your mind?">{{ form_body or '' }}</textarea>
             <div style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;">
                 <button>Add&nbsp;Say</button>
-                <input type="file" id="img-upload-input" accept="image/*" style="display:none">
+                <input type="file" class="img-upload-input" accept="image/*" style="display:none">
                 <button type="button"
-                        id="img-upload-btn"
+                        class="img-upload-btn"
                         style="background:#333;color:#FFF;border:1px solid #666;">
                     Images
                 </button>
-                <span id="img-upload-status" style="font-size:.85em;color:#888;"></span>
+                <span class="img-upload-status" style="font-size:.85em;color:#888;"></span>
             </div>
         </form>
-        <script>
-        (() => {
-            const btn = document.getElementById('img-upload-btn');
-            const input = document.getElementById('img-upload-input');
-            const status = document.getElementById('img-upload-status');
-            const ta = document.querySelector('#quick-add-form textarea[name="body"]');
-            if (!btn || !input || !ta) return;
-
-            const csrf = document.querySelector('input[name="csrf"]')?.value || '';
-
-            btn.addEventListener('click', () => input.click());
-            input.addEventListener('change', async () => {
-                if (!input.files?.length) return;
-                const file = input.files[0];
-                status.textContent = 'Uploading...';
-
-                const fd = new FormData();
-                fd.append('file', file);
-                const headers = csrf ? {'X-CSRFToken': csrf} : {};
-
-                try {
-                    const res = await fetch('/upload-image', {
-                        method: 'POST',
-                        headers,
-                        body: fd,
-                    });
-                    const data = await res.json();
-                    if (!res.ok || !data?.url) {
-                        throw new Error(data?.error || 'Upload failed');
-                    }
-                    const alt = (file.name || 'image').replace(/\.[^.]+$/, '') || 'image';
-                    const snippet = `![${alt}](${data.url})\n`;
-                    insertSnippet(snippet);
-                    status.textContent = 'Inserted image link.';
-                } catch (err) {
-                    status.textContent = err?.message || 'Upload failed.';
-                } finally {
-                    input.value = '';
-                }
-            });
-
-            function insertSnippet(snippet) {
-                const start = ta.selectionStart || 0;
-                const end = ta.selectionEnd || 0;
-                const before = ta.value.slice(0, start);
-                const after = ta.value.slice(end);
-                ta.value = before + snippet + after;
-                const pos = before.length + snippet.length;
-                ta.setSelectionRange(pos, pos);
-                ta.focus();
-            }
-        })();
-        </script>
     {% endif %}
     <hr>
     {% for e in entries %}
@@ -3898,9 +3902,17 @@ TEMPL_LIST = wrap("""
             {% endif %}
             <textarea name="body" rows="3" style="width:100%;margin:0" placeholder="What's on your mind?">{{ form_body or '' }}</textarea>
             
-            <div style="display:flex;gap:.75rem;justify-content:space-between;width:100%;">
-                <button style="width:">Add&nbsp;{{ kind.capitalize() }}</button>      
+            <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;width:100%;">
+                <button style="width:">Add&nbsp;{{ kind.capitalize() }}</button>
+                <input type="file" class="img-upload-input" accept="image/*" style="display:none">
+                <button type="button"
+                        class="img-upload-btn"
+                        style="background:#333;color:#FFF;border:1px solid #666;">
+                    Images
+                </button>
+                <span class="img-upload-status" style="font-size:.85em;color:#888;"></span>
                 {% if kind=='post' %}
+                <span style="margin-left:auto;"></span>
                 <button name="is_page" value="1"
                         style="background:#444;color:#ffffff;border:1px solid #888;">
                     Add Page
@@ -4897,9 +4909,16 @@ TEMPL_EDIT_ENTRY = wrap("""
     </div>
 
     <textarea name="body" rows="8" style="width:100%;">{{ e['body'] }}</textarea><br>
-    <div style="display:flex;gap:.75rem;justify-content:space-between;width:100%;">
+    <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;width:100%;margin-bottom:.5rem;">
         <button>Save</button>
-
+        <input type="file" class="img-upload-input" accept="image/*" style="display:none">
+        <button type="button"
+                class="img-upload-btn"
+                style="background:#333;color:#FFF;border:1px solid #666;">
+            Images
+        </button>
+        <span class="img-upload-status" style="font-size:.85em;color:#888;"></span>
+        <span style="flex:1;"></span>
         {% if e['kind']=='page' %}
             <button name="is_page" value="0"
                     style="background:#444;color:#ffffff;border:1px solid #888;">
