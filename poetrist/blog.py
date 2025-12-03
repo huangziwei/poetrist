@@ -178,6 +178,16 @@ IMAGE_MIMES = {
     "image/gif",
     "image/svg+xml",
 }
+UPLOAD_ICON_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 -3 32 32"
+     width="14" height="14"
+     fill="currentColor" stroke="currentColor"
+     preserveAspectRatio="xMidYMid"
+     aria-hidden="true" focusable="false">
+    <path d="M29.000,26.000 L3.000,26.000 C1.346,26.000 -0.000,24.654 -0.000,23.000 L-0.000,7.000 C-0.000,5.346 1.346,4.000 3.000,4.000 L7.381,4.000 L9.102,0.554 C9.270,0.214 9.617,0.000 9.996,0.000 L22.006,0.000 C22.385,0.000 22.731,0.214 22.901,0.554 L24.619,4.000 L29.000,4.000 C30.654,4.000 32.000,5.346 32.000,7.000 L32.000,23.000 C32.000,24.654 30.654,26.000 29.000,26.000 ZM30.000,7.000 C30.000,6.449 29.551,6.000 29.000,6.000 L24.000,6.000 C23.950,6.000 23.907,5.979 23.859,5.972 C23.788,5.961 23.717,5.955 23.649,5.929 C23.588,5.906 23.537,5.869 23.482,5.834 C23.428,5.801 23.373,5.773 23.326,5.729 C23.273,5.680 23.235,5.620 23.194,5.560 C23.166,5.520 23.127,5.491 23.105,5.446 L21.387,2.000 L10.615,2.000 L8.895,5.446 C8.848,5.541 8.785,5.623 8.715,5.695 C8.701,5.710 8.684,5.719 8.669,5.733 C8.597,5.798 8.518,5.851 8.432,5.892 C8.403,5.907 8.375,5.919 8.344,5.931 C8.234,5.971 8.120,5.999 8.002,6.000 C8.001,6.000 8.001,6.000 8.000,6.000 L3.000,6.000 C2.449,6.000 2.000,6.449 2.000,7.000 L2.000,23.000 C2.000,23.551 2.449,24.000 3.000,24.000 L29.000,24.000 C29.551,24.000 30.000,23.551 30.000,23.000 L30.000,7.000 ZM16.000,21.000 C12.140,21.000 9.000,17.860 9.000,14.000 C9.000,10.140 12.140,7.000 16.000,7.000 C19.860,7.000 23.000,10.140 23.000,14.000 C23.000,17.860 19.860,21.000 16.000,21.000 ZM16.000,9.000 C13.243,9.000 11.000,11.243 11.000,14.000 C11.000,16.757 13.243,19.000 16.000,19.000 C18.757,19.000 21.000,16.757 21.000,14.000 C21.000,11.243 18.757,9.000 16.000,9.000 Z"></path>
+</svg>
+"""
 
 
 def canon(k: str) -> str:  # helper: ^pg → progress
@@ -1915,6 +1925,11 @@ def _verbose_block(blk, uuid_):
     return "\n".join(p for p in parts if p)
 
 
+def upload_icon() -> Markup:
+    """Inline camera icon used on upload buttons."""
+    return Markup(UPLOAD_ICON_SVG)
+
+
 def _csrf_token() -> str:
     """One token per session (rotates when the cookie does)."""
     return session.get("csrf", "")
@@ -1932,6 +1947,7 @@ app.jinja_env.globals["external_icon"] = lambda: Markup("""
     <path d="M15 9v7H4V4h7V2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2
             2 0 0 0 2-2V9h-3z"/>
     </svg>""")
+app.jinja_env.globals["upload_icon"] = upload_icon
 app.jinja_env.globals["PAGE_DEFAULT"] = PAGE_DEFAULT
 app.jinja_env.globals["entry_tags"] = lambda eid: entry_tags(eid, db=get_db())
 app.jinja_env.globals["entry_projects"] = lambda eid: entry_projects(eid, db=get_db())
@@ -3493,8 +3509,10 @@ TEMPL_INDEX = wrap("""{% block body %}
                     <input type="file" class="img-upload-input" accept="image/*" style="display:none">
                     <button type="button"
                             class="img-upload-btn"
-                            style="background:#333;color:#FFF;border:1px solid #666;">
-                        Images
+                            aria-label="Upload images"
+                            title="Upload images"
+                            style="background:#333;color:#FFF;border:1px solid #666;display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;padding:5px 10px;">
+                        {{ upload_icon() }}
                     </button>
                     <span class="img-upload-status" style="font-size:.85em;color:#888;"></span>
                 {% endif %}
@@ -4078,8 +4096,10 @@ TEMPL_LIST = wrap("""
                     <input type="file" class="img-upload-input" accept="image/*" style="display:none">
                     <button type="button"
                             class="img-upload-btn"
-                            style="background:#333;color:#FFF;border:1px solid #666;">
-                        Images
+                            aria-label="Upload images"
+                            title="Upload images"
+                            style="background:#333;color:#FFF;border:1px solid #666;display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;padding:5px 10px;">
+                        {{ upload_icon() }}
                     </button>
                     <span class="img-upload-status" style="font-size:.85em;color:#888;"></span>
                 {% endif %}
@@ -5087,8 +5107,10 @@ TEMPL_EDIT_ENTRY = wrap("""
             <input type="file" class="img-upload-input" accept="image/*" style="display:none">
             <button type="button"
                     class="img-upload-btn"
-                    style="background:#333;color:#FFF;border:1px solid #666;">
-                Images
+                    aria-label="Upload images"
+                    title="Upload images"
+                    style="background:#333;color:#FFF;border:1px solid #666;display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;padding:5px 10px;">
+                {{ upload_icon() }}
             </button>
             <span class="img-upload-status" style="font-size:.85em;color:#888;"></span>
         {% endif %}
@@ -5900,8 +5922,10 @@ TEMPL_ITEM_DETAIL = wrap("""
         <button type="button"
                 class="cover-upload-btn"
                 data-upload-url="{{ url_for('upload_cover', verb=verb_slug, item_type=item['item_type'], slug=item['slug']) }}"
-                style="background:#333;color:#FFF;border:1px solid #666;">
-            Upload cover
+                aria-label="Upload cover image"
+                title="Upload cover image"
+                style="background:#333;color:#FFF;border:1px solid #666;display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;padding:5px 10px;">
+            {{ upload_icon() }}
         </button>
         <span class="cover-upload-status" style="font-size:.85em;color:#888;"></span>
         {% endif %}
