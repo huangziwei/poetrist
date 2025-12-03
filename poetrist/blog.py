@@ -5,6 +5,7 @@ A single-file minimal blog.
 
 import ipaddress
 import json
+import os
 import re
 import secrets
 import socket
@@ -40,6 +41,8 @@ from flask import (
 from itsdangerous import BadSignature, SignatureExpired, TimestampSigner
 from markdown.extensions import Extension
 from markupsafe import Markup
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 from webauthn import (
     generate_authentication_options,
     generate_registration_options,
@@ -55,6 +58,7 @@ from webauthn.helpers.structs import (
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash as verify_token
 from werkzeug.security import generate_password_hash as hash_token
+from werkzeug.utils import secure_filename
 
 ################################################################################
 # Imports & constants
@@ -63,6 +67,7 @@ from werkzeug.security import generate_password_hash as hash_token
 ROOT = Path(__file__).parent
 DB_FILE = ROOT / "blog.sqlite3"
 
+ENV_FILE = ROOT / ".env"
 SECRET_FILE = ROOT / ".secret_key"
 SECRET_KEY = (
     SECRET_FILE.read_text().strip() if SECRET_FILE.exists() else secrets.token_hex(32)
@@ -149,6 +154,29 @@ ALIASES = {
     "vb": "verb",
     "t": "title",
     "tt": "title",
+}
+
+R2_ENV_KEYS = (
+    "R2_ACCOUNT_ID",
+    "R2_ACCESS_KEY_ID",
+    "R2_SECRET_ACCESS_KEY",
+    "R2_BUCKET",
+    "R2_PUBLIC_BASE",
+    "R2_ENDPOINT",
+)
+R2_REQUIRED_KEYS = (
+    "R2_ACCOUNT_ID",
+    "R2_ACCESS_KEY_ID",
+    "R2_SECRET_ACCESS_KEY",
+    "R2_BUCKET",
+)
+UPLOAD_MAX_BYTES = 8 * 1024 * 1024  # cap uploads to 8 MiB
+IMAGE_MIMES = {
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "image/gif",
+    "image/svg+xml",
 }
 
 
@@ -1094,6 +1122,78 @@ def set_setting(key, value):
         (key, value),
     )
     db.commit()
+
+
+def _read_env_file() -> dict[str, str]:
+    env = {}
+    if not ENV_FILE.exists():
+        return env
+    for ln in ENV_FILE.read_text().splitlines():
+        ln = ln.strip()
+        if not ln or ln.startswith("#") or "=" not in ln:
+            continue
+        k, v = ln.split("=", 1)
+        env[k.strip()] = v.strip()
+    return env
+
+
+def _write_env_file(env: dict[str, str]) -> None:
+    if env:
+        lines = [f"{k}={v}" for k, v in sorted(env.items()) if v]
+        ENV_FILE.write_text("\n".join(lines) + "\n")
+    elif ENV_FILE.exists():
+        ENV_FILE.write_text("")
+    try:
+        ENV_FILE.chmod(0o600)
+    except OSError:
+        pass
+
+
+def merge_env(updates: dict[str, str]) -> dict[str, str]:
+    """Merge *updates* into both the process env and the .env file."""
+    env = _read_env_file()
+    changed = False
+    for k, v in updates.items():
+        if not v:
+            continue
+        if env.get(k) != v:
+            env[k] = v
+            changed = True
+        if os.environ.get(k) != v:
+            os.environ[k] = v
+    if changed:
+        _write_env_file(env)
+    return env
+
+
+def r2_config() -> dict[str, str]:
+    env_file = _read_env_file()
+    cfg = {k: (os.environ.get(k) or env_file.get(k) or "").strip() for k in R2_ENV_KEYS}
+    return {k: v for k, v in cfg.items() if v}
+
+
+def r2_is_configured(cfg: dict[str, str] | None = None) -> bool:
+    cfg = cfg or r2_config()
+    return all(cfg.get(k) for k in R2_REQUIRED_KEYS)
+
+
+def _r2_client(cfg: dict[str, str]):
+    endpoint = cfg.get("R2_ENDPOINT") or f"https://{cfg['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com"
+    return boto3.client(
+        "s3",
+        endpoint_url=endpoint,
+        region_name="auto",
+        aws_access_key_id=cfg["R2_ACCESS_KEY_ID"],
+        aws_secret_access_key=cfg["R2_SECRET_ACCESS_KEY"],
+    )
+
+
+def r2_object_url(cfg: dict[str, str], key: str) -> str:
+    base = cfg.get("R2_PUBLIC_BASE")
+    if base:
+        base = base.rstrip("/")
+        return f"{base}/{key.lstrip('/')}"
+    return f"https://{cfg['R2_BUCKET']}.{cfg['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com/{key.lstrip('/')}"
 
 
 def is_b64_image(k: str, v: str) -> bool:
@@ -2571,6 +2671,21 @@ def settings():
         )
         set_setting("page_size", size)
 
+        r2_updates = {}
+        for env_key, form_key in (
+            ("R2_ACCOUNT_ID", "r2_account_id"),
+            ("R2_ACCESS_KEY_ID", "r2_access_key_id"),
+            ("R2_SECRET_ACCESS_KEY", "r2_secret_access_key"),
+            ("R2_BUCKET", "r2_bucket"),
+            ("R2_PUBLIC_BASE", "r2_public_base"),
+            ("R2_ENDPOINT", "r2_endpoint"),
+        ):
+            raw = request.form.get(form_key, "").strip()
+            if raw:
+                r2_updates[env_key] = raw
+        if r2_updates:
+            merge_env(r2_updates)
+
         flash("Settings saved.")
         return redirect(settings_href())
 
@@ -2583,6 +2698,15 @@ def settings():
     slug_settings["tags"] = tags_slug()
     slug_settings["settings"] = settings_slug()
     verb_slugs = [(v, slug_settings.get(v, v)) for v in active_verb_list]
+    r2_cfg = r2_config()
+    r2_status = {
+        "account": bool(r2_cfg.get("R2_ACCOUNT_ID")),
+        "key": bool(r2_cfg.get("R2_ACCESS_KEY_ID")),
+        "secret": bool(r2_cfg.get("R2_SECRET_ACCESS_KEY")),
+        "bucket": bool(r2_cfg.get("R2_BUCKET")),
+        "public_base": bool(r2_cfg.get("R2_PUBLIC_BASE")),
+        "endpoint": bool(r2_cfg.get("R2_ENDPOINT")),
+    }
     return render_template_string(
         TEMPL_SETTINGS,
         site_name=get_setting("site_name", "po.etr.ist"),
@@ -2591,6 +2715,8 @@ def settings():
         title=get_setting("site_name", "po.etr.ist"),
         slug_settings=slug_settings,
         verb_slugs=verb_slugs,
+        r2_status=r2_status,
+        r2_configured=r2_is_configured(r2_cfg),
     )
 
 
@@ -2698,6 +2824,58 @@ TEMPL_SETTINGS = wrap("""
                     value="{{ get_setting('page_size', PAGE_DEFAULT) }}"
                     style="width:8rem">
             </label>
+        </fieldset>
+
+        <!-- ──────────── uploads ──────────── -->
+        <fieldset style="margin:0 0 1.5rem 0; border:0; padding:0">
+            <legend style="font-weight:bold; margin-bottom:.5rem;">Image uploads (Cloudflare R2)</legend>
+            <div style="font-size:.9em;color:#888;margin:.25rem 0 .75rem 0;">
+                Status:
+                {% if r2_configured %}
+                    <span style="color:{{ theme_color() }};">ready</span>
+                {% else %}
+                    missing required values
+                {% endif %}
+                · leave fields blank to keep existing values
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(12rem,1fr)); gap:.75rem;">
+                <label>
+                    <span style="font-size:.8em; color:#aaa">Account ID
+                        <small style="color:#777;">{% if r2_status.account %}saved{% else %}missing{% endif %}</small>
+                    </span><br>
+                    <input name="r2_account_id" autocomplete="off" placeholder="xxxxxxxxxxxxxxxxxxx" style="width:100%">
+                </label>
+                <label>
+                    <span style="font-size:.8em; color:#aaa">Access key ID
+                        <small style="color:#777;">{% if r2_status.key %}saved{% else %}missing{% endif %}</small>
+                    </span><br>
+                    <input name="r2_access_key_id" autocomplete="off" placeholder="K123..." style="width:100%">
+                </label>
+                <label>
+                    <span style="font-size:.8em; color:#aaa">Secret access key
+                        <small style="color:#777;">{% if r2_status.secret %}saved{% else %}missing{% endif %}</small>
+                    </span><br>
+                    <input type="password" name="r2_secret_access_key" autocomplete="off" placeholder="••••••••" style="width:100%">
+                </label>
+                <label>
+                    <span style="font-size:.8em; color:#aaa">Bucket
+                        <small style="color:#777;">{% if r2_status.bucket %}saved{% else %}missing{% endif %}</small>
+                    </span><br>
+                    <input name="r2_bucket" autocomplete="off" placeholder="poetrist-assets" style="width:100%">
+                </label>
+                <label>
+                    <span style="font-size:.8em; color:#aaa">Public base URL
+                        <small style="color:#777;">{% if r2_status.public_base %}saved{% else %}optional{% endif %}</small>
+                    </span><br>
+                    <input name="r2_public_base" autocomplete="off" placeholder="https://cdn.example.com" style="width:100%">
+                </label>
+                <label>
+                    <span style="font-size:.8em; color:#aaa">Endpoint override
+                        <small style="color:#777;">{% if r2_status.endpoint %}saved{% else %}optional{% endif %}</small>
+                    </span><br>
+                    <input name="r2_endpoint" autocomplete="off" placeholder="https://<account>.r2.cloudflarestorage.com" style="width:100%">
+                </label>
+            </div>
         </fieldset>
         <button style="margin-top:.5rem;">Save settings</button>
     </form>
@@ -2908,6 +3086,48 @@ TEMPL_SETTINGS = wrap("""
 """)
 
 
+@app.route("/upload-image", methods=["POST"])
+def upload_image():
+    login_required()
+
+    cfg = r2_config()
+    if not r2_is_configured(cfg):
+        return {"error": "Image uploads are not configured."}, 400
+
+    if "file" not in request.files:
+        return {"error": "No file received."}, 400
+
+    f = request.files["file"]
+    if not f.filename:
+        return {"error": "No file selected."}, 400
+
+    mime = (f.mimetype or "").lower()
+    if mime not in IMAGE_MIMES:
+        return {"error": "Only image uploads are allowed."}, 415
+
+    clen = request.content_length
+    if clen and clen > UPLOAD_MAX_BYTES:
+        return {"error": "File too large (8 MiB max)."}, 413
+
+    ext = Path(secure_filename(f.filename)).suffix.lower()
+    key = f"uploads/{utc_now().strftime('%Y/%m/%d')}/{uuid.uuid4().hex}{ext}"
+
+    try:
+        client = _r2_client(cfg)
+        f.stream.seek(0)
+        client.upload_fileobj(
+            f.stream,
+            cfg["R2_BUCKET"],
+            key,
+            ExtraArgs={"ContentType": mime},
+        )
+    except (BotoCoreError, ClientError):
+        app.logger.exception("R2 upload failed")
+        return {"error": "Upload failed – check R2 credentials."}, 502
+
+    return {"url": r2_object_url(cfg, key), "key": key}, 201
+
+
 ###############################################################################
 # Index + Listings
 ###############################################################################
@@ -3027,7 +3247,7 @@ def index():
 TEMPL_INDEX = wrap("""{% block body %}
     {% if session.get('logged_in') %}
         <hr style="margin:10px 0">
-        <form method="post"
+        <form method="post" id="quick-add-form"
               style="display:flex;
                      flex-direction:column;
                      gap:10px;
@@ -3039,8 +3259,70 @@ TEMPL_INDEX = wrap("""{% block body %}
                       rows="3"
                       style="width:100%;margin:0"
                       placeholder="What's on your mind?">{{ form_body or '' }}</textarea>
-            <button>Add&nbsp;Say</button>
+            <div style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;">
+                <button>Add&nbsp;Say</button>
+                <input type="file" id="img-upload-input" accept="image/*" style="display:none">
+                <button type="button"
+                        id="img-upload-btn"
+                        style="background:#333;color:{{ theme_color() }};border:1px solid #666;">
+                    Upload&nbsp;image
+                </button>
+                <span id="img-upload-status" style="font-size:.85em;color:#888;"></span>
+            </div>
         </form>
+        <script>
+        (() => {
+            const btn = document.getElementById('img-upload-btn');
+            const input = document.getElementById('img-upload-input');
+            const status = document.getElementById('img-upload-status');
+            const ta = document.querySelector('#quick-add-form textarea[name="body"]');
+            if (!btn || !input || !ta) return;
+
+            const csrf = document.querySelector('input[name="csrf"]')?.value || '';
+
+            btn.addEventListener('click', () => input.click());
+            input.addEventListener('change', async () => {
+                if (!input.files?.length) return;
+                const file = input.files[0];
+                status.textContent = 'Uploading...';
+
+                const fd = new FormData();
+                fd.append('file', file);
+                const headers = csrf ? {'X-CSRFToken': csrf} : {};
+
+                try {
+                    const res = await fetch('/upload-image', {
+                        method: 'POST',
+                        headers,
+                        body: fd,
+                    });
+                    const data = await res.json();
+                    if (!res.ok || !data?.url) {
+                        throw new Error(data?.error || 'Upload failed');
+                    }
+                    const alt = (file.name || 'image').replace(/\.[^.]+$/, '') || 'image';
+                    const snippet = `![${alt}](${data.url})`;
+                    insertSnippet(snippet + '\n');
+                    status.textContent = 'Inserted image link.';
+                } catch (err) {
+                    status.textContent = err?.message || 'Upload failed.';
+                } finally {
+                    input.value = '';
+                }
+            });
+
+            function insertSnippet(snippet) {
+                const start = ta.selectionStart || 0;
+                const end = ta.selectionEnd || 0;
+                const before = ta.value.slice(0, start);
+                const after = ta.value.slice(end);
+                ta.value = before + snippet + after;
+                const pos = before.length + snippet.length;
+                ta.setSelectionRange(pos, pos);
+                ta.focus();
+            }
+        })();
+        </script>
     {% endif %}
     <hr>
     {% for e in entries %}
