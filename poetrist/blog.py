@@ -170,7 +170,7 @@ R2_REQUIRED_KEYS = (
     "R2_SECRET_ACCESS_KEY",
     "R2_BUCKET",
 )
-UPLOAD_MAX_BYTES = 8 * 1024 * 1024  # cap uploads to 8 MiB
+UPLOAD_MAX_BYTES = 32 * 1024 * 1024  # cap uploads to 8 MiB
 IMAGE_MIMES = {
     "image/png",
     "image/jpeg",
