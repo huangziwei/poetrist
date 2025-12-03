@@ -3301,8 +3301,8 @@ TEMPL_INDEX = wrap("""{% block body %}
                         throw new Error(data?.error || 'Upload failed');
                     }
                     const alt = (file.name || 'image').replace(/\.[^.]+$/, '') || 'image';
-                    const snippet = `![${alt}](${data.url})`;
-                    insertSnippet(snippet + '\n');
+                    const snippet = `![${alt}](${data.url})\n`;
+                    insertSnippet(snippet);
                     status.textContent = 'Inserted image link.';
                 } catch (err) {
                     status.textContent = err?.message || 'Upload failed.';
