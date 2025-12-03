@@ -2005,6 +2005,7 @@ app.jinja_env.globals.update(
         "theme_presets": THEME_PRESETS,
         "tz_name": tz_name,
         "available_timezones": available_timezones,
+        "r2_enabled": r2_is_configured,
     }
 )
 
@@ -2153,7 +2154,7 @@ TEMPL_EPILOG = """
     </footer>
     <a href="#page-bottom" aria-label="Jump to footer" class="jump-btn jump-down">↓</a>
     <a href="#page-top" aria-label="Jump to top" class="jump-btn jump-up">↑</a>
-    {% if session.get('logged_in') %}
+    {% if session.get('logged_in') and r2_enabled() %}
     <script>
     (() => {
         const csrf = document.querySelector('input[name="csrf"]')?.value || '';
@@ -3321,13 +3322,15 @@ TEMPL_INDEX = wrap("""{% block body %}
                       placeholder="What's on your mind?">{{ form_body or '' }}</textarea>
             <div style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;">
                 <button>Add&nbsp;Say</button>
-                <input type="file" class="img-upload-input" accept="image/*" style="display:none">
-                <button type="button"
-                        class="img-upload-btn"
-                        style="background:#333;color:#FFF;border:1px solid #666;">
-                    Images
-                </button>
-                <span class="img-upload-status" style="font-size:.85em;color:#888;"></span>
+                {% if r2_enabled() %}
+                    <input type="file" class="img-upload-input" accept="image/*" style="display:none">
+                    <button type="button"
+                            class="img-upload-btn"
+                            style="background:#333;color:#FFF;border:1px solid #666;">
+                        Images
+                    </button>
+                    <span class="img-upload-status" style="font-size:.85em;color:#888;"></span>
+                {% endif %}
             </div>
         </form>
     {% endif %}
@@ -3904,13 +3907,15 @@ TEMPL_LIST = wrap("""
             
             <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;width:100%;">
                 <button style="width:">Add&nbsp;{{ kind.capitalize() }}</button>
-                <input type="file" class="img-upload-input" accept="image/*" style="display:none">
-                <button type="button"
-                        class="img-upload-btn"
-                        style="background:#333;color:#FFF;border:1px solid #666;">
-                    Images
-                </button>
-                <span class="img-upload-status" style="font-size:.85em;color:#888;"></span>
+                {% if r2_enabled() %}
+                    <input type="file" class="img-upload-input" accept="image/*" style="display:none">
+                    <button type="button"
+                            class="img-upload-btn"
+                            style="background:#333;color:#FFF;border:1px solid #666;">
+                        Images
+                    </button>
+                    <span class="img-upload-status" style="font-size:.85em;color:#888;"></span>
+                {% endif %}
                 {% if kind=='post' %}
                 <span style="margin-left:auto;"></span>
                 <button name="is_page" value="1"
@@ -4911,13 +4916,15 @@ TEMPL_EDIT_ENTRY = wrap("""
     <textarea name="body" rows="8" style="width:100%;">{{ e['body'] }}</textarea><br>
     <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;width:100%;margin-bottom:.5rem;">
         <button>Save</button>
-        <input type="file" class="img-upload-input" accept="image/*" style="display:none">
-        <button type="button"
-                class="img-upload-btn"
-                style="background:#333;color:#FFF;border:1px solid #666;">
-            Images
-        </button>
-        <span class="img-upload-status" style="font-size:.85em;color:#888;"></span>
+        {% if r2_enabled() %}
+            <input type="file" class="img-upload-input" accept="image/*" style="display:none">
+            <button type="button"
+                    class="img-upload-btn"
+                    style="background:#333;color:#FFF;border:1px solid #666;">
+                Images
+            </button>
+            <span class="img-upload-status" style="font-size:.85em;color:#888;"></span>
+        {% endif %}
         <span style="flex:1;"></span>
         {% if e['kind']=='page' %}
             <button name="is_page" value="0"
