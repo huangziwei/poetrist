@@ -1199,8 +1199,26 @@ def r2_object_url(cfg: dict[str, str], key: str) -> str:
     return f"https://{cfg['R2_BUCKET']}.{cfg['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com/{key.lstrip('/')}"
 
 
+def _is_urlish(val: str) -> bool:
+    val = val.strip().lower()
+    return val.startswith(("http://", "https://", "//"))
+
+
 def is_b64_image(k: str, v: str) -> bool:
-    return k.lower() in {"cover", "img", "poster"} and len(v) > 100
+    if k.lower() not in {"cover", "img", "poster"}:
+        return False
+    val = (v or "").strip()
+    if _is_urlish(val):
+        return False
+    if val.startswith("data:image/"):
+        return True
+    return len(val) > 100
+
+
+def is_url_image(k: str, v: str) -> bool:
+    if k.lower() not in {"cover", "img", "poster"}:
+        return False
+    return _is_urlish(v or "")
 
 
 # Slug helpers
@@ -2006,6 +2024,7 @@ app.jinja_env.globals.update(
         "tz_name": tz_name,
         "available_timezones": available_timezones,
         "r2_enabled": r2_is_configured,
+        "is_url_image": is_url_image,
     }
 )
 
@@ -2190,6 +2209,43 @@ TEMPL_EPILOG = """
                     const snippet = `![${alt}](${data.url})\n`;
                     insertSnippet(ta, snippet);
                     if (status) status.textContent = 'Inserted image link.';
+                } catch (err) {
+                    if (status) status.textContent = err?.message || 'Upload failed.';
+                } finally {
+                    input.value = '';
+                }
+            });
+        });
+
+        document.querySelectorAll('.cover-upload-btn').forEach(btn => {
+            const uploadUrl = btn.dataset.uploadUrl;
+            const form = btn.closest('form') || document;
+            const input = form.querySelector('.cover-upload-input');
+            const status = form.querySelector('.cover-upload-status');
+            if (!uploadUrl || !input) return;
+
+            btn.addEventListener('click', () => input.click());
+            input.addEventListener('change', async () => {
+                if (!input.files || !input.files.length) return;
+                const file = input.files[0];
+                if (status) status.textContent = 'Uploading...';
+
+                const fd = new FormData();
+                fd.append('file', file);
+                const headers = csrf ? {'X-CSRFToken': csrf} : {};
+
+                try {
+                    const res = await fetch(uploadUrl, {
+                        method: 'POST',
+                        headers,
+                        body: fd,
+                    });
+                    const data = await res.json();
+                    if (!res.ok || !data?.url) {
+                        throw new Error(data?.error || 'Upload failed');
+                    }
+                    if (status) status.textContent = 'Cover updated.';
+                    location.reload();
                 } catch (err) {
                     if (status) status.textContent = err?.message || 'Upload failed.';
                 } finally {
@@ -3187,6 +3243,73 @@ def upload_image():
         return {"error": "Upload failed – check R2 credentials."}, 502
 
     return {"url": r2_object_url(cfg, key), "key": key}, 201
+
+
+@app.route("/<verb>/<item_type>/<slug>/upload-cover", methods=["POST"])
+def upload_cover(verb, item_type, slug):
+    login_required()
+    cfg = r2_config()
+    if not r2_is_configured(cfg):
+        return {"error": "Image uploads are not configured."}, 400
+
+    verb = slug_to_kind(verb)
+    if verb not in VERB_KINDS:
+        abort(404)
+
+    db = get_db()
+    itm = db.execute(
+        "SELECT id, uuid FROM item WHERE slug=? AND item_type=?", (slug, item_type)
+    ).fetchone()
+    if not itm:
+        abort(404)
+
+    if "file" not in request.files:
+        return {"error": "No file received."}, 400
+    f = request.files["file"]
+    if not f.filename:
+        return {"error": "No file selected."}, 400
+
+    mime = (f.mimetype or "").lower()
+    if mime not in IMAGE_MIMES:
+        return {"error": "Only image uploads are allowed."}, 415
+
+    clen = request.content_length
+    if clen and clen > UPLOAD_MAX_BYTES:
+        return {"error": "File too large (8 MiB max)."}, 413
+
+    ext = Path(secure_filename(f.filename)).suffix.lower()
+    key = f"covers/{item_type}/{slug}/{itm['uuid']}-{uuid.uuid4().hex}{ext}"
+
+    try:
+        client = _r2_client(cfg)
+        f.stream.seek(0)
+        client.upload_fileobj(
+            f.stream,
+            cfg["R2_BUCKET"],
+            key,
+            ExtraArgs={"ContentType": mime},
+        )
+    except (BotoCoreError, ClientError):
+        app.logger.exception("R2 upload failed")
+        return {"error": "Upload failed – check R2 credentials."}, 502
+
+    url = r2_object_url(cfg, key)
+    # update or insert cover meta (preserve order if it existed)
+    cur = db.execute(
+        "SELECT ord FROM item_meta WHERE item_id=? AND k='cover'", (itm["id"],)
+    ).fetchone()
+    ord_val = cur["ord"] if cur else (
+        db.execute("SELECT COALESCE(MAX(ord),0)+1 AS o FROM item_meta WHERE item_id=?", (itm["id"],)).fetchone()["o"]
+    )
+    db.execute(
+        """INSERT INTO item_meta (item_id,k,v,ord)
+                VALUES (?,?,?,?)
+           ON CONFLICT(item_id,k) DO UPDATE SET v=excluded.v, ord=excluded.ord""",
+        (itm["id"], "cover", url, ord_val),
+    )
+    db.commit()
+
+    return {"url": url, "key": key}, 201
 
 
 ###############################################################################
@@ -5693,9 +5816,9 @@ TEMPL_ITEM_DETAIL = wrap("""
             list-style:none;padding:0;margin:0;font-size:.9em;color:#aaa;">
 
     {# ─────── cover column ─────── #}
-    {% for r in meta if is_b64_image(r.k, r.v) %}
+    {% for r in meta if is_b64_image(r.k, r.v) or is_url_image(r.k, r.v) %}
     <li style="float:left;margin:.65em .75rem .75rem 0;">
-        <img src="data:image/webp;base64,{{ r.v }}"
+        <img src="{% if is_b64_image(r.k, r.v) %}data:image/webp;base64,{{ r.v }}{% else %}{{ r.v }}{% endif %}"
              alt="{{ item.title }}"
              style="width:135px;max-width:100%;
                     border:1px solid #555;margin:0;">
@@ -5705,7 +5828,7 @@ TEMPL_ITEM_DETAIL = wrap("""
     {# ─────── details column ─────── #}
     <li style="flex:1;">                                           
         <ul style="list-style:none;padding:0;margin:0;">
-        {% for r in meta if not is_b64_image(r.k, r.v) %}
+        {% for r in meta if not is_b64_image(r.k, r.v) and not is_url_image(r.k, r.v) %}
             <li style="margin:.2em 0;">
                 <strong>{{ r.k|smartcap }}:</strong>
                 {{ r.v|mdinline }}
@@ -5720,6 +5843,16 @@ TEMPL_ITEM_DETAIL = wrap("""
 {% if session.get('logged_in') %}
 <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin:.35rem 0;">
     <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
+        {% if r2_enabled() %}
+        <input type="file" class="cover-upload-input" accept="image/*" style="display:none">
+        <button type="button"
+                class="cover-upload-btn"
+                data-upload-url="{{ url_for('upload_cover', verb=verb_slug, item_type=item['item_type'], slug=item['slug']) }}"
+                style="background:#333;color:#FFF;border:1px solid #666;">
+            Upload cover
+        </button>
+        <span class="cover-upload-status" style="font-size:.85em;color:#888;"></span>
+        {% endif %}
         <a href="{{ url_for('edit_item',
                         verb=verb_slug, item_type=item['item_type'], slug=item['slug']) }}">Edit</a>
         <a href="{{ url_for('delete_item',
