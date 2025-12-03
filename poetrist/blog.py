@@ -2186,35 +2186,55 @@ TEMPL_EPILOG = """
             if (!input || !ta) return;
 
             btn.addEventListener('click', () => input.click());
+            input.multiple = true;
+
+            btn.addEventListener('dragover', ev => {
+                ev.preventDefault();
+                btn.style.outline = '2px dashed #888';
+            });
+            btn.addEventListener('dragleave', () => {
+                btn.style.outline = '';
+            });
+            btn.addEventListener('drop', async ev => {
+                ev.preventDefault();
+                btn.style.outline = '';
+                if (!ev.dataTransfer?.files?.length) return;
+                await handleFiles([...ev.dataTransfer.files]);
+            });
+
             input.addEventListener('change', async () => {
                 if (!input.files || !input.files.length) return;
-                const file = input.files[0];
-                if (status) status.textContent = 'Uploading...';
-
-                const fd = new FormData();
-                fd.append('file', file);
-                const headers = csrf ? {'X-CSRFToken': csrf} : {};
-
-                try {
-                    const res = await fetch('/upload-image', {
-                        method: 'POST',
-                        headers,
-                        body: fd,
-                    });
-                    const data = await res.json();
-                    if (!res.ok || !data?.url) {
-                        throw new Error(data?.error || 'Upload failed');
-                    }
-                    const alt = (file.name || 'image').replace(/\.[^.]+$/, '') || 'image';
-                    const snippet = `![${alt}](${data.url})\n`;
-                    insertSnippet(ta, snippet);
-                    if (status) status.textContent = 'Inserted image link.';
-                } catch (err) {
-                    if (status) status.textContent = err?.message || 'Upload failed.';
-                } finally {
-                    input.value = '';
-                }
+                await handleFiles([...input.files]);
+                input.value = '';
             });
+
+            async function handleFiles(files) {
+                const headers = csrf ? {'X-CSRFToken': csrf} : {};
+                for (const file of files) {
+                    if (status) status.textContent = `Uploading ${file.name}...`;
+                    const fd = new FormData();
+                    fd.append('file', file);
+
+                    try {
+                        const res = await fetch('/upload-image', {
+                            method: 'POST',
+                            headers,
+                            body: fd,
+                        });
+                        const data = await res.json();
+                        if (!res.ok || !data?.url) {
+                            throw new Error(data?.error || 'Upload failed');
+                        }
+                        const alt = (file.name || 'image').replace(/\.[^.]+$/, '') || 'image';
+                        const snippet = `![${alt}](${data.url})\n`;
+                        insertSnippet(ta, snippet);
+                        if (status) status.textContent = 'Inserted image link.';
+                    } catch (err) {
+                        if (status) status.textContent = err?.message || 'Upload failed.';
+                        break;
+                    }
+                }
+            }
         });
 
         document.querySelectorAll('.cover-upload-btn').forEach(btn => {
@@ -2225,11 +2245,30 @@ TEMPL_EPILOG = """
             if (!uploadUrl || !input) return;
 
             btn.addEventListener('click', () => input.click());
+            input.multiple = false;
+
+            btn.addEventListener('dragover', ev => {
+                ev.preventDefault();
+                btn.style.outline = '2px dashed #888';
+            });
+            btn.addEventListener('dragleave', () => {
+                btn.style.outline = '';
+            });
+            btn.addEventListener('drop', async ev => {
+                ev.preventDefault();
+                btn.style.outline = '';
+                if (!ev.dataTransfer?.files?.length) return;
+                await handleCover(ev.dataTransfer.files[0]);
+            });
+
             input.addEventListener('change', async () => {
                 if (!input.files || !input.files.length) return;
-                const file = input.files[0];
-                if (status) status.textContent = 'Uploading...';
+                await handleCover(input.files[0]);
+                input.value = '';
+            });
 
+            async function handleCover(file) {
+                if (status) status.textContent = 'Uploading...';
                 const fd = new FormData();
                 fd.append('file', file);
                 const headers = csrf ? {'X-CSRFToken': csrf} : {};
@@ -2248,10 +2287,8 @@ TEMPL_EPILOG = """
                     location.reload();
                 } catch (err) {
                     if (status) status.textContent = err?.message || 'Upload failed.';
-                } finally {
-                    input.value = '';
                 }
-            });
+            }
         });
 
         function insertSnippet(ta, snippet) {
