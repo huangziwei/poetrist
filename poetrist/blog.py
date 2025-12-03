@@ -3335,8 +3335,15 @@ def upload_cover(verb, item_type, slug):
     cur = db.execute(
         "SELECT ord FROM item_meta WHERE item_id=? AND k='cover'", (itm["id"],)
     ).fetchone()
-    ord_val = cur["ord"] if cur else (
-        db.execute("SELECT COALESCE(MAX(ord),0)+1 AS o FROM item_meta WHERE item_id=?", (itm["id"],)).fetchone()["o"]
+    ord_val = (
+        cur["ord"]
+        if cur
+        else (
+            db.execute(
+                "SELECT COALESCE(MAX(ord),0)+1 AS o FROM item_meta WHERE item_id=?",
+                (itm["id"],),
+            ).fetchone()["o"]
+        )
     )
     db.execute(
         """INSERT INTO item_meta (item_id,k,v,ord)
@@ -5844,9 +5851,17 @@ TEMPL_ITEM_DETAIL = wrap("""
 <hr>
 {% set _dates = meta | selectattr('k', 'equalto', 'date') | map(attribute='v') | list %}
 {% set _year  = _dates[0][:4] if _dates else '' %}
-<h2 style="margin-top:0">
-    {{ item['title'] }}{% if _year %} ({{ _year }}){% endif %}
-</h2>
+<div style="margin-top:0;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
+    <h2 style="margin:0;min-width:0;flex:1 1 auto;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;">
+        <span>{{ item['title'] }}{% if _year %} ({{ _year }}){% endif %}</span>
+        {% if rating_value and not session.get('logged_in') %}
+            <span aria-label="Score {{ rating_value }} of 5"
+                style="display:inline-flex;align-items:center;color:{{ theme_color() }};font-size:1.2rem;letter-spacing:1px;white-space:nowrap;">
+                {{ "★" * rating_value }}
+            </span>
+        {% endif %}
+    </h2>
+</div>
             
 {% if meta %}
 <ul  style="display:flex;align-items:flex-start;gap:1rem;         
@@ -5969,14 +5984,6 @@ TEMPL_ITEM_DETAIL = wrap("""
     {% endif %}
 </div>
 {% endif %}
-
-{% if rating_value and not session.get('logged_in') %}
-<div aria-label="Score {{ rating_value }} of 5"
-     style="margin:.35rem 0;display:inline-flex;align-items:center;color:{{ theme_color() }};font-size:1.5rem;">
-    <span style="letter-spacing:1px;">{{ "★" * rating_value }}</span>
-</div>
-{% endif %}
-           
 
 {% if session.get('logged_in') %}
 <hr style="margin:1.25rem 0 .75rem 0">
