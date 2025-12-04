@@ -76,7 +76,7 @@ SECRET_FILE.write_text(SECRET_KEY)
 TOKEN_LEN = 48
 signer = TimestampSigner(SECRET_KEY, salt="login-token")
 
-SLUG_DEFAULTS = {"say": "says", "post": "posts", "pin": "pins"}
+SLUG_DEFAULTS = {"say": "says", "photo": "photos", "post": "posts", "pin": "pins"}
 VERB_MAP = {
     "read": [
         "to-read",
@@ -206,7 +206,9 @@ def normalize_genre(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip()).lower()
 
 
-KINDS = ("say", "post", "pin") + tuple(VERB_MAP.keys()) + ("page",)
+PHOTO_TAGS = ("photo", "fujifilm")
+PHOTO_TAG_SET = set(PHOTO_TAGS)
+KINDS = ("say", "photo", "post", "pin") + tuple(VERB_MAP.keys()) + ("page",)
 PAGE_DEFAULT = 100
 RFC2822_FMT = "%a, %d %b %Y %H:%M:%S %z"
 _TOKEN_CHARS = r"0-9A-Za-z\u0080-\uFFFF_"
@@ -830,6 +832,10 @@ def get_db():
         g.db.execute("PRAGMA foreign_keys = ON;")
         g.db.row_factory = sqlite3.Row
         g.db.create_function("strip_caret", 1, strip_caret)
+        g.photo_kind_normalized = False
+    if not getattr(g, "photo_kind_normalized", False):
+        normalize_photo_kinds(db=g.db)
+        g.photo_kind_normalized = True
     return g.db
 
 
@@ -875,7 +881,7 @@ def init_db():
             created_at  TEXT NOT NULL,
             updated_at  TEXT,                           
             slug        TEXT UNIQUE NOT NULL,
-            kind        TEXT NOT NULL                  -- say | post | pin | page
+            kind        TEXT NOT NULL                  -- say | photo | post | pin | page
         );
 
         ------------------------------------------------------------
@@ -1111,6 +1117,15 @@ def infer_kind(title, link):
     if link and title:
         return "pin"
     return "post"
+
+
+def apply_photo_kind(kind: str, tags: set[str]) -> str:
+    """
+    Treat #photo-like tags as a hint to promote plain says to the photo kind.
+    """
+    if kind not in ("say", "photo"):
+        return kind
+    return "photo" if tags & PHOTO_TAG_SET else "say"
 
 
 def current_username() -> str:
@@ -1365,6 +1380,55 @@ def sync_tags(entry_id: int, tags: set[str], *, db):
         "DELETE FROM tag WHERE id NOT IN (SELECT DISTINCT tag_id FROM entry_tag)"
     )
     db.commit()
+
+
+def normalize_photo_kinds(*, db):
+    """
+    Keep entry.kind in sync with photo-tag hints:
+    - promote says that carry a photo tag → photo
+    - demote photos that lost all photo tags → say
+    """
+    if not PHOTO_TAGS:
+        return
+
+    placeholders = ",".join("?" * len(PHOTO_TAGS))
+    tag_params = PHOTO_TAGS
+
+    try:
+        promote = db.execute(
+            f"""
+            UPDATE entry
+               SET kind='photo'
+             WHERE kind='say'
+               AND id IN (
+                   SELECT et.entry_id
+                     FROM entry_tag et
+                     JOIN tag t ON t.id = et.tag_id
+                    WHERE LOWER(t.name) IN ({placeholders})
+               )
+            """,
+            tag_params,
+        )
+
+        demote = db.execute(
+            f"""
+            UPDATE entry
+               SET kind='say'
+             WHERE kind='photo'
+               AND id NOT IN (
+                   SELECT et.entry_id
+                     FROM entry_tag et
+                     JOIN tag t ON t.id = et.tag_id
+                    WHERE LOWER(t.name) IN ({placeholders})
+               )
+            """,
+            tag_params,
+        )
+    except sqlite3.OperationalError:
+        return
+
+    if promote.rowcount or demote.rowcount:
+        db.commit()
 
 
 def parse_projects(text: str) -> tuple[str, list[dict[str, str]]]:
@@ -2100,6 +2164,9 @@ html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Rob
                 <a href="{{ url_for('by_kind', slug=kind_to_slug('say')) }}"
                 {% if kind=='say' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
                 Says</a>&nbsp;&nbsp;
+                <a href="{{ url_for('by_kind', slug=kind_to_slug('photo')) }}"
+                {% if kind=='photo' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
+                Photos</a>&nbsp;&nbsp;
                 <a href="{{ url_for('by_kind', slug=kind_to_slug('post')) }}"
                 {% if kind=='post' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
                 Posts</a>&nbsp;&nbsp;
@@ -3395,7 +3462,12 @@ def index():
                 for err in errors:
                     flash(err)
             else:
-                kind = blocks[0]["verb"] if blocks else infer_kind("", "")
+                tags = extract_tags(body_parsed)
+                kind = (
+                    blocks[0]["verb"]
+                    if blocks
+                    else apply_photo_kind(infer_kind("", ""), tags)
+                )
                 now_dt = utc_now()
                 now = now_dt.isoformat(timespec="seconds")
                 slug = now_dt.strftime("%Y%m%d%H%M%S")
@@ -3407,7 +3479,7 @@ def index():
                 )
                 entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-                sync_tags(entry_id, extract_tags(body_parsed), db=db)
+                sync_tags(entry_id, tags, db=db)
 
                 for idx, blk in enumerate(blocks):
                     item_id, slug_i, uuid_i = get_or_create_item(
@@ -3680,9 +3752,11 @@ def by_kind(slug):
             for err in errors:
                 flash(err)
         else:
+            tags = extract_tags(body_parsed)
+            entry_kind = apply_photo_kind(entry_kind, tags)
             missing = []
 
-            if entry_kind == "say":
+            if entry_kind in ("say", "photo"):
                 if not body_input:
                     missing.append("body")
 
@@ -3721,7 +3795,7 @@ def by_kind(slug):
                     ),
                 )
                 entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-                sync_tags(entry_id, extract_tags(body_parsed), db=db)
+                sync_tags(entry_id, tags, db=db)
                 if entry_kind == "post":
                     sync_projects(entry_id, project_specs, db=db)
                 else:
@@ -4068,6 +4142,7 @@ def by_kind(slug):
         project_filters=project_filters_list,
         selected_project=selected_project,
         total_posts=total_posts,
+        photo_tags=PHOTO_TAGS,
     )
 
 
@@ -4198,6 +4273,42 @@ TEMPL_LIST = wrap("""
                 <p>No {{ heading.lower() }} yet.</p>
             {% endfor %}
             </ul>
+        {% elif kind == 'photo' %}
+            <p style="margin:0 0 1rem 0; font-size:1rem; color:#aaa;">
+                Photos are auto-filed when a say carries one of: {% for t in photo_tags %}#{{ t }}{% if not loop.last %}, {% endif %}{% endfor %}.
+            </p>
+            <div class="photo-grid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:1rem; align-items:start;">
+                {% for e in rows %}
+                <article class="h-entry" style="background:#2a2a2a; border:1px solid #333; border-radius:8px; padding:1rem; display:flex; flex-direction:column; gap:.75rem;">
+                    <div class="e-content" style="margin:0;">{{ e['body']|md(e['slug']) }}</div>
+                    <div style="display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; font-size:1rem; color:#aaa;">
+                        <a class="u-url u-uid" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
+                           style="text-decoration:none; color:inherit;">
+                            <time class="dt-published" datetime="{{ e['created_at'] }}">{{ e['created_at']|ts }}</time>
+                        </a>
+                        {% set tags = entry_tags(e.id) %}
+                        {% if tags %}
+                            <span aria-hidden="true">•</span>
+                            {% for tag in tags %}
+                                <a class="p-category" rel="tag" href="{{ tags_href(tag) }}"
+                                   style="text-decoration:none; color:{{ theme_color() }}; border-bottom:0.1px dotted currentColor;">
+                                    #{{ tag }}
+                                </a>{% if not loop.last %}<span aria-hidden="true"> / </span>{% endif %}
+                            {% endfor %}
+                        {% endif %}
+                        {% if session.get('logged_in') %}
+                            <span aria-hidden="true">•</span>
+                            <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
+                               style="text-decoration:none;">Edit</a>
+                            <a href="{{ url_for('delete_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
+                               style="text-decoration:none;">Delete</a>
+                        {% endif %}
+                    </div>
+                </article>
+                {% else %}
+                    <p>No {{ heading.lower() }} yet.</p>
+                {% endfor %}
+            </div>
         {% else %}
             {% for e in rows %}
             <article class="h-entry" style="{% if not loop.last %}padding-bottom:1.5em; border-bottom:1px solid #444;{% endif %}">
@@ -4960,6 +5071,9 @@ def edit_entry(kind_slug, entry_slug):
                 TEMPL_EDIT_ENTRY, e=filled, title=get_setting("site_name", "po.etr.ist")
             )
 
+        tags = extract_tags(body_parsed)
+        new_kind = apply_photo_kind(new_kind, tags)
+
         # 2️⃣  Synchronise entry_item & item_meta
         db.execute("DELETE FROM entry_item WHERE entry_id=?", (row["id"],))
         for idx, blk in enumerate(blocks):
@@ -4999,7 +5113,7 @@ def edit_entry(kind_slug, entry_slug):
         )
 
         # 4️⃣  Tags
-        sync_tags(row["id"], extract_tags(body_parsed), db=db)
+        sync_tags(row["id"], tags, db=db)
         if new_kind == "post":
             sync_projects(row["id"], project_specs, db=db)
         else:
@@ -5637,6 +5751,8 @@ def _render_tags_rss(tag_list: str):
     if not tags:
         abort(404)
 
+    db = get_db()
+
     q_marks = ",".join("?" * len(tags))
     sql = f"""SELECT e.* FROM entry e
               JOIN entry_tag et ON et.entry_id = e.id
@@ -5644,7 +5760,7 @@ def _render_tags_rss(tag_list: str):
               WHERE t.name IN ({q_marks})
               GROUP BY e.id HAVING COUNT(DISTINCT t.name)=?
               ORDER BY e.created_at DESC LIMIT 50"""
-    rows = get_db().execute(sql, (*tags, len(tags))).fetchall()
+    rows = db.execute(sql, (*tags, len(tags))).fetchall()
 
     pretty = " + ".join(tags)
     xml = _rss(
