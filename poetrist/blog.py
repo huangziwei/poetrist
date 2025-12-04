@@ -2157,6 +2157,10 @@ html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Rob
 .nav-auth{grid-area:auth;justify-content:flex-end;align-self:flex-start;}
 .nav-search{grid-area:search;justify-content:flex-end;}
 .nav-auth,.nav-search{display:flex;}
+.nav-row a{display:inline-block;padding-bottom:.08em;text-decoration:underline;text-decoration-color:transparent;text-decoration-thickness:2px;text-underline-offset:.2em;border-bottom:none;}
+.nav-row a:hover,.nav-row a:focus-visible{color:#c9c9c9;text-decoration-color:#c9c9c9;}
+nav a[aria-current=page]{color:#c9c9c9;text-decoration-color:currentColor;text-decoration-thickness:2px;text-underline-offset:.2em;}
+nav a[aria-current=page]:hover,nav a[aria-current=page]:focus-visible{text-decoration-color:currentColor;}
 .nav-search form{margin:0;width:auto;}
 .nav-search input{width:13rem;font-size:.8em;padding:.2em .6em;margin:0;}
 @media (max-width:720px){
@@ -2193,19 +2197,19 @@ html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Rob
     <nav aria-label="Primary" class="nav-primary">
         <div class="nav-row nav-primary-links">
             <a href="{{ url_for('by_kind', slug=kind_to_slug('say')) }}"
-            {% if kind=='say' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
+            {% if kind=='say' %}aria-current="page"{% endif %}>
             Says</a>
             <a href="{{ url_for('by_kind', slug=kind_to_slug('post')) }}"
-            {% if kind=='post' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
+            {% if kind=='post' %}aria-current="page"{% endif %}>
             Posts</a>
             <a href="{{ url_for('by_kind', slug=kind_to_slug('pin')) }}"
-            {% if kind=='pin' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
+            {% if kind=='pin' %}aria-current="page"{% endif %}>
             Pins</a>
             <a href="{{ url_for('by_kind', slug=kind_to_slug('photo')) }}"
-            {% if kind=='photo' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
+            {% if kind=='photo' %}aria-current="page"{% endif %}>
             Photos</a>
             <a href="{{ tags_href() }}"
-            {% if kind=='tags' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
+            {% if kind=='tags' %}aria-current="page"{% endif %}>
             Tags</a>
         </div>
         {% if active_verbs() %}
@@ -2213,7 +2217,7 @@ html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Rob
             {% for v in active_verbs() %}
                 {% set label = {'read':'Read','watch':'Watch','listen':'Listen','play':'Play','visit':'Visit', "use": "Use"}[v] %}
                 <a href="{{ url_for('by_kind', slug=kind_to_slug(v)) }}"
-                {% if verb==v %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
+                {% if verb==v %}aria-current="page"{% endif %}>
                 {{ label }}</a>
             {% endfor %}
         </div>
@@ -2221,11 +2225,11 @@ html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Rob
         <div class="nav-row nav-auth">
             {% if session.get('logged_in') %}
                 <a href="{{ settings_href() }}"
-                {% if request.path==settings_href() %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
+                {% if request.path==settings_href() %}aria-current="page"{% endif %}>
                 Settings</a>
             {% else %}
                 <a href="{{ url_for('login') }}"
-                {% if request.endpoint=='login' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
+                {% if request.endpoint=='login' %}aria-current="page"{% endif %}>
                 Login</a>
             {% endif %}
         </div>
@@ -2266,14 +2270,14 @@ TEMPL_EPILOG = """
             {% if has_today() %}
                 <a href="{{ url_for('today') }}"
                 {% if request.endpoint == 'today' %}
-                    style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"
+                    aria-current="page"
                 {% endif %}>
                 Today</a>&nbsp;
             {% endif %}
             {% for p in nav_pages() %}
                 <a href="{{ '/' ~ p['slug'] }}"
                 {% if request.path|trim('/') == p['slug'] %}
-                    style="text-decoration:none;border-bottom:.33rem solid #aaa;align-items:center;" aria-current="page"
+                    aria-current="page"
                 {% endif %}>
                     {{ p['title'] }}</a>{% if not loop.last %}&nbsp;{% endif %}
             {% endfor %}
