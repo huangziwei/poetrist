@@ -3768,8 +3768,8 @@ def by_kind(slug):
             for err in errors:
                 flash(err)
         else:
-            tags = extract_tags(body_parsed)
-            entry_kind = apply_photo_kind(entry_kind, tags)
+            tag_set = extract_tags(body_parsed)
+            entry_kind = apply_photo_kind(entry_kind, tag_set)
             missing = []
 
             if entry_kind in ("say", "photo"):
@@ -3811,7 +3811,7 @@ def by_kind(slug):
                     ),
                 )
                 entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-                sync_tags(entry_id, tags, db=db)
+                sync_tags(entry_id, tag_set, db=db)
                 if entry_kind == "post":
                     sync_projects(entry_id, project_specs, db=db)
                 else:
