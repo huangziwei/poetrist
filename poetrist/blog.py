@@ -236,6 +236,10 @@ _BACKREF_RE = re.compile(r"<a[^>]+footnote-backref[^>]*>.*?</a>", re.S)
 _SUP_RE = re.compile(
     r'<sup id="fnref:([^"]+)"><a class="footnote-ref" href="#fn:[^"]+"[^>]*>.*?</a></sup>'
 )
+IMG_TAG_RE = re.compile(
+    r'<img\b(?=[^>]*\bsrc=["\'](?P<src>[^"\']+)["\'])(?=[^>]*\balt=["\'](?P<alt>[^"\']*)["\'])?[^>]*>',
+    re.I,
+)
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
 try:
@@ -706,6 +710,18 @@ def render_markdown_html(
     finally:
         g._absolute_links = prev_abs
     return _postprocess_html(html, theme_col=theme_color())
+
+
+def entry_images(body: str | None, slug: str | None = None) -> list[dict[str, str]]:
+    """Return list of image dicts (src, alt) from rendered markdown/html."""
+    html = render_markdown_html(body, source_slug=slug)
+    imgs: list[dict[str, str]] = []
+    for m in IMG_TAG_RE.finditer(html):
+        src = m.group("src")
+        if not src:
+            continue
+        imgs.append({"src": src, "alt": m.group("alt") or ""})
+    return imgs
 
 
 class EntryEmbedPreprocessor(markdown.preprocessors.Preprocessor):
@@ -4126,6 +4142,19 @@ def by_kind(slug):
     pages = list(range(1, total_pages + 1))
 
     back_map = backlinks(entries, db=db)
+    photo_cards: list[dict[str, str]] = []
+    if kind == "photo":
+        for e in entries:
+            for img in entry_images(e["body"], e["slug"]):
+                photo_cards.append(
+                    {
+                        "src": img["src"],
+                        "alt": img["alt"],
+                        "slug": e["slug"],
+                        "kind": e["kind"],
+                    }
+                )
+
     return render_template_string(
         TEMPL_LIST,
         rows=entries,
@@ -4143,6 +4172,7 @@ def by_kind(slug):
         selected_project=selected_project,
         total_posts=total_posts,
         photo_tags=PHOTO_TAGS,
+        photo_cards=photo_cards,
     )
 
 
@@ -4274,37 +4304,13 @@ TEMPL_LIST = wrap("""
             {% endfor %}
             </ul>
         {% elif kind == 'photo' %}
-            <p style="margin:0 0 1rem 0; font-size:1rem; color:#aaa;">
-                Photos are auto-filed when a say carries one of: {% for t in photo_tags %}#{{ t }}{% if not loop.last %}, {% endif %}{% endfor %}.
-            </p>
-            <div class="photo-grid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:1rem; align-items:start;">
-                {% for e in rows %}
-                <article class="h-entry" style="background:#2a2a2a; border:1px solid #333; border-radius:8px; padding:1rem; display:flex; flex-direction:column; gap:.75rem;">
-                    <div class="e-content" style="margin:0;">{{ e['body']|md(e['slug']) }}</div>
-                    <div style="display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; font-size:1rem; color:#aaa;">
-                        <a class="u-url u-uid" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
-                           style="text-decoration:none; color:inherit;">
-                            <time class="dt-published" datetime="{{ e['created_at'] }}">{{ e['created_at']|ts }}</time>
-                        </a>
-                        {% set tags = entry_tags(e.id) %}
-                        {% if tags %}
-                            <span aria-hidden="true">•</span>
-                            {% for tag in tags %}
-                                <a class="p-category" rel="tag" href="{{ tags_href(tag) }}"
-                                   style="text-decoration:none; color:{{ theme_color() }}; border-bottom:0.1px dotted currentColor;">
-                                    #{{ tag }}
-                                </a>{% if not loop.last %}<span aria-hidden="true"> / </span>{% endif %}
-                            {% endfor %}
-                        {% endif %}
-                        {% if session.get('logged_in') %}
-                            <span aria-hidden="true">•</span>
-                            <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
-                               style="text-decoration:none;">Edit</a>
-                            <a href="{{ url_for('delete_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
-                               style="text-decoration:none;">Delete</a>
-                        {% endif %}
-                    </div>
-                </article>
+            <div class="photo-grid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:.75rem; align-items:start;">
+                {% for p in photo_cards %}
+                    <a class="h-entry" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(p.kind), entry_slug=p.slug) }}"
+                       style="display:block; background:#111; border:1px solid #333; border-radius:8px; overflow:hidden;">
+                        <img class="u-photo" src="{{ p.src }}" alt="{{ p.alt or 'Photo' }}"
+                             style="width:100%; height:100%; display:block; object-fit:cover; aspect-ratio:1;">
+                    </a>
                 {% else %}
                     <p>No {{ heading.lower() }} yet.</p>
                 {% endfor %}
