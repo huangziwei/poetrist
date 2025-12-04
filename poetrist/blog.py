@@ -2180,15 +2180,15 @@ html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Rob
                 <a href="{{ url_for('by_kind', slug=kind_to_slug('say')) }}"
                 {% if kind=='say' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
                 Says</a>&nbsp;&nbsp;
-                <a href="{{ url_for('by_kind', slug=kind_to_slug('photo')) }}"
-                {% if kind=='photo' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
-                Photos</a>&nbsp;&nbsp;
                 <a href="{{ url_for('by_kind', slug=kind_to_slug('post')) }}"
                 {% if kind=='post' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
                 Posts</a>&nbsp;&nbsp;
                 <a href="{{ url_for('by_kind', slug=kind_to_slug('pin')) }}"
                 {% if kind=='pin' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
                 Pins</a>&nbsp;&nbsp;
+                <a href="{{ url_for('by_kind', slug=kind_to_slug('photo')) }}"
+                {% if kind=='photo' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
+                Photos</a>&nbsp;&nbsp;
                 <a href="{{ tags_href() }}"
                 {% if kind=='tags' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
                 Tags</a>&nbsp;&nbsp;
