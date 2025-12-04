@@ -206,7 +206,7 @@ def normalize_genre(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip()).lower()
 
 
-PHOTO_TAGS = ("photo", "fujifilm")
+PHOTO_TAGS = ("photo", "photos")
 PHOTO_TAG_SET = set(PHOTO_TAGS)
 KINDS = ("say", "photo", "post", "pin") + tuple(VERB_MAP.keys()) + ("page",)
 PAGE_DEFAULT = 100
@@ -2308,7 +2308,7 @@ TEMPL_EPILOG = """
                         if (!res.ok || !data?.url) {
                             throw new Error(data?.error || 'Upload failed');
                         }
-                        const alt = (file.name || 'image').replace(/\.[^.]+$/, '') || 'image';
+                        const alt = (file.name || 'image').replace(/\\.[^.]+$/, '') || 'image';
                         const snippet = `![${alt}](${data.url})\n`;
                         insertSnippet(ta, snippet);
                         if (status) status.textContent = 'Inserted image link.';
