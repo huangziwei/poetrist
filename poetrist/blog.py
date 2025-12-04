@@ -2148,6 +2148,23 @@ TEMPL_PROLOG = """
 html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif}body{font-size:1.8rem;line-height:1.618;max-width:38em;margin:auto;color:#c9c9c9;background-color:#222222;padding:13px}@media (max-width:684px){body{font-size:1.75rem}pre,pre>code{white-space:pre-wrap;word-break:break-word;}}@media (max-width:382px)@media (max-width:560px){.meta {flex:0 0 100%;order:1;margin-left:0;text-align:left;}}{body{font-size:1.35rem}}h1,h2,h3,h4,h5,h6{line-height:1.1;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;font-weight:700;margin-top:3rem;margin-bottom:1.5rem;overflow-wrap:break-word;word-wrap:break-word;-ms-word-break:break-all;word-break:break-word}h1{font-size:2.35em}h2{font-size:1.7em}h3{font-size:1.55em}h4{font-size:1.4em}h5{font-size:1.25em}h6{font-size:1.1em}p{margin-top:0px;margin-bottom:2.5rem;hyphens:auto}small,sub,sup{font-size:75%}hr{border-color:#ffffff}a{color:#ffffff;text-decoration:underline;text-decoration-color:transparent;text-decoration-thickness:2px;text-underline-offset:0.18em;}a:hover{color:#c9c9c9;text-decoration-color:#c9c9c9;}p>a{color:inherit;text-decoration:underline dotted #ffffff;text-decoration-thickness:1px;text-underline-offset:0.18em;}p>a:hover{text-decoration-color:#c9c9c9;}}ul{padding-left:1.4em;margin-top:0px;margin-bottom:2.5rem}li{margin-bottom:0.4em}blockquote{margin-left:0px;margin-right:0px;padding-left:1em;padding-top:0.8em;padding-bottom:0.8em;padding-right:0.8em;border-left:5px solid #ffffff;margin-bottom:2.5rem;background-color:#4a4a4a}blockquote p{margin-bottom:0.75em}img,video{height:auto;max-width:100%;margin-top:0px;margin-bottom:0px}pre{background-color:#4a4a4a;display:block;padding:1em;overflow-x:auto;margin-top:0px;margin-bottom:2.5rem;font-size:0.9em}code,kbd,samp{font-size:0.9em;padding:0 0.5em;background-color:#4a4a4a;white-space:pre-wrap;word-break:break-word}pre>code{padding:0;background-color:transparent;white-space:pre;font-size:1em}table{text-align:justify;width:100%;border-collapse:collapse;margin-bottom:2rem}td,th{padding:0.5em;border-bottom:1px solid #4a4a4a}input,textarea{border:1px solid #c9c9c9}input:focus,textarea:focus{border:1px solid #ffffff}textarea{width:100%}.button,button,input[type=submit],input[type=reset],input[type=button],input[type=file]::file-selector-button{display:inline-block;padding:5px 10px;text-align:center;text-decoration:none;white-space:nowrap;background-color:#ffffff;color:#222222;border-radius:1px;border:1px solid #ffffff;cursor:pointer;box-sizing:border-box}.button[disabled],button[disabled],input[type=submit][disabled],input[type=reset][disabled],input[type=button][disabled],input[type=file]::file-selector-button[disabled]{cursor:default;opacity:0.5}.button:hover,button:hover,input[type=submit]:hover,input[type=reset]:hover,input[type=button]:hover,input[type=file]::file-selector-button:hover{background-color:#c9c9c9;color:#222222;outline:0}.button:focus-visible,button:focus-visible,input[type=submit]:focus-visible,input[type=reset]:focus-visible,input[type=button]:focus-visible,input[type=file]::file-selector-button:focus-visible{outline-style:solid;outline-width:2px}textarea,select,input{color:#c9c9c9;padding:6px 10px;margin-bottom:10px;background-color:#4a4a4a;border:1px solid #4a4a4a;border-radius:4px;box-shadow:none;box-sizing:border-box}textarea:focus,select:focus,input:focus{border:1px solid #ffffff;outline:0}input[type=checkbox]:focus{outline:1px dotted #ffffff}label,legend,fieldset{display:block;margin-bottom:0.5rem;font-weight:600}p>math[display="block"]{display: block;margin: 1em 0}math[display="block"]:not(:first-child){margin-top: 1.2em}sup.fn{position:relative;display:inline-block;}sup.fn>.fn-ref,.fn-badge{position:relative;z-index:2500;display:inline-flex;align-items:center;justify-content:center;min-width:1rem;max-width:25em;padding:0.2em .4em;min-height:1.5rem;margin:0 0.25em;vertical-align:top;border-radius:.75em;white-space:normal;background:var(--fn-badge-bg,#666); color:#fff;font-size:.65em;line-height:1;cursor:pointer;transition:background .2s ease;text-decoration:none;}sup.fn>.fn-ref:hover{background:var(--fn-badge-bg-hover,#888);text-decoration:none !important;}.fn-popup{position:fixed;left:50%; bottom:0;transform:translate(-50%,100%);width:90vw;max-width:60rem; z-index:3000;max-height:40vh; overflow:auto;background:#222; color:#fff; line-height:1.45;padding:1rem 1.25rem;border:1px solid #444;transition:transform .25s ease;will-change:transform;}.fn-overlay{position:fixed; inset:0;background:transparent;opacity:0; visibility:hidden; pointer-events:none;transition:opacity .25s ease;touch-action:none;-webkit-tap-highlight-color:transparent;z-index:2000}sup.fn .fn-toggle:checked + .fn-ref + .fn-popup{transform:translate(-50%,0);box-shadow:0 -4px 12px rgba(0,0,0,.4);}sup.fn .fn-toggle:checked ~ .fn-overlay{opacity:1; visibility:visible; pointer-events:auto}.math-scroll{overflow-x:auto;overflow-y:hidden;max-width:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}.jump-btn{position:fixed;bottom:1.25rem;right:1.25rem;width:3rem;height:3rem;display:flex;align-items:center;justify-content:center;font-size:1.5rem;line-height:1;border-radius:50%;background:#aaa;color:#000;text-decoration:none;border-bottom:none;box-shadow:0 2px 6px rgba(0,0,0,.3);z-index:1000;opacity:.15;transition:opacity .3s}.jump-btn:hover{opacity:.8;text-decoration:none}.jump-up{display:none}#page-bottom:target~.jump-up{display:flex}#page-bottom:target~.jump-down{display:none}#page-top:target~.jump-down{display:flex}#page-top:target~.jump-up{display:none}a.fn-badge,a.fn-badge:hover,a.fn-badge:focus{border-bottom:none !important;text-decoration:none !important}.entry-embed{border:1px solid #444;border-radius:6px;padding:1rem;margin:1.5rem 0;background:#2a2a2a}.entry-embed__body{margin-top:.5rem}.entry-embed__footer{color:#aaa;font-size:.75em;display:flex;align-items:center;gap:.35rem;flex-wrap:wrap;margin-top:.25rem}.entry-embed__footer a{color:inherit;text-decoration:none;border-bottom:0.1px dotted currentColor}.entry-embed__pill{display:inline-block;padding:.1em .6em;margin-right:.4em;background:#444;color:#fff;border-radius:1em;font-size:.75em;text-transform:capitalize;vertical-align:middle;line-height:1.6}.entry-embed--error{border-color:#b33;background:#331414;color:#f9c0c0}
 .skip-link{position:absolute;left:-999px;top:auto;width:1px;height:1px;overflow:hidden}
 .skip-link:focus{left:1.5rem;top:1.5rem;width:auto;height:auto;padding:.5rem .85rem;background:#fff;color:#000;border-radius:.25rem;z-index:1100;text-decoration:none;border-bottom:none}
+/* Primary nav layout */
+.nav-primary{margin-bottom:1rem;display:grid;grid-template-columns:1fr auto;grid-template-areas:"primary auth" "secondary search";align-items:flex-start;column-gap:1.5rem;row-gap:.35rem;font-size:.9em;}
+.nav-row{display:flex;align-items:center;gap:1.25rem;flex-wrap:nowrap;white-space:nowrap;overflow-x:auto;padding-bottom:2px;-webkit-overflow-scrolling:touch;}
+.nav-row::-webkit-scrollbar{display:none;}
+.nav-primary-links{grid-area:primary;}
+.nav-secondary-links{grid-area:secondary;}
+.nav-auth{grid-area:auth;justify-content:flex-end;align-self:flex-start;}
+.nav-search{grid-area:search;justify-content:flex-end;}
+.nav-auth,.nav-search{display:flex;}
+.nav-search form{margin:0;width:auto;}
+.nav-search input{width:13rem;font-size:.8em;padding:.2em .6em;margin:0;}
+@media (max-width:720px){
+.nav-primary{grid-template-columns:1fr auto;grid-template-areas:"primary auth" "secondary secondary" "search search";}
+.nav-search{justify-content:flex-start;}
+.nav-search form{width:100%;}
+.nav-search input{width:100%;}
+}
 </style>
 <body>
 <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -2173,57 +2190,49 @@ html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Rob
 {%- endmacro %}
 <div class="container h-feed" style="max-width: 60rem; margin: 3rem auto;">
     <h1 id="page-top" style="margin-top:0;"><a href="{{ url_for('index') }}" style="color:{{ theme_color() }};">{{title or 'po.etr.ist'}}</a></h1>
-    <nav aria-label="Primary" style="margin-bottom:1rem;display:flex;align-items:flex-end;font-size:.9em;">
-        <!-- LEFT : two stacked rows -->
-        <div style="display:flex; flex-direction:column; gap:.25rem;">
-            <div>
-                <a href="{{ url_for('by_kind', slug=kind_to_slug('say')) }}"
-                {% if kind=='say' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
-                Says</a>&nbsp;&nbsp;
-                <a href="{{ url_for('by_kind', slug=kind_to_slug('post')) }}"
-                {% if kind=='post' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
-                Posts</a>&nbsp;&nbsp;
-                <a href="{{ url_for('by_kind', slug=kind_to_slug('pin')) }}"
-                {% if kind=='pin' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
-                Pins</a>&nbsp;&nbsp;
-                <a href="{{ url_for('by_kind', slug=kind_to_slug('photo')) }}"
-                {% if kind=='photo' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
-                Photos</a>&nbsp;&nbsp;
-                <a href="{{ tags_href() }}"
-                {% if kind=='tags' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
-                Tags</a>&nbsp;&nbsp;
-            </div>
-            {% if active_verbs() %}
-            <div>
-                {% for v in active_verbs() %}
-                    {% set label = {'read':'Read','watch':'Watch','listen':'Listen','play':'Play','visit':'Visit', "use": "Use"}[v] %}
-                    <a href="{{ url_for('by_kind', slug=kind_to_slug(v)) }}"
-                    {% if verb==v %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
-                    {{ label }}</a>{% if not loop.last %}&nbsp;&nbsp;{% endif %}
-                {% endfor %}
-            </div>
+    <nav aria-label="Primary" class="nav-primary">
+        <div class="nav-row nav-primary-links">
+            <a href="{{ url_for('by_kind', slug=kind_to_slug('say')) }}"
+            {% if kind=='say' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
+            Says</a>
+            <a href="{{ url_for('by_kind', slug=kind_to_slug('post')) }}"
+            {% if kind=='post' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
+            Posts</a>
+            <a href="{{ url_for('by_kind', slug=kind_to_slug('pin')) }}"
+            {% if kind=='pin' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
+            Pins</a>
+            <a href="{{ url_for('by_kind', slug=kind_to_slug('photo')) }}"
+            {% if kind=='photo' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
+            Photos</a>
+            <a href="{{ tags_href() }}"
+            {% if kind=='tags' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
+            Tags</a>
+        </div>
+        {% if active_verbs() %}
+        <div class="nav-row nav-secondary-links">
+            {% for v in active_verbs() %}
+                {% set label = {'read':'Read','watch':'Watch','listen':'Listen','play':'Play','visit':'Visit', "use": "Use"}[v] %}
+                <a href="{{ url_for('by_kind', slug=kind_to_slug(v)) }}"
+                {% if verb==v %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
+                {{ label }}</a>
+            {% endfor %}
+        </div>
+        {% endif %}
+        <div class="nav-row nav-auth">
+            {% if session.get('logged_in') %}
+                <a href="{{ settings_href() }}"
+                {% if request.path==settings_href() %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
+                Settings</a>
+            {% else %}
+                <a href="{{ url_for('login') }}"
+                {% if request.endpoint=='login' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
+                Login</a>
             {% endif %}
         </div>
-
-        <!-- RIGHT : two stacked rows (auth button, search) -->
-        <div style="margin-left:auto; display:flex; flex-direction:column; gap:.25rem;align-items:flex-end;">
-            <div style="white-space:nowrap;">
-                {% if session.get('logged_in') %}
-                    <a href="{{ settings_href() }}"
-                    {% if request.path==settings_href() %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
-                    Settings</a>
-                {% else %}
-                    <a href="{{ url_for('login') }}"
-                    {% if request.endpoint=='login' %}style="text-decoration:none;border-bottom:.33rem solid #aaa;" aria-current="page"{% endif %}>
-                    Login</a>
-                {% endif %}
-            </div>
-            <div>
-                <form action="{{ url_for('search') }}" method="get" style="margin:0;">
-                    <input type="search" name="q" aria-label="Search entries" placeholder="Search" value="{{ request.args.get('q','') }}"
-                        style="width:13rem;font-size:.8em; padding:.2em .6em; margin:0;">
-                </form>
-            </div>
+        <div class="nav-row nav-search">
+            <form action="{{ url_for('search') }}" method="get">
+                <input type="search" name="q" aria-label="Search entries" placeholder="Search" value="{{ request.args.get('q','') }}">
+            </form>
         </div>
     </nav>
     <a class="p-author h-card u-url" href="{{ url_for('index') }}" rel="me" style="display:none;">
