@@ -4104,6 +4104,52 @@ def by_kind(slug):
             title=get_setting("site_name", "po.etr.ist"),
         )
 
+    if kind == "photo":
+        # derive photo page size from configured page_size, but force a 3-wide grid
+        ps_raw = page_size()
+        per_photos = max(12, (ps_raw // 3) * 3 or 3)
+        all_entries = db.execute(
+            "SELECT * FROM entry WHERE kind='photo' ORDER BY created_at DESC"
+        ).fetchall()
+        all_cards: list[dict[str, str]] = []
+        for e in all_entries:
+            for img in entry_images(e["body"], e["slug"]):
+                all_cards.append(
+                    {
+                        "src": img["src"],
+                        "alt": img["alt"],
+                        "slug": e["slug"],
+                        "kind": e["kind"],
+                    }
+                )
+
+        total_cards = len(all_cards)
+        total_pages = (total_cards + per_photos - 1) // per_photos
+        start = (page - 1) * per_photos
+        end = start + per_photos
+        photo_cards = all_cards[start:end]
+        pages = list(range(1, total_pages + 1))
+
+        return render_template_string(
+            TEMPL_LIST,
+            rows=[],
+            pages=pages,
+            page=page,
+            heading=(kind or "").capitalize() + "s",
+            kind=kind,
+            username=current_username(),
+            title=get_setting("site_name", "po.etr.ist"),
+            form_title=form_title,
+            form_link=form_link,
+            form_body=form_body,
+            backlinks={},
+            project_filters=[],
+            selected_project="",
+            total_posts=None,
+            photo_tags=PHOTO_TAGS,
+            photo_cards=photo_cards,
+        )
+
     project_filters_list = []
     selected_project = request.args.get("project", "").strip().lower()
     total_posts = None
@@ -4142,18 +4188,6 @@ def by_kind(slug):
     pages = list(range(1, total_pages + 1))
 
     back_map = backlinks(entries, db=db)
-    photo_cards: list[dict[str, str]] = []
-    if kind == "photo":
-        for e in entries:
-            for img in entry_images(e["body"], e["slug"]):
-                photo_cards.append(
-                    {
-                        "src": img["src"],
-                        "alt": img["alt"],
-                        "slug": e["slug"],
-                        "kind": e["kind"],
-                    }
-                )
 
     return render_template_string(
         TEMPL_LIST,
@@ -4172,7 +4206,7 @@ def by_kind(slug):
         selected_project=selected_project,
         total_posts=total_posts,
         photo_tags=PHOTO_TAGS,
-        photo_cards=photo_cards,
+        photo_cards=[],
     )
 
 
