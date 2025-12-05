@@ -4138,6 +4138,20 @@ def by_kind(slug):
             title=get_setting("site_name", "po.etr.ist"),
         )
 
+    project_filters_list = []
+    selected_project = request.args.get("project", "").strip().lower()
+    selected_site = link_host(request.args.get("from", "").strip())
+    selected_photo_tag = (request.args.get("tag", "") or "").strip().lower()
+    total_posts = None
+    site_filters: list[dict[str, str]] = []
+    total_pins = None
+    total_photos = None
+    photo_tag_filters: list[dict[str, str | int | bool]] = []
+    project_join = ""
+    project_where = ""
+    site_where = ""
+    params: list[str] = [kind]
+
     if kind == "photo":
         # derive photo page size from configured page_size, but force a 3-wide grid
         ps_raw = page_size()
@@ -4145,23 +4159,56 @@ def by_kind(slug):
         all_entries = db.execute(
             "SELECT * FROM entry WHERE kind='photo' ORDER BY created_at DESC"
         ).fetchall()
-        all_cards: list[dict[str, str]] = []
-        for e in all_entries:
-            for img in entry_images(e["body"], e["slug"]):
-                all_cards.append(
-                    {
-                        "src": img["src"],
-                        "alt": img["alt"],
-                        "slug": e["slug"],
-                        "kind": e["kind"],
-                    }
-                )
 
-        total_cards = len(all_cards)
+        tag_counts: dict[str, int] = defaultdict(int)
+        all_cards: list[dict[str, str]] = []
+        filtered_cards: list[dict[str, str]] = []
+
+        for e in all_entries:
+            tags = [t.lower() for t in entry_tags(e["id"], db=db)]
+            imgs = entry_images(e["body"], e["slug"])
+            for img in imgs:
+                for t in tags:
+                    tag_counts[t] += 1
+            all_cards.extend(
+                {
+                    "src": img["src"],
+                    "alt": img["alt"],
+                    "slug": e["slug"],
+                    "kind": e["kind"],
+                    "tags": tags,
+                }
+                for img in imgs
+            )
+            if selected_photo_tag and selected_photo_tag not in tags:
+                continue
+            filtered_cards.extend(
+                {
+                    "src": img["src"],
+                    "alt": img["alt"],
+                    "slug": e["slug"],
+                    "kind": e["kind"],
+                }
+                for img in imgs
+            )
+
+        photo_tag_filters = [
+            {
+                "tag": t,
+                "cnt": c,
+                "active": t == selected_photo_tag,
+                "href": url_for("by_kind", slug=kind_to_slug("photo"), tag=t),
+            }
+            for t, c in sorted(tag_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        ]
+
+        cards = filtered_cards if selected_photo_tag else all_cards
+        total_cards = len(cards)
+        total_photos = len(all_cards)
         total_pages = (total_cards + per_photos - 1) // per_photos
         start = (page - 1) * per_photos
         end = start + per_photos
-        photo_cards = all_cards[start:end]
+        photo_cards = cards[start:end]
         pages = list(range(1, total_pages + 1))
 
         return render_template_string(
@@ -4180,20 +4227,14 @@ def by_kind(slug):
             project_filters=[],
             selected_project="",
             total_posts=None,
-            photo_tags=PHOTO_TAGS,
+            photo_tags=photo_tag_filters,
+            selected_photo_tag=selected_photo_tag,
+            total_photos=total_photos,
             photo_cards=photo_cards,
+            site_filters=[],
+            selected_site="",
+            total_pins=None,
         )
-
-    project_filters_list = []
-    selected_project = request.args.get("project", "").strip().lower()
-    selected_site = link_host(request.args.get("from", "").strip())
-    total_posts = None
-    site_filters: list[dict[str, str]] = []
-    total_pins = None
-    project_join = ""
-    project_where = ""
-    site_where = ""
-    params: list[str] = [kind]
 
     if kind == "post":
         project_filters_list = project_filters(db=db)
@@ -4273,7 +4314,9 @@ def by_kind(slug):
         selected_project=selected_project,
         selected_site=selected_site,
         total_posts=total_posts,
-        photo_tags=PHOTO_TAGS,
+        photo_tags=photo_tag_filters,
+        selected_photo_tag=selected_photo_tag,
+        total_photos=total_photos,
         photo_cards=[],
         site_filters=site_filters,
         total_pins=total_pins,
@@ -4408,6 +4451,46 @@ TEMPL_LIST = wrap("""
             {% endfor %}
             </ul>
         {% elif kind == 'photo' %}
+            {% if photo_tags %}
+            <div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem; margin-bottom:.75rem;">
+                <a href="{{ url_for('by_kind', slug=kind_to_slug('photo')) }}"
+                   style="text-decoration:none !important;
+                          border-bottom:none!important;
+                          display:inline-flex;
+                          margin:.15rem 0;
+                          padding:.15rem .6rem;
+                          border-radius:1rem;
+                          white-space:nowrap;
+                          font-size:.8em;
+                          {% if not selected_photo_tag %}
+                              background:{{ theme_color() }}; color:#000;
+                          {% else %}
+                              background:#444;   color:{{ theme_color() }};
+                          {% endif %}">
+                    All
+                    <sup style="font-size:.5em;">{{ total_photos }}</sup>
+                </a>
+                {% for t in photo_tags %}
+                <a href="{{ t.href }}"
+                   style="text-decoration:none !important;
+                          border-bottom:none!important;
+                          display:inline-flex;
+                          margin:.15rem 0;
+                          padding:.15rem .6rem;
+                          border-radius:1rem;
+                          white-space:nowrap;
+                          font-size:.8em;
+                          {% if t.active %}
+                              background:{{ theme_color() }}; color:#000;
+                          {% else %}
+                              background:#444;   color:{{ theme_color() }};
+                          {% endif %}">
+                    #{{ t.tag }}
+                    <sup style="font-size:.5em;">{{ t.cnt }}</sup>
+                </a>
+                {% endfor %}
+            </div>
+            {% endif %}
             <div class="photo-grid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:.75rem; align-items:start;">
                 {% for p in photo_cards %}
                     <a class="h-entry" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(p.kind), entry_slug=p.slug) }}"
