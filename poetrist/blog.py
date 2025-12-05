@@ -4480,23 +4480,6 @@ TEMPL_LIST = wrap("""
                 </details>
 
                 <div class="more-panel" style="grid-column:1 / span 2;">
-                    <a href="{{ url_for('by_kind', slug=kind_to_slug('pin')) }}"
-                       style="text-decoration:none !important;
-                              border-bottom:none!important;
-                              display:inline-flex;
-                              margin:.15rem 0;
-                              padding:.15rem .6rem;
-                              border-radius:1rem;
-                              white-space:nowrap;
-                              font-size:.8em;
-                              {% if not selected_site %}
-                                  background:{{ theme_color() }}; color:#000;
-                              {% else %}
-                                  background:#444;   color:{{ theme_color() }};
-                              {% endif %}">
-                        All
-                        <sup style="font-size:.5em;">{{ total_pins }}</sup>
-                    </a>
                     {% for s in site_filters if not s.active %}
                     <a href="{{ s.href }}"
                        style="text-decoration:none !important;
