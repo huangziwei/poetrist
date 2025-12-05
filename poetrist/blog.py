@@ -4168,10 +4168,10 @@ def by_kind(slug):
         filtered_cards: list[dict[str, str]] = []
 
         for e in all_entries:
-            tags = [t.lower() for t in entry_tags(e["id"], db=db)]
+            entry_tags_lower = [t.lower() for t in entry_tags(e["id"], db=db)]
             imgs = entry_images(e["body"], e["slug"])
             for img in imgs:
-                for t in tags:
+                for t in entry_tags_lower:
                     if t in PHOTO_TAG_SET:
                         continue
                     tag_counts[t] += 1
@@ -4181,11 +4181,11 @@ def by_kind(slug):
                     "alt": img["alt"],
                     "slug": e["slug"],
                     "kind": e["kind"],
-                    "tags": tags,
+                    "tags": entry_tags_lower,
                 }
                 for img in imgs
             )
-            if selected_photo_tag and selected_photo_tag not in tags:
+            if selected_photo_tag and selected_photo_tag not in entry_tags_lower:
                 continue
             filtered_cards.extend(
                 {
