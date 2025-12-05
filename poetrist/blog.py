@@ -4142,6 +4142,8 @@ def by_kind(slug):
     selected_project = request.args.get("project", "").strip().lower()
     selected_site = link_host(request.args.get("from", "").strip())
     selected_photo_tag = (request.args.get("tag", "") or "").strip().lower()
+    if selected_photo_tag in PHOTO_TAG_SET:
+        selected_photo_tag = ""
     total_posts = None
     site_filters: list[dict[str, str]] = []
     total_pins = None
@@ -4169,6 +4171,8 @@ def by_kind(slug):
             imgs = entry_images(e["body"], e["slug"])
             for img in imgs:
                 for t in tags:
+                    if t in PHOTO_TAG_SET:
+                        continue
                     tag_counts[t] += 1
             all_cards.extend(
                 {
@@ -4452,43 +4456,80 @@ TEMPL_LIST = wrap("""
             </ul>
         {% elif kind == 'photo' %}
             {% if photo_tags %}
-            <div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem; margin-bottom:.75rem;">
-                <a href="{{ url_for('by_kind', slug=kind_to_slug('photo')) }}"
-                   style="text-decoration:none !important;
-                          border-bottom:none!important;
-                          display:inline-flex;
-                          margin:.15rem 0;
-                          padding:.15rem .6rem;
-                          border-radius:1rem;
-                          white-space:nowrap;
-                          font-size:.8em;
-                          {% if not selected_photo_tag %}
-                              background:{{ theme_color() }}; color:#000;
-                          {% else %}
-                              background:#444;   color:{{ theme_color() }};
-                          {% endif %}">
-                    All
-                    <sup style="font-size:.5em;">{{ total_photos }}</sup>
-                </a>
-                {% for t in photo_tags %}
-                <a href="{{ t.href }}"
-                   style="text-decoration:none !important;
-                          border-bottom:none!important;
-                          display:inline-flex;
-                          margin:.15rem 0;
-                          padding:.15rem .6rem;
-                          border-radius:1rem;
-                          white-space:nowrap;
-                          font-size:.8em;
-                          {% if t.active %}
-                              background:{{ theme_color() }}; color:#000;
-                          {% else %}
-                              background:#444;   color:{{ theme_color() }};
-                          {% endif %}">
-                    #{{ t.tag }}
-                    <sup style="font-size:.5em;">{{ t.cnt }}</sup>
-                </a>
-                {% endfor %}
+            <style>
+            .photo-tag-grid details.more-toggle + .more-panel{display:none;}
+            .photo-tag-grid details.more-toggle[open] + .more-panel{display:flex;flex-wrap:wrap;gap:.25rem .5rem;margin-top:.35rem;grid-column:1 / span 2;}
+            </style>
+            {% set active_photo = (photo_tags|selectattr('active')|list|first) %}
+            <div class="photo-tag-grid" style="display:grid; grid-template-columns:1fr auto; grid-template-rows:auto auto; column-gap:.75rem; row-gap:.35rem; align-items:start; margin-bottom:.75rem;">
+                <div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
+                    <a href="{{ url_for('by_kind', slug=kind_to_slug('photo')) }}"
+                       style="text-decoration:none !important;
+                              border-bottom:none!important;
+                              display:inline-flex;
+                              margin:.15rem 0;
+                              padding:.15rem .6rem;
+                              border-radius:1rem;
+                              white-space:nowrap;
+                              font-size:.8em;
+                              {% if not selected_photo_tag %}
+                                  background:{{ theme_color() }}; color:#000;
+                              {% else %}
+                                  background:#444;   color:{{ theme_color() }};
+                              {% endif %}">
+                        All
+                        <sup style="font-size:.5em;">{{ total_photos }}</sup>
+                    </a>
+                    {% if active_photo %}
+                    <a href="{{ active_photo.href }}"
+                       style="text-decoration:none !important;
+                              border-bottom:none!important;
+                              display:inline-flex;
+                              margin:.15rem 0;
+                              padding:.15rem .6rem;
+                              border-radius:1rem;
+                              white-space:nowrap;
+                              font-size:.8em;
+                              background:{{ theme_color() }}; color:#000;">
+                        #{{ active_photo.tag }}
+                        <sup style="font-size:.5em;">{{ active_photo.cnt }}</sup>
+                    </a>
+                    {% endif %}
+                </div>
+                <details class="more-toggle" style="justify-self:end;">
+                    <summary style="list-style:none;
+                                    display:inline-flex;
+                                    align-items:center;
+                                    gap:.25rem;
+                                    margin:0;
+                                    padding:.15rem .6rem;
+                                    border-radius:1rem;
+                                    border:1px solid #555;
+                                    background:#333;
+                                    color:{{ theme_color() }};
+                                    font-size:.8em;
+                                    cursor:pointer;">
+                        Filter
+                        <span aria-hidden="true" style="font-size:.75em;">▾</span>
+                    </summary>
+                </details>
+                <div class="more-panel" style="grid-column:1 / span 2;">
+                    {% for t in photo_tags if not t.active %}
+                    <a href="{{ t.href }}"
+                       style="text-decoration:none !important;
+                              border-bottom:none!important;
+                              display:inline-flex;
+                              margin:.15rem 0;
+                              padding:.15rem .6rem;
+                              border-radius:1rem;
+                              white-space:nowrap;
+                              font-size:.8em;
+                              background:#444;   color:{{ theme_color() }};">
+                        #{{ t.tag }}
+                        <sup style="font-size:.5em;">{{ t.cnt }}</sup>
+                    </a>
+                    {% endfor %}
+                </div>
             </div>
             {% endif %}
             <div class="photo-grid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:.75rem; align-items:start;">
