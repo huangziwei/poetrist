@@ -2169,7 +2169,7 @@ nav a[aria-current=page]{color:#c9c9c9;text-decoration-color:currentColor;text-d
 nav a[aria-current=page]:hover,nav a[aria-current=page]:focus-visible{text-decoration-color:currentColor;}
 .nav-search form{margin:0;width:auto;}
 .nav-search input{width:13rem;font-size:.8em;padding:.2em .6em;margin:0;}
-.pin-host{font-size:.9em;color:#888;margin-left:.35em;white-space:nowrap;}
+.pin-host{font-size:.75em;color:#888;margin-left:.35em;white-space:nowrap;}
 .pin-host a{color:inherit;text-decoration:none;border-bottom:0.1px dotted currentColor;}
 .pin-host a:hover,.pin-host a:focus-visible{color:#c9c9c9;text-decoration-color:currentColor;}
 @media (max-width:720px){
@@ -4245,6 +4245,36 @@ def pins_by_site(pin_slug: str, site_host: str):
         abort(404)
 
     db = get_db()
+    site_rows = db.execute(
+        """
+        SELECT link_host(link) AS host, COUNT(*) AS cnt
+          FROM entry
+         WHERE kind='pin' AND link IS NOT NULL
+      GROUP BY host
+        HAVING host!=''
+      ORDER BY cnt DESC, host ASC
+        """
+    ).fetchall()
+
+    site_filters = [
+        {
+            "host": r["host"],
+            "cnt": r["cnt"],
+            "href": url_for(
+                "pins_by_site", pin_slug=kind_to_slug("pin"), site_host=r["host"]
+            ),
+            "active": r["host"] == host,
+        }
+        for r in site_rows
+        if r["host"]
+    ]
+
+    if not any(s["active"] for s in site_filters):
+        abort(404)
+
+    total_pins = db.execute(
+        "SELECT COUNT(*) AS c FROM entry WHERE kind='pin'"
+    ).fetchone()["c"]
     try:
         page = max(int(request.args.get("page", 1)), 1)
     except (TypeError, ValueError):
@@ -4285,6 +4315,8 @@ def pins_by_site(pin_slug: str, site_host: str):
         backlinks=back_map,
         username=current_username(),
         kind="pin",
+        site_filters=site_filters,
+        total_pins=total_pins,
     )
 
 
@@ -4510,7 +4542,83 @@ TEMPL_LIST = wrap("""
 TEMPL_PIN_SITE = wrap("""
 {% block body %}
 <hr>
-<h2 style="margin-top:0;">Pins from {{ host }}</h2>
+<style>
+.pin-site-grid details.more-toggle + .more-panel{display:none;}
+.pin-site-grid details.more-toggle[open] + .more-panel{display:flex;flex-wrap:wrap;gap:.25rem .5rem;margin-top:.35rem;grid-column:1 / span 2;}
+</style>
+<div class="pin-site-grid" style="display:grid; grid-template-columns:1fr auto; grid-template-rows:auto auto; column-gap:.75rem; row-gap:.35rem; align-items:start; margin-bottom:.75rem;">
+    {% set active_site = (site_filters|selectattr('active')|list|first) %}
+    <div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
+        {% if active_site %}
+        <a href="{{ active_site.href }}"
+           style="text-decoration:none !important;
+                  border-bottom:none!important;
+                  display:inline-flex;
+                  margin:.15rem 0;
+                  padding:.15rem .6rem;
+                  border-radius:1rem;
+                  white-space:nowrap;
+                  font-size:.8em;
+                  background:{{ theme_color() }}; color:#000;">
+            {{ active_site.host }}
+            <sup style="font-size:.5em;">{{ active_site.cnt }}</sup>
+        </a>
+        {% endif %}
+    </div>
+    <details class="more-toggle" style="justify-self:end;">
+        <summary style="list-style:none;
+                        display:inline-flex;
+                        align-items:center;
+                        gap:.25rem;
+                        margin:0;
+                        padding:.15rem .6rem;
+                        border-radius:1rem;
+                        border:1px solid #555;
+                        background:#333;
+                        color:{{ theme_color() }};
+                        font-size:.8em;
+                        cursor:pointer;">
+            More
+            <span aria-hidden="true" style="font-size:.75em;">▾</span>
+        </summary>
+    </details>
+
+    <div class="more-panel" style="grid-column:1 / span 2;">
+        <a href="{{ url_for('by_kind', slug=kind_to_slug('pin')) }}"
+           style="text-decoration:none !important;
+                  border-bottom:none!important;
+                  display:inline-flex;
+                  margin:.15rem 0;
+                  padding:.15rem .6rem;
+                  border-radius:1rem;
+                  white-space:nowrap;
+                  font-size:.8em;
+                  background:#444; color:{{ theme_color() }};">
+            All
+            <sup style="font-size:.5em;">{{ total_pins }}</sup>
+        </a>
+        {% for s in site_filters %}
+        <a href="{{ s.href }}"
+           style="text-decoration:none !important;
+                  border-bottom:none!important;
+                  display:inline-flex;
+                  margin:.15rem 0;
+                  padding:.15rem .6rem;
+                  border-radius:1rem;
+                  white-space:nowrap;
+                  font-size:.8em;
+                  {% if s.active %}
+                      background:{{ theme_color() }}; color:#000;
+                  {% else %}
+                      background:#444;   color:{{ theme_color() }};
+                  {% endif %}">
+            {{ s.host }}
+            <sup style="font-size:.5em;">{{ s.cnt }}</sup>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+<hr>
 {% if entries %}
     {% for e in entries %}
     <article class="h-entry" style="{% if not loop.last %}padding-bottom:1.5em; border-bottom:1px solid #444;{% endif %}">
