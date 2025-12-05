@@ -2025,6 +2025,14 @@ def link_host(url: str | None) -> str:
     return host.lower()
 
 
+def pins_from_href(host: str | None = "") -> str:
+    """Build a filter URL for pins by source host."""
+    norm = link_host(host or "")
+    if not norm:
+        return url_for("by_kind", slug=kind_to_slug("pin"))
+    return url_for("by_kind", slug=kind_to_slug("pin"), **{"from": norm})
+
+
 def _csrf_token() -> str:
     """One token per session (rotates when the cookie does)."""
     return session.get("csrf", "")
@@ -2040,6 +2048,7 @@ app.jinja_env.globals["nav_pages"] = nav_pages
 app.jinja_env.globals["version"] = __version__
 app.jinja_env.globals.update(
     has_kind=has_kind,
+    pins_from_href=pins_from_href,
     active_verbs=active_verbs,
     verb_kinds=VERB_KINDS,
     tags_slug=tags_slug,
@@ -3639,7 +3648,7 @@ TEMPL_INDEX = wrap("""{% block body %}
                     {{ e['title'] }}
                 </a>
                 {% if host %}
-                    <span class="pin-host">(<a href="{{ url_for('pins_by_site', pin_slug=kind_to_slug('pin'), site_host=host) }}">{{ host }}</a>)</span>
+                    <span class="pin-host">(<a href="{{ pins_from_href(host) }}">{{ host }}</a>)</span>
                 {% endif %}
             </h2>
         {% elif e['kind']=='post' and e['title'] %}
@@ -4177,9 +4186,13 @@ def by_kind(slug):
 
     project_filters_list = []
     selected_project = request.args.get("project", "").strip().lower()
+    selected_site = link_host(request.args.get("from", "").strip())
     total_posts = None
+    site_filters: list[dict[str, str]] = []
+    total_pins = None
     project_join = ""
     project_where = ""
+    site_where = ""
     params: list[str] = [kind]
 
     if kind == "post":
@@ -4197,13 +4210,42 @@ def by_kind(slug):
             )
             project_where = " AND p.slug=?"
             params.append(selected_project)
+    elif kind == "pin":
+        site_rows = db.execute(
+            """
+            SELECT link_host(link) AS host, COUNT(*) AS cnt
+              FROM entry
+             WHERE kind='pin' AND link IS NOT NULL
+          GROUP BY host
+            HAVING host!=''
+          ORDER BY cnt DESC, host ASC
+            """
+        ).fetchall()
+        site_filters = [
+            {
+                "host": r["host"],
+                "cnt": r["cnt"],
+                "href": pins_from_href(r["host"]),
+                "active": r["host"] == selected_site,
+            }
+            for r in site_rows
+            if r["host"]
+        ]
+        total_pins = (
+            db.execute("SELECT COUNT(*) AS c FROM entry WHERE kind='pin'").fetchone()[
+                "c"
+            ]
+        )
+        if selected_site:
+            site_where = " AND link_host(e.link)=?"
+            params.append(selected_site)
 
     BASE_SQL = f"""
         SELECT e.*, ei.action
           FROM entry e
           LEFT JOIN entry_item ei ON ei.entry_id = e.id
           {project_join}
-         WHERE e.kind = ?{project_where}
+         WHERE e.kind = ?{project_where}{site_where}
          ORDER BY e.created_at DESC
     """
 
@@ -4229,92 +4271,10 @@ def by_kind(slug):
         backlinks=back_map,
         project_filters=project_filters_list,
         selected_project=selected_project,
+        selected_site=selected_site,
         total_posts=total_posts,
         photo_tags=PHOTO_TAGS,
         photo_cards=[],
-    )
-
-
-@app.route("/<pin_slug>/from/<site_host>")
-def pins_by_site(pin_slug: str, site_host: str):
-    if pin_slug != kind_to_slug("pin"):
-        abort(404)
-
-    host = link_host(site_host)
-    if not host:
-        abort(404)
-
-    db = get_db()
-    site_rows = db.execute(
-        """
-        SELECT link_host(link) AS host, COUNT(*) AS cnt
-          FROM entry
-         WHERE kind='pin' AND link IS NOT NULL
-      GROUP BY host
-        HAVING host!=''
-      ORDER BY cnt DESC, host ASC
-        """
-    ).fetchall()
-
-    site_filters = [
-        {
-            "host": r["host"],
-            "cnt": r["cnt"],
-            "href": url_for(
-                "pins_by_site", pin_slug=kind_to_slug("pin"), site_host=r["host"]
-            ),
-            "active": r["host"] == host,
-        }
-        for r in site_rows
-        if r["host"]
-    ]
-
-    if not any(s["active"] for s in site_filters):
-        abort(404)
-
-    total_pins = db.execute(
-        "SELECT COUNT(*) AS c FROM entry WHERE kind='pin'"
-    ).fetchone()["c"]
-    try:
-        page = max(int(request.args.get("page", 1)), 1)
-    except (TypeError, ValueError):
-        page = 1
-    ps = page_size()
-
-    BASE_SQL = """
-        SELECT  e.*,
-                MIN(ei.action)                 AS action,
-                MIN(ei.progress)               AS progress,
-                MIN(i.title)                   AS item_title,
-                MIN(i.slug)                    AS item_slug,
-                MIN(i.item_type)               AS item_type,
-                MIN(CASE                     
-                    WHEN im.k = 'date'
-                        AND LENGTH(im.v) >= 4
-                    THEN SUBSTR(im.v,1,4)
-                END)                           AS item_year
-          FROM entry e
-          LEFT JOIN entry_item ei ON ei.entry_id = e.id
-          LEFT JOIN item       i  ON i.id        = ei.item_id
-          LEFT JOIN item_meta  im ON im.item_id  = i.id
-         WHERE e.kind='pin' AND link_host(e.link)=?
-        GROUP BY e.id
-        ORDER BY e.created_at DESC
-    """
-
-    entries, total_pages = paginate(BASE_SQL, (host,), page=page, per_page=ps, db=db)
-    pages = list(range(1, total_pages + 1))
-    back_map = backlinks(entries, db=db)
-
-    return render_template_string(
-        TEMPL_PIN_SITE,
-        entries=entries,
-        host=host,
-        page=page,
-        pages=pages,
-        backlinks=back_map,
-        username=current_username(),
-        kind="pin",
         site_filters=site_filters,
         total_pins=total_pins,
     )
@@ -4460,6 +4420,101 @@ TEMPL_LIST = wrap("""
                 {% endfor %}
             </div>
         {% else %}
+            {% if kind == 'pin' and site_filters %}
+            <style>
+            .pin-site-grid details.more-toggle + .more-panel{display:none;}
+            .pin-site-grid details.more-toggle[open] + .more-panel{display:flex;flex-wrap:wrap;gap:.25rem .5rem;margin-top:.35rem;grid-column:1 / span 2;}
+            </style>
+            {% set active_site = (site_filters|selectattr('active')|list|first) %}
+            <div class="pin-site-grid" style="display:grid; grid-template-columns:1fr auto; grid-template-rows:auto auto; column-gap:.75rem; row-gap:.35rem; align-items:start; margin-bottom:.75rem;">
+                <div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
+                    <a href="{{ url_for('by_kind', slug=kind_to_slug('pin')) }}"
+                       style="text-decoration:none !important;
+                              border-bottom:none!important;
+                              display:inline-flex;
+                              margin:.15rem 0;
+                              padding:.15rem .6rem;
+                              border-radius:1rem;
+                              white-space:nowrap;
+                              font-size:.8em;
+                              {% if not selected_site %}
+                                  background:{{ theme_color() }}; color:#000;
+                              {% else %}
+                                  background:#444;   color:{{ theme_color() }};
+                              {% endif %}">
+                        All
+                        <sup style="font-size:.5em;">{{ total_pins }}</sup>
+                    </a>
+                    {% if active_site %}
+                    <a href="{{ active_site.href }}"
+                       style="text-decoration:none !important;
+                              border-bottom:none!important;
+                              display:inline-flex;
+                              margin:.15rem 0;
+                              padding:.15rem .6rem;
+                              border-radius:1rem;
+                              white-space:nowrap;
+                              font-size:.8em;
+                              background:{{ theme_color() }}; color:#000;">
+                        {{ active_site.host }}
+                        <sup style="font-size:.5em;">{{ active_site.cnt }}</sup>
+                    </a>
+                    {% endif %}
+                </div>
+                <details class="more-toggle" style="justify-self:end;">
+                    <summary style="list-style:none;
+                                    display:inline-flex;
+                                    align-items:center;
+                                    gap:.25rem;
+                                    margin:0;
+                                    padding:.15rem .6rem;
+                                    border-radius:1rem;
+                                    border:1px solid #555;
+                                    background:#333;
+                                    color:{{ theme_color() }};
+                                    font-size:.8em;
+                                    cursor:pointer;">
+                        Filter
+                        <span aria-hidden="true" style="font-size:.75em;">▾</span>
+                    </summary>
+                </details>
+
+                <div class="more-panel" style="grid-column:1 / span 2;">
+                    <a href="{{ url_for('by_kind', slug=kind_to_slug('pin')) }}"
+                       style="text-decoration:none !important;
+                              border-bottom:none!important;
+                              display:inline-flex;
+                              margin:.15rem 0;
+                              padding:.15rem .6rem;
+                              border-radius:1rem;
+                              white-space:nowrap;
+                              font-size:.8em;
+                              {% if not selected_site %}
+                                  background:{{ theme_color() }}; color:#000;
+                              {% else %}
+                                  background:#444;   color:{{ theme_color() }};
+                              {% endif %}">
+                        All
+                        <sup style="font-size:.5em;">{{ total_pins }}</sup>
+                    </a>
+                    {% for s in site_filters if not s.active %}
+                    <a href="{{ s.href }}"
+                       style="text-decoration:none !important;
+                              border-bottom:none!important;
+                              display:inline-flex;
+                              margin:.15rem 0;
+                              padding:.15rem .6rem;
+                              border-radius:1rem;
+                              white-space:nowrap;
+                              font-size:.8em;
+                              background:#444; color:{{ theme_color() }};">
+                        {{ s.host }}
+                        <sup style="font-size:.5em;">{{ s.cnt }}</sup>
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
             {% for e in rows %}
             <article class="h-entry" style="{% if not loop.last %}padding-bottom:1.5em; border-bottom:1px solid #444;{% endif %}">
                 {% if e['kind'] == 'pin' %}
@@ -4469,7 +4524,7 @@ TEMPL_LIST = wrap("""
                             {{ e['title'] }}
                         </a>
                         {% if host %}
-                            <span class="pin-host">(<a href="{{ url_for('pins_by_site', pin_slug=kind_to_slug('pin'), site_host=host) }}">{{ host }}</a>)</span>
+                            <span class="pin-host">(<a href="{{ pins_from_href(host) }}">{{ host }}</a>)</span>
                         {% endif %}
                     </h2>            
                 {% elif e['title'] %}
@@ -4536,158 +4591,6 @@ TEMPL_LIST = wrap("""
             </nav>
         {% endif %}
     {% endblock %}
-""")
-
-
-TEMPL_PIN_SITE = wrap("""
-{% block body %}
-<hr>
-<style>
-.pin-site-grid details.more-toggle + .more-panel{display:none;}
-.pin-site-grid details.more-toggle[open] + .more-panel{display:flex;flex-wrap:wrap;gap:.25rem .5rem;margin-top:.35rem;grid-column:1 / span 2;}
-</style>
-<div class="pin-site-grid" style="display:grid; grid-template-columns:1fr auto; grid-template-rows:auto auto; column-gap:.75rem; row-gap:.35rem; align-items:start; margin-bottom:.75rem;">
-    {% set active_site = (site_filters|selectattr('active')|list|first) %}
-    <div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
-        {% if active_site %}
-        <a href="{{ active_site.href }}"
-           style="text-decoration:none !important;
-                  border-bottom:none!important;
-                  display:inline-flex;
-                  margin:.15rem 0;
-                  padding:.15rem .6rem;
-                  border-radius:1rem;
-                  white-space:nowrap;
-                  font-size:.8em;
-                  background:{{ theme_color() }}; color:#000;">
-            {{ active_site.host }}
-            <sup style="font-size:.5em;">{{ active_site.cnt }}</sup>
-        </a>
-        {% endif %}
-    </div>
-    <details class="more-toggle" style="justify-self:end;">
-        <summary style="list-style:none;
-                        display:inline-flex;
-                        align-items:center;
-                        gap:.25rem;
-                        margin:0;
-                        padding:.15rem .6rem;
-                        border-radius:1rem;
-                        border:1px solid #555;
-                        background:#333;
-                        color:{{ theme_color() }};
-                        font-size:.8em;
-                        cursor:pointer;">
-            More
-            <span aria-hidden="true" style="font-size:.75em;">▾</span>
-        </summary>
-    </details>
-
-    <div class="more-panel" style="grid-column:1 / span 2;">
-        <a href="{{ url_for('by_kind', slug=kind_to_slug('pin')) }}"
-           style="text-decoration:none !important;
-                  border-bottom:none!important;
-                  display:inline-flex;
-                  margin:.15rem 0;
-                  padding:.15rem .6rem;
-                  border-radius:1rem;
-                  white-space:nowrap;
-                  font-size:.8em;
-                  background:#444; color:{{ theme_color() }};">
-            All
-            <sup style="font-size:.5em;">{{ total_pins }}</sup>
-        </a>
-        {% for s in site_filters %}
-        <a href="{{ s.href }}"
-           style="text-decoration:none !important;
-                  border-bottom:none!important;
-                  display:inline-flex;
-                  margin:.15rem 0;
-                  padding:.15rem .6rem;
-                  border-radius:1rem;
-                  white-space:nowrap;
-                  font-size:.8em;
-                  {% if s.active %}
-                      background:{{ theme_color() }}; color:#000;
-                  {% else %}
-                      background:#444;   color:{{ theme_color() }};
-                  {% endif %}">
-            {{ s.host }}
-            <sup style="font-size:.5em;">{{ s.cnt }}</sup>
-        </a>
-        {% endfor %}
-    </div>
-</div>
-<hr>
-{% if entries %}
-    {% for e in entries %}
-    <article class="h-entry" style="{% if not loop.last %}padding-bottom:1.5em; border-bottom:1px solid #444;{% endif %}">
-        {% set pin_host = link_host(e['link']) %}
-        <h2>
-            <a class="u-bookmark-of p-name" href="{{ e['link'] }}" target="_blank" rel="noopener">
-                {{ e['title'] }}
-            </a>
-            {% if pin_host %}
-                <span class="pin-host">(<a href="{{ url_for('pins_by_site', pin_slug=kind_to_slug('pin'), site_host=pin_host) }}">{{ pin_host }}</a>)</span>
-            {% endif %}
-        </h2>
-        <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md(e['slug']) }}</div>
-        {{ backlinks_panel(backlinks[e.id]) }}
-        <small style="color:#aaa;">
-            <span style="
-                display:inline-block;
-                padding:.1em .6em;
-                margin-right:.4em;
-                background:#444;
-                color:#fff;
-                border-radius:1em;
-                font-size:.75em;
-                text-transform:capitalize;
-                vertical-align:middle;
-            ">
-                <a href="{{ url_for('by_kind', slug=kind_to_slug(e['kind'])) }}"
-                    style="text-decoration:none; color:inherit;border-bottom:none;">
-                    {{ e['action'] or e['kind'] }}
-                </a>
-            </span>
-            <a class="u-url u-uid" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
-                style="text-decoration:none; color:inherit;vertical-align:middle;font-variant-numeric:tabular-nums;white-space:nowrap;">
-                <time class="dt-published" datetime="{{ e['created_at'] }}">{{ e['created_at']|ts }}</time>
-            </a>&nbsp;
-            {% if session.get('logged_in') %}
-                <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
-                <a href="{{ url_for('delete_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Delete</a>
-            {% endif %}
-            {% set tags = entry_tags(e.id) %}
-            {% if tags %}
-                &nbsp;·&nbsp;
-                {% for tag in tags %}
-                    <a class="p-category" rel="tag" href="{{ tags_href(tag) }}"
-                       style="text-decoration:none;margin-right:.35em;color:{{ theme_color() }};vertical-align:middle;">
-                        #{{ tag }}
-                    </a>
-                {% endfor %}
-            {% endif %}
-        </small>
-    </article>
-    {% endfor %}
-{% else %}
-    <p>No pins from this site yet.</p>
-{% endif %}
-
-{% if pages|length > 1 %}
-    <nav style="margin-top:2em;padding-top:2em;font-size:.75em;border-top:1px solid #444;">
-        {% for p in pages %}
-            {% if p == page %}
-                <span style="border-bottom:0.33rem solid #aaa;">{{ p }}</span>
-            {% else %}
-                <a href="{{ request.path }}?page={{ p }}">{{ p }}</a>
-            {% endif %}
-            {% if not loop.last %}&nbsp;{% endif %}
-        {% endfor %}
-    </nav>
-{% endif %}
-{% endblock %}
 """)
 
 
@@ -5213,7 +5116,7 @@ TEMPL_ENTRY_DETAIL = wrap("""
                     {{ e['title'] }} 
                     </a>
                     {% if host %}
-                        <span class="pin-host">(<a href="{{ url_for('pins_by_site', pin_slug=kind_to_slug('pin'), site_host=host) }}">{{ host }}</a>)</span>
+                        <span class="pin-host">(<a href="{{ pins_from_href(host) }}">{{ host }}</a>)</span>
                     {% endif %}
                 </h2>
             {% elif e['title'] %}
