@@ -848,6 +848,7 @@ def get_db():
         g.db.execute("PRAGMA foreign_keys = ON;")
         g.db.row_factory = sqlite3.Row
         g.db.create_function("strip_caret", 1, strip_caret)
+        g.db.create_function("link_host", 1, link_host)
         g.photo_kind_normalized = False
     if not getattr(g, "photo_kind_normalized", False):
         normalize_photo_kinds(db=g.db)
@@ -2010,6 +2011,20 @@ def upload_icon() -> Markup:
     return Markup(UPLOAD_ICON_SVG)
 
 
+def link_host(url: str | None) -> str:
+    """Return the hostname (sans www) for display next to external links."""
+    if not url:
+        return ""
+    try:
+        parsed = urlparse(url if "://" in url else f"//{url}", scheme="https")
+        host = parsed.netloc
+    except ValueError:
+        return ""
+    if host.startswith("www."):
+        host = host[4:]
+    return host.lower()
+
+
 def _csrf_token() -> str:
     """One token per session (rotates when the cookie does)."""
     return session.get("csrf", "")
@@ -2017,16 +2032,6 @@ def _csrf_token() -> str:
 
 # Expose helpers to templates
 app.jinja_env.globals.update(kind_to_slug=kind_to_slug, get_setting=get_setting)
-app.jinja_env.globals["external_icon"] = lambda: Markup("""
-    <svg xmlns="http://www.w3.org/2000/svg"
-        viewBox="0 0 20 20"
-        width="11" height="11"
-        style="vertical-align:baseline; margin-left:.2em; fill:currentColor"
-        aria-hidden="true" focusable="false">
-    <path d="M14 2h4v4h-2V4.41L9.41 11 8 9.59 14.59 3H14V2z"/>
-    <path d="M15 9v7H4V4h7V2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2
-            2 0 0 0 2-2V9h-3z"/>
-    </svg>""")
 app.jinja_env.globals["upload_icon"] = upload_icon
 app.jinja_env.globals["PAGE_DEFAULT"] = PAGE_DEFAULT
 app.jinja_env.globals["entry_tags"] = lambda eid: entry_tags(eid, db=get_db())
@@ -2043,6 +2048,7 @@ app.jinja_env.globals.update(
 )
 app.jinja_env.globals["csrf_token"] = _csrf_token
 app.jinja_env.globals["is_b64_image"] = is_b64_image
+app.jinja_env.globals["link_host"] = link_host
 
 
 def backlinks(entries, *, db) -> dict[int, list]:
@@ -2163,6 +2169,9 @@ nav a[aria-current=page]{color:#c9c9c9;text-decoration-color:currentColor;text-d
 nav a[aria-current=page]:hover,nav a[aria-current=page]:focus-visible{text-decoration-color:currentColor;}
 .nav-search form{margin:0;width:auto;}
 .nav-search input{width:13rem;font-size:.8em;padding:.2em .6em;margin:0;}
+.pin-host{font-size:.9em;color:#888;margin-left:.35em;white-space:nowrap;}
+.pin-host a{color:inherit;text-decoration:none;border-bottom:0.1px dotted currentColor;}
+.pin-host a:hover,.pin-host a:focus-visible{color:#c9c9c9;text-decoration-color:currentColor;}
 @media (max-width:720px){
 .nav-primary{grid-template-columns:1fr auto;grid-template-areas:"primary auth" "secondary secondary" "search search";}
 .nav-search{justify-content:flex-start;}
@@ -3624,11 +3633,14 @@ TEMPL_INDEX = wrap("""{% block body %}
     {% for e in entries %}
     <article class="h-entry" {% if not loop.last %}style="padding-bottom:1.5em; border-bottom:1px solid #444;"{% endif %}>
         {% if e['kind']=='pin' %}
+            {% set host = link_host(e['link']) %}
             <h2>
                 <a class="u-bookmark-of p-name" href="{{ e['link'] }}" target="_blank" rel="noopener">
                     {{ e['title'] }}
                 </a>
-                {{ external_icon() }} 
+                {% if host %}
+                    <span class="pin-host">(<a href="{{ url_for('pins_by_site', pin_slug=kind_to_slug('pin'), site_host=host) }}">{{ host }}</a>)</span>
+                {% endif %}
             </h2>
         {% elif e['kind']=='post' and e['title'] %}
             <h2 class="p-name">{{e['title']}}</h2>
@@ -4223,6 +4235,59 @@ def by_kind(slug):
     )
 
 
+@app.route("/<pin_slug>/from/<site_host>")
+def pins_by_site(pin_slug: str, site_host: str):
+    if pin_slug != kind_to_slug("pin"):
+        abort(404)
+
+    host = link_host(site_host)
+    if not host:
+        abort(404)
+
+    db = get_db()
+    try:
+        page = max(int(request.args.get("page", 1)), 1)
+    except (TypeError, ValueError):
+        page = 1
+    ps = page_size()
+
+    BASE_SQL = """
+        SELECT  e.*,
+                MIN(ei.action)                 AS action,
+                MIN(ei.progress)               AS progress,
+                MIN(i.title)                   AS item_title,
+                MIN(i.slug)                    AS item_slug,
+                MIN(i.item_type)               AS item_type,
+                MIN(CASE                     
+                    WHEN im.k = 'date'
+                        AND LENGTH(im.v) >= 4
+                    THEN SUBSTR(im.v,1,4)
+                END)                           AS item_year
+          FROM entry e
+          LEFT JOIN entry_item ei ON ei.entry_id = e.id
+          LEFT JOIN item       i  ON i.id        = ei.item_id
+          LEFT JOIN item_meta  im ON im.item_id  = i.id
+         WHERE e.kind='pin' AND link_host(e.link)=?
+        GROUP BY e.id
+        ORDER BY e.created_at DESC
+    """
+
+    entries, total_pages = paginate(BASE_SQL, (host,), page=page, per_page=ps, db=db)
+    pages = list(range(1, total_pages + 1))
+    back_map = backlinks(entries, db=db)
+
+    return render_template_string(
+        TEMPL_PIN_SITE,
+        entries=entries,
+        host=host,
+        page=page,
+        pages=pages,
+        backlinks=back_map,
+        username=current_username(),
+        kind="pin",
+    )
+
+
 TEMPL_LIST = wrap("""
     {% block body %}
         {% if session.get('logged_in') %}
@@ -4366,11 +4431,14 @@ TEMPL_LIST = wrap("""
             {% for e in rows %}
             <article class="h-entry" style="{% if not loop.last %}padding-bottom:1.5em; border-bottom:1px solid #444;{% endif %}">
                 {% if e['kind'] == 'pin' %}
+                    {% set host = link_host(e['link']) %}
                     <h2>
                         <a class="u-bookmark-of p-name" href="{{ e['link'] }}" target="_blank" rel="noopener">
                             {{ e['title'] }}
                         </a>
-                        {{ external_icon() }} 
+                        {% if host %}
+                            <span class="pin-host">(<a href="{{ url_for('pins_by_site', pin_slug=kind_to_slug('pin'), site_host=host) }}">{{ host }}</a>)</span>
+                        {% endif %}
                     </h2>            
                 {% elif e['title'] %}
                     <h2 class="p-name">{{ e['title'] }}</h2>
@@ -4436,6 +4504,82 @@ TEMPL_LIST = wrap("""
             </nav>
         {% endif %}
     {% endblock %}
+""")
+
+
+TEMPL_PIN_SITE = wrap("""
+{% block body %}
+<hr>
+<h2 style="margin-top:0;">Pins from {{ host }}</h2>
+{% if entries %}
+    {% for e in entries %}
+    <article class="h-entry" style="{% if not loop.last %}padding-bottom:1.5em; border-bottom:1px solid #444;{% endif %}">
+        {% set pin_host = link_host(e['link']) %}
+        <h2>
+            <a class="u-bookmark-of p-name" href="{{ e['link'] }}" target="_blank" rel="noopener">
+                {{ e['title'] }}
+            </a>
+            {% if pin_host %}
+                <span class="pin-host">(<a href="{{ url_for('pins_by_site', pin_slug=kind_to_slug('pin'), site_host=pin_host) }}">{{ pin_host }}</a>)</span>
+            {% endif %}
+        </h2>
+        <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md(e['slug']) }}</div>
+        {{ backlinks_panel(backlinks[e.id]) }}
+        <small style="color:#aaa;">
+            <span style="
+                display:inline-block;
+                padding:.1em .6em;
+                margin-right:.4em;
+                background:#444;
+                color:#fff;
+                border-radius:1em;
+                font-size:.75em;
+                text-transform:capitalize;
+                vertical-align:middle;
+            ">
+                <a href="{{ url_for('by_kind', slug=kind_to_slug(e['kind'])) }}"
+                    style="text-decoration:none; color:inherit;border-bottom:none;">
+                    {{ e['action'] or e['kind'] }}
+                </a>
+            </span>
+            <a class="u-url u-uid" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
+                style="text-decoration:none; color:inherit;vertical-align:middle;font-variant-numeric:tabular-nums;white-space:nowrap;">
+                <time class="dt-published" datetime="{{ e['created_at'] }}">{{ e['created_at']|ts }}</time>
+            </a>&nbsp;
+            {% if session.get('logged_in') %}
+                <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
+                <a href="{{ url_for('delete_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Delete</a>
+            {% endif %}
+            {% set tags = entry_tags(e.id) %}
+            {% if tags %}
+                &nbsp;·&nbsp;
+                {% for tag in tags %}
+                    <a class="p-category" rel="tag" href="{{ tags_href(tag) }}"
+                       style="text-decoration:none;margin-right:.35em;color:{{ theme_color() }};vertical-align:middle;">
+                        #{{ tag }}
+                    </a>
+                {% endfor %}
+            {% endif %}
+        </small>
+    </article>
+    {% endfor %}
+{% else %}
+    <p>No pins from this site yet.</p>
+{% endif %}
+
+{% if pages|length > 1 %}
+    <nav style="margin-top:2em;padding-top:2em;font-size:.75em;border-top:1px solid #444;">
+        {% for p in pages %}
+            {% if p == page %}
+                <span style="border-bottom:0.33rem solid #aaa;">{{ p }}</span>
+            {% else %}
+                <a href="{{ request.path }}?page={{ p }}">{{ p }}</a>
+            {% endif %}
+            {% if not loop.last %}&nbsp;{% endif %}
+        {% endfor %}
+    </nav>
+{% endif %}
+{% endblock %}
 """)
 
 
@@ -4954,12 +5098,15 @@ TEMPL_ENTRY_DETAIL = wrap("""
         <hr>
         <article class="h-entry">
             {% if e['kind']=='pin' %}
+                {% set host = link_host(e['link']) %}
                 <h2 style="margin-top:0">
                     <a class="u-bookmark-of p-name" href="{{ e['link'] }}" target="_blank" rel="noopener" title="{{ e['link'] }}"
                     style="word-break:break-all; overflow-wrap:anywhere;">
                     {{ e['title'] }} 
                     </a>
-                    {{ external_icon() }}
+                    {% if host %}
+                        <span class="pin-host">(<a href="{{ url_for('pins_by_site', pin_slug=kind_to_slug('pin'), site_host=host) }}">{{ host }}</a>)</span>
+                    {% endif %}
                 </h2>
             {% elif e['title'] %}
                 <h2 class="p-name">{{ e['title'] }}</h2>
