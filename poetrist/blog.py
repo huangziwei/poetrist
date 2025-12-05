@@ -2178,6 +2178,7 @@ nav a[aria-current=page]{color:#c9c9c9;text-decoration-color:currentColor;text-d
 nav a[aria-current=page]:hover,nav a[aria-current=page]:focus-visible{text-decoration-color:currentColor;}
 .nav-search form{margin:0;width:auto;}
 .nav-search input{width:13rem;font-size:.8em;padding:.2em .6em;margin:0;}
+.pin-title{font-size:1.3em;margin-bottom:.75rem;}
 .pin-host{font-size:.75em;color:#888;margin-left:.35em;white-space:nowrap;}
 .pin-host a{color:inherit;text-decoration:none;border-bottom:0.1px dotted currentColor;}
 .pin-host a:hover,.pin-host a:focus-visible{color:#c9c9c9;text-decoration-color:currentColor;}
@@ -3643,7 +3644,7 @@ TEMPL_INDEX = wrap("""{% block body %}
     <article class="h-entry" {% if not loop.last %}style="padding-bottom:1.5em; border-bottom:1px solid #444;"{% endif %}>
         {% if e['kind']=='pin' %}
             {% set host = link_host(e['link']) %}
-            <h2>
+            <h2 class="pin-title">
                 <a class="u-bookmark-of p-name" href="{{ e['link'] }}" target="_blank" rel="noopener">
                     {{ e['title'] }}
                 </a>
@@ -4626,7 +4627,7 @@ TEMPL_LIST = wrap("""
             <article class="h-entry" style="{% if not loop.last %}padding-bottom:1.5em; border-bottom:1px solid #444;{% endif %}">
                 {% if e['kind'] == 'pin' %}
                     {% set host = link_host(e['link']) %}
-                    <h2>
+                    <h2 class="pin-title">
                         <a class="u-bookmark-of p-name" href="{{ e['link'] }}" target="_blank" rel="noopener">
                             {{ e['title'] }}
                         </a>
@@ -5225,7 +5226,7 @@ TEMPL_ENTRY_DETAIL = wrap("""
         <article class="h-entry">
             {% if e['kind']=='pin' %}
                 {% set host = link_host(e['link']) %}
-                <h2 style="margin-top:0">
+                <h2 class="pin-title" style="margin-top:0">
                     <a class="u-bookmark-of p-name" href="{{ e['link'] }}" target="_blank" rel="noopener" title="{{ e['link'] }}"
                     style="word-break:break-all; overflow-wrap:anywhere;">
                     {{ e['title'] }} 
