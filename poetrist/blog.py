@@ -4690,7 +4690,15 @@ TEMPL_LIST = wrap("""
                     {% if p == page %}
                         <span style="border-bottom:0.33rem solid #aaa;">{{ p }}</span>
                     {% else %}
-                        <a href="{% if kind == 'post' %}{{ url_for('by_kind', slug=kind_to_slug('post'), project=selected_project or None, page=p) }}{% else %}{{ request.path }}?page={{ p }}{% endif %}">{{ p }}</a>
+                        <a href="{% if kind == 'post' %}
+                                    {{ url_for('by_kind', slug=kind_to_slug('post'), project=selected_project or None, page=p) }}
+                                 {% elif kind == 'pin' %}
+                                    {{ request.path }}?page={{ p }}{% if selected_site %}&from={{ selected_site }}{% endif %}
+                                 {% elif kind == 'photo' %}
+                                    {{ request.path }}?page={{ p }}{% if selected_photo_tag %}&tag={{ selected_photo_tag }}{% endif %}
+                                 {% else %}
+                                    {{ request.path }}?page={{ p }}
+                                 {% endif %}">{{ p }}</a>
                     {% endif %}
                     {# add thin spacing between numbers #}
                     {% if not loop.last %}&nbsp;{% endif %}
