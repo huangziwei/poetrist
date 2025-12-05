@@ -40,7 +40,7 @@ hash_db() {
 
   # 2) Remote path (inside Fly VM) – ask the VM to hash it.
   fly ssh console -q -a "$APP" -C \
-    "sha256sum $file" | awk '{print $1}'
+    "sha256sum $file" | awk '/^[a-f0-9]{64}/{print $1; exit}'
 }
 
 # ───── functions ───────────────────────────────────────────────────────────────
@@ -70,8 +70,8 @@ check_secret() {
 pull_db() {
   log "⬇️   Checking if remote database changed…"
   remote_db_path() {
-    fly ssh console -a "$APP" -C "/app/.venv/bin/python -c 'import pathlib, poetrist.blog, sys; \
-    print(pathlib.Path(poetrist.blog.DB_FILE).resolve())'"
+    fly ssh console -q -a "$APP" -C "/app/.venv/bin/python -c 'import pathlib, poetrist.blog; \
+print(pathlib.Path(poetrist.blog.DB_FILE).resolve())'" | awk '/^\//{print; exit}'
   }
   
   local remote_hash local_hash remote_db
