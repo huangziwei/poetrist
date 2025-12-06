@@ -5026,16 +5026,6 @@ TEMPL_LIST = wrap("""
                         <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
                         <a href="{{ url_for('delete_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Delete</a>
                     {% endif %}
-                    {% set tags = entry_tags(e.id) %}
-                    {% if tags %}
-                        &nbsp;·&nbsp;
-                        {% for tag in tags %}
-                            <a class="p-category" rel="tag" href="{{ tags_href(tag) }}"
-                               style="text-decoration:none;margin-right:.35em;color:{{ theme_color() }};vertical-align:middle;">
-                                #{{ tag }}
-                            </a>
-                        {% endfor %}
-                    {% endif %}
                 </small>
             </article>
             {% else %}
