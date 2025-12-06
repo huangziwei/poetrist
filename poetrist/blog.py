@@ -2220,11 +2220,13 @@ nav a[aria-current=page]:hover,nav a[aria-current=page]:focus-visible{text-decor
     {% endif %}
 {%- endmacro %}
 <div class="container h-feed" style="max-width: 60rem; margin: 3rem auto;">
-    <div style="display:flex; flex-wrap:wrap; align-items:baseline; gap:.65rem .85rem; margin-bottom:1rem;">
-        <h1 id="page-top" style="margin:0;"><a href="{{ url_for('index') }}" style="color:{{ theme_color() }};">{{title or 'po.etr.ist'}}</a></h1>
+    <div style="margin-bottom:1rem; font-size:1.9rem; line-height:1.2;">
+        <h1 id="page-top" style="display:inline; margin:0; line-height:1;font-size:2.25em">
+            <a href="{{ url_for('index') }}" style="color:{{ theme_color() }}; text-decoration:none; border-bottom:none;">{{title or 'po.etr.ist'}}</a>
+        </h1>
         {% set tagline = get_setting('site_tagline','').strip() %}
         {% if tagline %}
-            <span style="color:#aaa; font-size:1.4rem;">{{ tagline }}</span>
+            <span style="margin-left:.1rem; color:#bcbcbc;">{{ tagline }}</span>
         {% endif %}
     </div>
     <nav aria-label="Primary" class="nav-primary">
