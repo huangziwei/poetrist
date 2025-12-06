@@ -4147,11 +4147,21 @@ def by_kind(slug):
         t for t in selected_photo_tags_raw.split("+") if t and t not in PHOTO_TAG_SET
     }
     selected_photo_tags_param = "+".join(sorted(selected_photo_tags))
+    selected_say_tags_raw = (
+        (request.args.get("tag", "") or "").strip().lower() if kind == "say" else ""
+    )
+    selected_say_tags = {t for t in selected_say_tags_raw.split("+") if t}
+    selected_say_tags_list = sorted(selected_say_tags)
+    selected_say_tags_param = "+".join(selected_say_tags_list)
     total_posts = None
     site_filters: list[dict[str, str]] = []
     total_pins = None
     total_photos = None
+    total_says = None
     photo_tag_filters: list[dict[str, str | int | bool]] = []
+    say_tag_filters: list[dict[str, str | int | bool]] = []
+    tag_join = ""
+    tag_group_having = ""
     project_join = ""
     project_where = ""
     site_where = ""
@@ -4254,11 +4264,108 @@ def by_kind(slug):
             selected_photo_tags=selected_photo_tags,
             selected_photo_tags_param=selected_photo_tags_param,
             total_photos=total_photos,
+            say_tags=say_tag_filters,
+            selected_say_tags=selected_say_tags,
+            selected_say_tags_param=selected_say_tags_param,
+            total_says=total_says,
             photo_cards=photo_cards,
             site_filters=[],
             selected_site="",
             total_pins=None,
         )
+
+    if kind == "say":
+        total_says = (
+            db.execute("SELECT COUNT(*) AS c FROM entry WHERE kind='say'").fetchone()[
+                "c"
+            ]
+        )
+        q_marks_say = (
+            ",".join("?" * len(selected_say_tags_list)) if selected_say_tags_list else ""
+        )
+        co_occurring_say: set[str] = set()
+        say_count_rows = []
+        if selected_say_tags_list:
+            matching_entries_sql = f"""
+                SELECT et2.entry_id
+                  FROM entry_tag et2
+                  JOIN tag t2 ON t2.id = et2.tag_id
+                  JOIN entry e2 ON e2.id = et2.entry_id
+                 WHERE e2.kind='say' AND t2.name IN ({q_marks_say})
+              GROUP BY et2.entry_id
+                HAVING COUNT(DISTINCT t2.name)=?
+            """
+            say_count_rows = db.execute(
+                f"""
+                SELECT t.name, COUNT(*) AS cnt
+                  FROM tag t
+                  JOIN entry_tag et ON et.tag_id = t.id
+                 WHERE et.entry_id IN ({matching_entries_sql})
+              GROUP BY t.name
+                """,
+                (*selected_say_tags_list, len(selected_say_tags_list)),
+            ).fetchall()
+            co_occurring_say = {r["name"].lower() for r in say_count_rows}
+        else:
+            say_count_rows = db.execute(
+                """
+                SELECT t.name, COUNT(*) AS cnt
+                  FROM tag t
+                  JOIN entry_tag et ON et.tag_id = t.id
+                  JOIN entry e ON e.id = et.entry_id
+                 WHERE e.kind='say'
+              GROUP BY t.name
+                """
+            ).fetchall()
+
+        say_tag_counts = {r["name"].lower(): r["cnt"] for r in say_count_rows}
+        for t in selected_say_tags:
+            say_tag_counts.setdefault(t, 0)
+        all_filter_tags = set(say_tag_counts) | set(selected_say_tags)
+
+        def say_tag_href(new_sel: set[str]) -> str:
+            tag_param = "+".join(sorted(new_sel))
+            return (
+                url_for("by_kind", slug=kind_to_slug("say"), tag=tag_param)
+                if tag_param
+                else url_for("by_kind", slug=kind_to_slug("say"))
+            )
+
+        say_tag_filters = [
+            {
+                "tag": t,
+                "cnt": say_tag_counts.get(t, 0),
+                "active": t in selected_say_tags,
+                "hint": bool(
+                    selected_say_tags
+                    and t not in selected_say_tags
+                    and t in co_occurring_say
+                ),
+                "href": say_tag_href(
+                    (selected_say_tags - {t})
+                    if t in selected_say_tags
+                    else (selected_say_tags | {t})
+                ),
+            }
+            for t in sorted(
+                all_filter_tags, key=lambda kv: (-say_tag_counts.get(kv, 0), kv)
+            )
+        ]
+
+        if selected_say_tags_list:
+            tag_join = (
+                " JOIN entry_tag et_filter ON et_filter.entry_id = e.id"
+                " JOIN tag t_filter ON t_filter.id = et_filter.tag_id"
+            )
+            tag_group_having = f"""
+            GROUP BY e.id
+              HAVING COUNT(
+                  DISTINCT CASE WHEN t_filter.name IN ({q_marks_say})
+                                THEN t_filter.name END
+              )=?
+            """
+            params.extend(selected_say_tags_list)
+            params.append(len(selected_say_tags_list))
 
     if kind == "post":
         project_filters_list = project_filters(db=db)
@@ -4310,7 +4417,9 @@ def by_kind(slug):
           FROM entry e
           LEFT JOIN entry_item ei ON ei.entry_id = e.id
           {project_join}
+          {tag_join}
          WHERE e.kind = ?{project_where}{site_where}
+         {tag_group_having}
          ORDER BY e.created_at DESC
     """
 
@@ -4341,6 +4450,10 @@ def by_kind(slug):
         photo_tags=photo_tag_filters,
         selected_photo_tags=selected_photo_tags,
         selected_photo_tags_param=selected_photo_tags_param,
+        say_tags=say_tag_filters,
+        selected_say_tags=selected_say_tags,
+        selected_say_tags_param=selected_say_tags_param,
+        total_says=total_says,
         total_photos=total_photos,
         photo_cards=[],
         site_filters=site_filters,
@@ -4475,6 +4588,117 @@ TEMPL_LIST = wrap("""
                 <p>No {{ heading.lower() }} yet.</p>
             {% endfor %}
             </ul>
+        {% elif kind == 'say' %}
+            {% if say_tags %}
+            <style>
+            .say-tag-grid details.more-toggle + .more-panel{display:none;}
+            .say-tag-grid details.more-toggle[open] + .more-panel{display:flex;flex-wrap:wrap;gap:.25rem .5rem;margin-top:.35rem;grid-column:1 / span 2;}
+            </style>
+            {% set active_say_tags = say_tags|selectattr('active')|list %}
+            <div class="say-tag-grid" style="display:grid; grid-template-columns:1fr auto; grid-template-rows:auto auto; column-gap:.75rem; row-gap:.35rem; align-items:start; margin-bottom:.75rem;">
+                <div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
+                    <a href="{{ url_for('by_kind', slug=kind_to_slug('say')) }}"
+                       style="text-decoration:none !important;
+                              border-bottom:none!important;
+                              display:inline-flex;
+                              margin:.15rem 0;
+                              padding:.15rem .6rem;
+                              border-radius:1rem;
+                              white-space:nowrap;
+                              font-size:.8em;
+                              {% if not selected_say_tags %}
+                                  background:{{ theme_color() }}; color:#000;
+                              {% else %}
+                                  background:#444;   color:{{ theme_color() }};
+                              {% endif %}">
+                        All
+                        <sup style="font-size:.5em;">{{ total_says }}</sup>
+                    </a>
+                    {% for t in active_say_tags %}
+                    <a href="{{ t.href }}"
+                       style="text-decoration:none !important;
+                              border-bottom:none!important;
+                              display:inline-flex;
+                              margin:.15rem 0;
+                              padding:.15rem .6rem;
+                              border-radius:1rem;
+                              white-space:nowrap;
+                              font-size:.8em;
+                              background:{{ theme_color() }}; color:#000;">
+                        #{{ t.tag }}
+                        <sup style="font-size:.5em;">{{ t.cnt }}</sup>
+                    </a>
+                    {% endfor %}
+                </div>
+                <details class="more-toggle" style="justify-self:end;">
+                    <summary style="list-style:none;
+                                    display:inline-flex;
+                                    align-items:center;
+                                    gap:.25rem;
+                                    margin:0;
+                                    padding:.15rem .6rem;
+                                    border-radius:1rem;
+                                    border:1px solid #555;
+                                    background:#333;
+                                    color:{{ theme_color() }};
+                                    font-size:.8em;
+                                    cursor:pointer;">
+                        Filter
+                        <span aria-hidden="true" style="font-size:.75em;">▾</span>
+                    </summary>
+                </details>
+                <div class="more-panel" style="grid-column:1 / span 2;">
+                    {% for t in say_tags if not t.active %}
+                    <a href="{{ t.href }}"
+                       style="text-decoration:none !important;
+                              border-bottom:none!important;
+                              display:inline-flex;
+                              margin:.15rem 0;
+                              padding:.15rem .6rem;
+                              border-radius:1rem;
+                              white-space:nowrap;
+                              font-size:.8em;
+                              box-shadow:{% if t.hint %}0 0 0 1px {{ theme_color() }}{% else %}none{% endif %};
+                              opacity:{% if selected_say_tags and not t.hint %}0.45{% else %}1{% endif %};
+                              background:#444;   color:{{ theme_color() }};">
+                        #{{ t.tag }}
+                        <sup style="font-size:.5em;">{{ t.cnt }}</sup>
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+            {% for e in rows %}
+            <article class="h-entry" style="{% if not loop.last %}padding-bottom:1.5em; border-bottom:1px solid #444;{% endif %}">
+                {% if e['title'] %}
+                    <h2 class="p-name">{{ e['title'] }}</h2>
+                {% endif %}
+                <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md(e['slug']) }}</div>
+                {{ backlinks_panel(backlinks[e.id]) }}
+                <small style="color:#aaa;">
+                    <a class="u-url u-uid" href="{{ url_for('entry_detail', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}"
+                        style="text-decoration:none; color:inherit;vertical-align:middle;font-variant-numeric:tabular-nums;white-space:nowrap;">
+                        <time class="dt-published" datetime="{{ e['created_at'] }}">{{ e['created_at']|ts }}</time>
+                    </a>&nbsp;
+                    {% if session.get('logged_in') %}
+                        <a href="{{ url_for('edit_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Edit</a>&nbsp;&nbsp;
+                        <a href="{{ url_for('delete_entry', kind_slug=kind_to_slug(e['kind']), entry_slug=e['slug']) }}" style="vertical-align:middle;">Delete</a>
+                    {% endif %}
+                    {% set tags = entry_tags(e.id) %}
+                    {% if tags %}
+                        &nbsp;·&nbsp;
+                        {% for tag in tags %}
+                            <a class="p-category" rel="tag" href="{{ tags_href(tag) }}"
+                               style="text-decoration:none;margin-right:.35em;color:{{ theme_color() }};vertical-align:middle;">
+                                #{{ tag }}
+                            </a>
+                        {% endfor %}
+                    {% endif %}
+                </small>
+            </article>
+            {% else %}
+                <p>No {{ heading.lower() }} yet.</p>
+            {% endfor %}
         {% elif kind == 'photo' %}
             {% if photo_tags %}
             <style>
@@ -4717,6 +4941,8 @@ TEMPL_LIST = wrap("""
                                     {{ url_for('by_kind', slug=kind_to_slug('post'), project=selected_project or None, page=p) }}
                                  {% elif kind == 'pin' %}
                                     {{ request.path }}?page={{ p }}{% if selected_site %}&from={{ selected_site }}{% endif %}
+                                 {% elif kind == 'say' %}
+                                    {{ request.path }}?page={{ p }}{% if selected_say_tags_param %}&tag={{ selected_say_tags_param }}{% endif %}
                                  {% elif kind == 'photo' %}
                                     {{ request.path }}?page={{ p }}{% if selected_photo_tags_param %}&tag={{ selected_photo_tags_param }}{% endif %}
                                  {% else %}
