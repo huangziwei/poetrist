@@ -2028,9 +2028,16 @@ def link_host(url: str | None) -> str:
 def pins_from_href(host: str | None = "") -> str:
     """Build a filter URL for pins by source host."""
     norm = link_host(host or "")
+    tag_param = (request.args.get("tag", "") or "").strip()
+    params: dict[str, str] = {}
     if not norm:
-        return url_for("by_kind", slug=kind_to_slug("pin"))
-    return url_for("by_kind", slug=kind_to_slug("pin"), **{"from": norm})
+        if tag_param:
+            params["tag"] = tag_param
+        return url_for("by_kind", slug=kind_to_slug("pin"), **params)
+    params["from"] = norm
+    if tag_param:
+        params["tag"] = tag_param
+    return url_for("by_kind", slug=kind_to_slug("pin"), **params)
 
 
 def _csrf_token() -> str:
@@ -4153,6 +4160,12 @@ def by_kind(slug):
     selected_say_tags = {t for t in selected_say_tags_raw.split("+") if t}
     selected_say_tags_list = sorted(selected_say_tags)
     selected_say_tags_param = "+".join(selected_say_tags_list)
+    selected_pin_tags_raw = (
+        (request.args.get("tag", "") or "").strip().lower() if kind == "pin" else ""
+    )
+    selected_pin_tags = {t for t in selected_pin_tags_raw.split("+") if t}
+    selected_pin_tags_list = sorted(selected_pin_tags)
+    selected_pin_tags_param = "+".join(selected_pin_tags_list)
     total_posts = None
     site_filters: list[dict[str, str]] = []
     total_pins = None
@@ -4160,6 +4173,7 @@ def by_kind(slug):
     total_says = None
     photo_tag_filters: list[dict[str, str | int | bool]] = []
     say_tag_filters: list[dict[str, str | int | bool]] = []
+    pin_tag_filters: list[dict[str, str | int | bool]] = []
     tag_join = ""
     tag_group_having = ""
     project_join = ""
@@ -4270,6 +4284,9 @@ def by_kind(slug):
             selected_say_tags=selected_say_tags,
             selected_say_tags_param=selected_say_tags_param,
             total_says=total_says,
+            pin_tags=pin_tag_filters,
+            selected_pin_tags=selected_pin_tags,
+            selected_pin_tags_param=selected_pin_tags_param,
             photo_cards=photo_cards,
             site_filters=[],
             selected_site="",
@@ -4385,15 +4402,28 @@ def by_kind(slug):
             project_where = " AND p.slug=?"
             params.append(selected_project)
     elif kind == "pin":
+        q_marks_pin = (
+            ",".join("?" * len(selected_pin_tags_list)) if selected_pin_tags_list else ""
+        )
+        # host filters, respecting current tag selection so counts stay accurate
         site_rows = db.execute(
-            """
-            SELECT link_host(link) AS host, COUNT(*) AS cnt
-              FROM entry
-             WHERE kind='pin' AND link IS NOT NULL
+            f"""
+            SELECT host, COUNT(*) AS cnt
+              FROM (
+                SELECT link_host(e2.link) AS host
+                  FROM entry e2
+                  {"JOIN entry_tag et2 ON et2.entry_id = e2.id JOIN tag t2 ON t2.id = et2.tag_id" if selected_pin_tags_list else ""}
+                 WHERE e2.kind='pin' AND link_host(e2.link)!=''
+                   {"AND t2.name IN (" + q_marks_pin + ")" if selected_pin_tags_list else ""}
+              GROUP BY e2.id, host
+                {"HAVING COUNT(DISTINCT t2.name)=?" if selected_pin_tags_list else ""}
+              ) sub
           GROUP BY host
-            HAVING host!=''
           ORDER BY cnt DESC, host ASC
-            """
+            """,
+            (*selected_pin_tags_list, len(selected_pin_tags_list))
+            if selected_pin_tags_list
+            else (),
         ).fetchall()
         site_filters = [
             {
@@ -4408,9 +4438,100 @@ def by_kind(slug):
         total_pins = db.execute(
             "SELECT COUNT(*) AS c FROM entry WHERE kind='pin'"
         ).fetchone()["c"]
+
+        # tag filters for pins (respect current host selection)
+        pin_tag_base_where = "WHERE e2.kind='pin'"
+        pin_tag_params: list[str] = []
+        if selected_site:
+            pin_tag_base_where += " AND link_host(e2.link)=?"
+            pin_tag_params.append(selected_site)
+
+        if selected_pin_tags_list:
+            matching_entries_sql = f"""
+                SELECT et2.entry_id
+                  FROM entry_tag et2
+                  JOIN tag t2 ON t2.id = et2.tag_id
+                  JOIN entry e2 ON e2.id = et2.entry_id
+                 {pin_tag_base_where} AND t2.name IN ({q_marks_pin})
+              GROUP BY et2.entry_id
+                HAVING COUNT(DISTINCT t2.name)=?
+            """
+            match_params = (
+                *pin_tag_params,
+                *selected_pin_tags_list,
+                len(selected_pin_tags_list),
+            )
+        else:
+            matching_entries_sql = f"""
+                SELECT e2.id AS entry_id
+                  FROM entry e2
+                 {pin_tag_base_where}
+            """
+            match_params = tuple(pin_tag_params)
+
+        pin_tag_count_rows = db.execute(
+            f"""
+            SELECT t.name, COUNT(*) AS cnt
+              FROM tag t
+              JOIN entry_tag et ON et.tag_id = t.id
+             WHERE et.entry_id IN ({matching_entries_sql})
+          GROUP BY t.name
+            """,
+            match_params,
+        ).fetchall()
+        co_occurring_pin = {r["name"].lower() for r in pin_tag_count_rows}
+        pin_tag_counts = {r["name"].lower(): r["cnt"] for r in pin_tag_count_rows}
+        for t in selected_pin_tags_list:
+            pin_tag_counts.setdefault(t, 0)
+        all_pin_tags = set(pin_tag_counts) | set(selected_pin_tags_list)
+
+        def pin_tag_href(new_sel: set[str]) -> str:
+            tag_param = "+".join(sorted(new_sel))
+            params_dict = {}
+            if selected_site:
+                params_dict["from"] = selected_site
+            if tag_param:
+                params_dict["tag"] = tag_param
+            return url_for("by_kind", slug=kind_to_slug("pin"), **params_dict)
+
+        pin_tag_filters = [
+            {
+                "tag": t,
+                "cnt": pin_tag_counts.get(t, 0),
+                "active": t in selected_pin_tags,
+                "hint": bool(
+                    selected_pin_tags
+                    and t not in selected_pin_tags
+                    and t in co_occurring_pin
+                ),
+                "href": pin_tag_href(
+                    (selected_pin_tags - {t})
+                    if t in selected_pin_tags
+                    else (selected_pin_tags | {t})
+                ),
+            }
+            for t in sorted(
+                all_pin_tags, key=lambda kv: (-pin_tag_counts.get(kv, 0), kv)
+            )
+        ]
+
         if selected_site:
             site_where = " AND link_host(e.link)=?"
             params.append(selected_site)
+        if selected_pin_tags_list:
+            tag_join = (
+                " JOIN entry_tag et_filter ON et_filter.entry_id = e.id"
+                " JOIN tag t_filter ON t_filter.id = et_filter.tag_id"
+            )
+            tag_group_having = f"""
+            GROUP BY e.id
+              HAVING COUNT(
+                  DISTINCT CASE WHEN t_filter.name IN ({q_marks_pin})
+                                THEN t_filter.name END
+              )=?
+            """
+            params.extend(selected_pin_tags_list)
+            params.append(len(selected_pin_tags_list))
 
     BASE_SQL = f"""
         SELECT e.*, ei.action
@@ -4457,6 +4578,9 @@ def by_kind(slug):
         total_photos=total_photos,
         photo_cards=[],
         site_filters=site_filters,
+        pin_tags=pin_tag_filters,
+        selected_pin_tags=selected_pin_tags,
+        selected_pin_tags_param=selected_pin_tags_param,
         total_pins=total_pins,
     )
 
@@ -4789,11 +4913,12 @@ TEMPL_LIST = wrap("""
         {% else %}
             {% if kind == 'pin' and site_filters %}
             <style>
-            .pin-site-grid details.more-toggle + .more-panel{display:none;}
-            .pin-site-grid details.more-toggle[open] + .more-panel{display:flex;flex-wrap:wrap;gap:.25rem .5rem;margin-top:.35rem;grid-column:1 / span 2;}
+            .pin-filter-grid details.more-toggle + .more-panel{display:none;}
+            .pin-filter-grid details.more-toggle[open] + .more-panel{display:flex;flex-wrap:wrap;gap:.25rem .5rem;margin-top:.35rem;grid-column:1 / span 2;}
             </style>
             {% set active_site = (site_filters|selectattr('active')|list|first) %}
-            <div class="pin-site-grid" style="display:grid; grid-template-columns:1fr auto; grid-template-rows:auto auto; column-gap:.75rem; row-gap:.35rem; align-items:start; margin-bottom:.75rem;">
+            {% set active_pin_tags = pin_tags|selectattr('active')|list %}
+            <div class="pin-filter-grid" style="display:grid; grid-template-columns:1fr auto; grid-template-rows:auto auto; column-gap:.75rem; row-gap:.35rem; align-items:start; margin-bottom:.75rem;">
                 <div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
                     <a href="{{ url_for('by_kind', slug=kind_to_slug('pin')) }}"
                        style="text-decoration:none !important;
@@ -4804,7 +4929,7 @@ TEMPL_LIST = wrap("""
                               border-radius:1rem;
                               white-space:nowrap;
                               font-size:.8em;
-                              {% if not selected_site %}
+                              {% if not selected_site and not selected_pin_tags %}
                                   background:{{ theme_color() }}; color:#000;
                               {% else %}
                                   background:#444;   color:{{ theme_color() }};
@@ -4813,7 +4938,7 @@ TEMPL_LIST = wrap("""
                         <sup style="font-size:.5em;">{{ total_pins }}</sup>
                     </a>
                     {% if active_site %}
-                    <a href="{{ active_site.href }}"
+                    <a href="{{ pins_from_href('') }}"
                        style="text-decoration:none !important;
                               border-bottom:none!important;
                               display:inline-flex;
@@ -4827,6 +4952,21 @@ TEMPL_LIST = wrap("""
                         <sup style="font-size:.5em;">{{ active_site.cnt }}</sup>
                     </a>
                     {% endif %}
+                    {% for t in active_pin_tags %}
+                    <a href="{{ t.href }}"
+                       style="text-decoration:none !important;
+                              border-bottom:none!important;
+                              display:inline-flex;
+                              margin:.15rem 0;
+                              padding:.15rem .6rem;
+                              border-radius:1rem;
+                              white-space:nowrap;
+                              font-size:.8em;
+                              background:{{ theme_color() }}; color:#000;">
+                        #{{ t.tag }}
+                        <sup style="font-size:.5em;">{{ t.cnt }}</sup>
+                    </a>
+                    {% endfor %}
                 </div>
                 <details class="more-toggle" style="justify-self:end;">
                     <summary style="list-style:none;
@@ -4860,6 +5000,22 @@ TEMPL_LIST = wrap("""
                               background:#444; color:{{ theme_color() }};">
                         {{ s.host }}
                         <sup style="font-size:.5em;">{{ s.cnt }}</sup>
+                    </a>
+                    {% endfor %}
+                    {% if site_filters and pin_tags %}<div style="width:100%; height:1px; background:#333; margin:.25rem 0;"></div>{% endif %}
+                    {% for t in pin_tags if not t.active %}
+                    <a href="{{ t.href }}"
+                       style="text-decoration:none !important;
+                              border-bottom:none!important;
+                              display:inline-flex;
+                              margin:.15rem 0;
+                              padding:.15rem .6rem;
+                              border-radius:1rem;
+                              white-space:nowrap;
+                              font-size:.8em;
+                              background:#444;   color:{{ theme_color() }};">
+                        #{{ t.tag }}
+                        <sup style="font-size:.5em;">{{ t.cnt }}</sup>
                     </a>
                     {% endfor %}
                 </div>
@@ -4936,7 +5092,7 @@ TEMPL_LIST = wrap("""
                         <a href="{% if kind == 'post' %}
                                     {{ url_for('by_kind', slug=kind_to_slug('post'), project=selected_project or None, page=p) }}
                                  {% elif kind == 'pin' %}
-                                    {{ request.path }}?page={{ p }}{% if selected_site %}&from={{ selected_site }}{% endif %}
+                                    {{ request.path }}?page={{ p }}{% if selected_site %}&from={{ selected_site }}{% endif %}{% if selected_pin_tags_param %}&tag={{ selected_pin_tags_param }}{% endif %}
                                  {% elif kind == 'say' %}
                                     {{ request.path }}?page={{ p }}{% if selected_say_tags_param %}&tag={{ selected_say_tags_param }}{% endif %}
                                  {% elif kind == 'photo' %}
