@@ -2226,7 +2226,7 @@ nav a[aria-current=page]:hover,nav a[aria-current=page]:focus-visible{text-decor
         </h1>
         {% set tagline = get_setting('site_tagline','').strip() %}
         {% if tagline %}
-            <span style="margin-left:.1rem; color:#bcbcbc;">{{ tagline }}</span>
+            <span style="margin-left:.1rem; color:#bcbcbc;">{{ tagline|mdinline('tagline') }}</span>
         {% endif %}
     </div>
     <nav aria-label="Primary" class="nav-primary">
