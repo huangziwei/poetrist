@@ -5650,18 +5650,42 @@ def _render_tags(tag_list: str):
 
     # ---------- which is currently selected? ----------------------------------
     selected = {t.lower() for t in tag_list.split("+") if t}
+    q_marks = ",".join("?" * len(selected)) if selected else ""
+
+    # ---------- tags that would still return results if added -----------------
+    co_occurring: set[str] = set()
+    if selected:
+        co_sql = f"""
+            SELECT DISTINCT t.name
+              FROM entry_tag et
+              JOIN tag t ON t.id = et.tag_id
+             WHERE et.entry_id IN (
+                SELECT et2.entry_id
+                  FROM entry_tag et2
+                  JOIN tag t2 ON t2.id = et2.tag_id
+                 WHERE t2.name IN ({q_marks})
+              GROUP BY et2.entry_id
+                HAVING COUNT(DISTINCT t2.name)=?
+             )
+        """
+        co_occurring = {
+            r["name"].lower()
+            for r in db.execute(co_sql, (*selected, len(selected)))
+        }
 
     # ---------- scale counts → font-size (same as before) -------------------
     counts = [r["cnt"] for r in rows]
     lo, hi = (min(counts), max(counts)) if counts else (0, 0)
     span = max(1, hi - lo)
     for r in rows:
+        r_name_lower = r["name"].lower()
         weight = (r["cnt"] - lo) / span if counts else 0
         r["size"] = f"{0.75 + weight * 1.2:.2f}em"
-        r["active"] = r["name"] in selected
+        r["active"] = r_name_lower in selected
+        r["hint"] = bool(selected and not r["active"] and r_name_lower in co_occurring)
 
         # ── URL that would result from clicking the pill ────────────────────
-        new_sel = (selected - {r["name"]}) if r["active"] else (selected | {r["name"]})
+        new_sel = (selected - {r_name_lower}) if r["active"] else (selected | {r_name_lower})
         r["href"] = tags_href("+".join(sorted(new_sel))) if new_sel else tags_href()
 
     # ---------- fetch entries if something is selected ----------------------
@@ -5670,7 +5694,6 @@ def _render_tags(tag_list: str):
     per = page_size()
     if selected:
         order_sql = "e.created_at DESC" if sort == "new" else "e.created_at ASC"
-        q_marks = ",".join("?" * len(selected))
         base_sql = f"""
             SELECT  e.*,
                     ei.action,
@@ -5745,6 +5768,8 @@ TEMPL_TAGS = wrap("""
                 border-radius:1rem;
                 white-space:nowrap;
                 font-size:.8em;
+                box-shadow:{% if t.hint %}0 0 0 1px {{ theme_color() }}{% else %}none{% endif %};
+                opacity:{% if selected and not t.active and not t.hint %}0.45{% else %}1{% endif %};
                 {% if t.active %}
                     background:{{ theme_color() }}; color:#000;
                 {% else %}
