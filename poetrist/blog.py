@@ -4142,9 +4142,11 @@ def by_kind(slug):
     project_filters_list = []
     selected_project = request.args.get("project", "").strip().lower()
     selected_site = link_host(request.args.get("from", "").strip())
-    selected_photo_tag = (request.args.get("tag", "") or "").strip().lower()
-    if selected_photo_tag in PHOTO_TAG_SET:
-        selected_photo_tag = ""
+    selected_photo_tags_raw = (request.args.get("tag", "") or "").strip().lower()
+    selected_photo_tags = {
+        t for t in selected_photo_tags_raw.split("+") if t and t not in PHOTO_TAG_SET
+    }
+    selected_photo_tags_param = "+".join(sorted(selected_photo_tags))
     total_posts = None
     site_filters: list[dict[str, str]] = []
     total_pins = None
@@ -4164,17 +4166,12 @@ def by_kind(slug):
         ).fetchall()
 
         tag_counts: dict[str, int] = defaultdict(int)
-        all_cards: list[dict[str, str]] = []
-        filtered_cards: list[dict[str, str]] = []
+        co_occurring: set[str] = set()
+        all_cards: list[dict[str, str | list[str]]] = []
 
         for e in all_entries:
             entry_tags_lower = [t.lower() for t in entry_tags(e["id"], db=db)]
             imgs = entry_images(e["body"], e["slug"])
-            for img in imgs:
-                for t in entry_tags_lower:
-                    if t in PHOTO_TAG_SET:
-                        continue
-                    tag_counts[t] += 1
             all_cards.extend(
                 {
                     "src": img["src"],
@@ -4185,29 +4182,50 @@ def by_kind(slug):
                 }
                 for img in imgs
             )
-            if selected_photo_tag and selected_photo_tag not in entry_tags_lower:
-                continue
-            filtered_cards.extend(
-                {
-                    "src": img["src"],
-                    "alt": img["alt"],
-                    "slug": e["slug"],
-                    "kind": e["kind"],
-                }
-                for img in imgs
+
+        def matches_selection(card: dict[str, str | list[str]]) -> bool:
+            return not selected_photo_tags or selected_photo_tags.issubset(
+                set(card["tags"])
+            )
+
+        cards = [c for c in all_cards if matches_selection(c)]
+
+        for card in cards:
+            for t in card["tags"]:
+                if t in PHOTO_TAG_SET:
+                    continue
+                tag_counts[t] += 1
+                co_occurring.add(t)
+
+        all_filter_tags = set(tag_counts) | set(selected_photo_tags)
+
+        def tag_href(new_sel: set[str]) -> str:
+            tag_param = "+".join(sorted(new_sel))
+            return (
+                url_for("by_kind", slug=kind_to_slug("photo"), tag=tag_param)
+                if tag_param
+                else url_for("by_kind", slug=kind_to_slug("photo"))
             )
 
         photo_tag_filters = [
             {
                 "tag": t,
-                "cnt": c,
-                "active": t == selected_photo_tag,
-                "href": url_for("by_kind", slug=kind_to_slug("photo"), tag=t),
+                "cnt": tag_counts.get(t, 0),
+                "active": t in selected_photo_tags,
+                "hint": bool(
+                    selected_photo_tags
+                    and t not in selected_photo_tags
+                    and t in co_occurring
+                ),
+                "href": tag_href(
+                    (selected_photo_tags - {t})
+                    if t in selected_photo_tags
+                    else (selected_photo_tags | {t})
+                ),
             }
-            for t, c in sorted(tag_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+            for t in sorted(all_filter_tags, key=lambda kv: (-tag_counts.get(kv, 0), kv))
         ]
 
-        cards = filtered_cards if selected_photo_tag else all_cards
         total_cards = len(cards)
         total_photos = len(all_cards)
         total_pages = (total_cards + per_photos - 1) // per_photos
@@ -4233,7 +4251,8 @@ def by_kind(slug):
             selected_project="",
             total_posts=None,
             photo_tags=photo_tag_filters,
-            selected_photo_tag=selected_photo_tag,
+            selected_photo_tags=selected_photo_tags,
+            selected_photo_tags_param=selected_photo_tags_param,
             total_photos=total_photos,
             photo_cards=photo_cards,
             site_filters=[],
@@ -4320,7 +4339,8 @@ def by_kind(slug):
         selected_site=selected_site,
         total_posts=total_posts,
         photo_tags=photo_tag_filters,
-        selected_photo_tag=selected_photo_tag,
+        selected_photo_tags=selected_photo_tags,
+        selected_photo_tags_param=selected_photo_tags_param,
         total_photos=total_photos,
         photo_cards=[],
         site_filters=site_filters,
@@ -4461,7 +4481,7 @@ TEMPL_LIST = wrap("""
             .photo-tag-grid details.more-toggle + .more-panel{display:none;}
             .photo-tag-grid details.more-toggle[open] + .more-panel{display:flex;flex-wrap:wrap;gap:.25rem .5rem;margin-top:.35rem;grid-column:1 / span 2;}
             </style>
-            {% set active_photo = (photo_tags|selectattr('active')|list|first) %}
+            {% set active_photo_tags = photo_tags|selectattr('active')|list %}
             <div class="photo-tag-grid" style="display:grid; grid-template-columns:1fr auto; grid-template-rows:auto auto; column-gap:.75rem; row-gap:.35rem; align-items:start; margin-bottom:.75rem;">
                 <div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
                     <a href="{{ url_for('by_kind', slug=kind_to_slug('photo')) }}"
@@ -4473,7 +4493,7 @@ TEMPL_LIST = wrap("""
                               border-radius:1rem;
                               white-space:nowrap;
                               font-size:.8em;
-                              {% if not selected_photo_tag %}
+                              {% if not selected_photo_tags %}
                                   background:{{ theme_color() }}; color:#000;
                               {% else %}
                                   background:#444;   color:{{ theme_color() }};
@@ -4481,8 +4501,8 @@ TEMPL_LIST = wrap("""
                         All
                         <sup style="font-size:.5em;">{{ total_photos }}</sup>
                     </a>
-                    {% if active_photo %}
-                    <a href="{{ active_photo.href }}"
+                    {% for t in active_photo_tags %}
+                    <a href="{{ t.href }}"
                        style="text-decoration:none !important;
                               border-bottom:none!important;
                               display:inline-flex;
@@ -4492,10 +4512,10 @@ TEMPL_LIST = wrap("""
                               white-space:nowrap;
                               font-size:.8em;
                               background:{{ theme_color() }}; color:#000;">
-                        #{{ active_photo.tag }}
-                        <sup style="font-size:.5em;">{{ active_photo.cnt }}</sup>
+                        #{{ t.tag }}
+                        <sup style="font-size:.5em;">{{ t.cnt }}</sup>
                     </a>
-                    {% endif %}
+                    {% endfor %}
                 </div>
                 <details class="more-toggle" style="justify-self:end;">
                     <summary style="list-style:none;
@@ -4525,6 +4545,8 @@ TEMPL_LIST = wrap("""
                               border-radius:1rem;
                               white-space:nowrap;
                               font-size:.8em;
+                              box-shadow:{% if t.hint %}0 0 0 1px {{ theme_color() }}{% else %}none{% endif %};
+                              opacity:{% if selected_photo_tags and not t.hint %}0.45{% else %}1{% endif %};
                               background:#444;   color:{{ theme_color() }};">
                         #{{ t.tag }}
                         <sup style="font-size:.5em;">{{ t.cnt }}</sup>
@@ -4696,7 +4718,7 @@ TEMPL_LIST = wrap("""
                                  {% elif kind == 'pin' %}
                                     {{ request.path }}?page={{ p }}{% if selected_site %}&from={{ selected_site }}{% endif %}
                                  {% elif kind == 'photo' %}
-                                    {{ request.path }}?page={{ p }}{% if selected_photo_tag %}&tag={{ selected_photo_tag }}{% endif %}
+                                    {{ request.path }}?page={{ p }}{% if selected_photo_tags_param %}&tag={{ selected_photo_tags_param }}{% endif %}
                                  {% else %}
                                     {{ request.path }}?page={{ p }}
                                  {% endif %}">{{ p }}</a>
