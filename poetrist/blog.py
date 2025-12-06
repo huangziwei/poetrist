@@ -4658,8 +4658,6 @@ TEMPL_LIST = wrap("""
                               border-radius:1rem;
                               white-space:nowrap;
                               font-size:.8em;
-                              box-shadow:{% if t.hint %}0 0 0 1px {{ theme_color() }}{% else %}none{% endif %};
-                              opacity:{% if selected_say_tags and not t.hint %}0.45{% else %}1{% endif %};
                               background:#444;   color:{{ theme_color() }};">
                         #{{ t.tag }}
                         <sup style="font-size:.5em;">{{ t.cnt }}</sup>
@@ -4769,8 +4767,6 @@ TEMPL_LIST = wrap("""
                               border-radius:1rem;
                               white-space:nowrap;
                               font-size:.8em;
-                              box-shadow:{% if t.hint %}0 0 0 1px {{ theme_color() }}{% else %}none{% endif %};
-                              opacity:{% if selected_photo_tags and not t.hint %}0.45{% else %}1{% endif %};
                               background:#444;   color:{{ theme_color() }};">
                         #{{ t.tag }}
                         <sup style="font-size:.5em;">{{ t.cnt }}</sup>
