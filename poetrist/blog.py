@@ -4160,6 +4160,14 @@ def by_kind(slug):
     selected_say_tags = {t for t in selected_say_tags_raw.split("+") if t}
     selected_say_tags_list = sorted(selected_say_tags)
     selected_say_tags_param = "+".join(selected_say_tags_list)
+    selected_post_tags_raw = (
+        (request.args.get("tag", "") or "").strip().lower()
+        if kind == "post"
+        else ""
+    )
+    selected_post_tags = {t for t in selected_post_tags_raw.split("+") if t}
+    selected_post_tags_list = sorted(selected_post_tags)
+    selected_post_tags_param = "+".join(selected_post_tags_list)
     selected_pin_tags_raw = (
         (request.args.get("tag", "") or "").strip().lower() if kind == "pin" else ""
     )
@@ -4171,6 +4179,7 @@ def by_kind(slug):
     total_pins = None
     total_photos = None
     total_says = None
+    post_tag_filters: list[dict[str, str | int | bool]] = []
     photo_tag_filters: list[dict[str, str | int | bool]] = []
     say_tag_filters: list[dict[str, str | int | bool]] = []
     pin_tag_filters: list[dict[str, str | int | bool]] = []
@@ -4387,13 +4396,54 @@ def by_kind(slug):
             params.append(len(selected_say_tags_list))
 
     if kind == "post":
-        project_filters_list = project_filters(db=db)
-        valid_slugs = {p["slug"] for p in project_filters_list}
-        if selected_project and selected_project not in valid_slugs:
-            selected_project = ""
+        q_marks_post = (
+            ",".join("?" * len(selected_post_tags_list))
+            if selected_post_tags_list
+            else ""
+        )
         total_posts = db.execute(
             "SELECT COUNT(*) AS c FROM entry WHERE kind='post'"
         ).fetchone()["c"]
+
+        # --- project filters (counts respect current tag selection) ----------
+        if selected_post_tags_list:
+            matching_entries_sql = f"""
+                SELECT et2.entry_id
+                  FROM entry_tag et2
+                  JOIN tag t2 ON t2.id = et2.tag_id
+                  JOIN entry e2 ON e2.id = et2.entry_id
+                 WHERE e2.kind='post' AND t2.name IN ({q_marks_post})
+              GROUP BY et2.entry_id
+                HAVING COUNT(DISTINCT t2.name)=?
+            """
+            project_rows = db.execute(
+                f"""
+                SELECT p.slug, p.title, COUNT(*) AS cnt
+                  FROM project p
+                  JOIN project_entry pe ON pe.project_id = p.id
+                 WHERE pe.entry_id IN ({matching_entries_sql})
+              GROUP BY p.id
+              ORDER BY cnt DESC, LOWER(p.title)
+                """,
+                (*selected_post_tags_list, len(selected_post_tags_list)),
+            ).fetchall()
+        else:
+            project_rows = db.execute(
+                """
+                SELECT p.slug, p.title, COUNT(*) AS cnt
+                  FROM project p
+                  JOIN project_entry pe ON pe.project_id = p.id
+                  JOIN entry e ON e.id = pe.entry_id
+                 WHERE e.kind='post'
+              GROUP BY p.id
+              ORDER BY cnt DESC, LOWER(p.title)
+                """
+            ).fetchall()
+
+        project_filters_list = [dict(r) for r in project_rows]
+        valid_slugs = {p["slug"] for p in project_filters_list}
+        if selected_project and selected_project not in valid_slugs:
+            selected_project = ""
         if selected_project:
             project_join = (
                 " JOIN project_entry pe ON pe.entry_id = e.id"
@@ -4401,6 +4451,104 @@ def by_kind(slug):
             )
             project_where = " AND p.slug=?"
             params.append(selected_project)
+
+        # --- tag filters for posts (respect current project selection) -------
+        post_tag_base_where = "WHERE e2.kind='post'"
+        post_tag_params: list[str] = []
+        post_tag_join = ""
+        if selected_project:
+            post_tag_join = (
+                " JOIN project_entry pe2 ON pe2.entry_id = e2.id"
+                " JOIN project p2 ON p2.id = pe2.project_id"
+            )
+            post_tag_base_where += " AND p2.slug=?"
+            post_tag_params.append(selected_project)
+
+        if selected_post_tags_list:
+            matching_entries_sql = f"""
+                SELECT et2.entry_id
+                  FROM entry_tag et2
+                  JOIN tag t2 ON t2.id = et2.tag_id
+                  JOIN entry e2 ON e2.id = et2.entry_id
+                  {post_tag_join}
+                 {post_tag_base_where} AND t2.name IN ({q_marks_post})
+              GROUP BY et2.entry_id
+                HAVING COUNT(DISTINCT t2.name)=?
+            """
+            match_params = (
+                *post_tag_params,
+                *selected_post_tags_list,
+                len(selected_post_tags_list),
+            )
+        else:
+            matching_entries_sql = f"""
+                SELECT e2.id AS entry_id
+                  FROM entry e2
+                  {post_tag_join}
+                 {post_tag_base_where}
+            """
+            match_params = tuple(post_tag_params)
+
+        post_tag_count_rows = db.execute(
+            f"""
+            SELECT t.name, COUNT(*) AS cnt
+              FROM tag t
+              JOIN entry_tag et ON et.tag_id = t.id
+             WHERE et.entry_id IN ({matching_entries_sql})
+          GROUP BY t.name
+            """,
+            match_params,
+        ).fetchall()
+        co_occurring_post = {r["name"].lower() for r in post_tag_count_rows}
+        post_tag_counts = {r["name"].lower(): r["cnt"] for r in post_tag_count_rows}
+        for t in selected_post_tags_list:
+            post_tag_counts.setdefault(t, 0)
+        all_post_tags = set(post_tag_counts) | set(selected_post_tags_list)
+
+        def post_tag_href(new_sel: set[str]) -> str:
+            tag_param = "+".join(sorted(new_sel))
+            params_dict = {}
+            if selected_project:
+                params_dict["project"] = selected_project
+            if tag_param:
+                params_dict["tag"] = tag_param
+            return url_for("by_kind", slug=kind_to_slug("post"), **params_dict)
+
+        post_tag_filters = [
+            {
+                "tag": t,
+                "cnt": post_tag_counts.get(t, 0),
+                "active": t in selected_post_tags,
+                "hint": bool(
+                    selected_post_tags
+                    and t not in selected_post_tags
+                    and t in co_occurring_post
+                ),
+                "href": post_tag_href(
+                    (selected_post_tags - {t})
+                    if t in selected_post_tags
+                    else (selected_post_tags | {t})
+                ),
+            }
+            for t in sorted(
+                all_post_tags, key=lambda kv: (-post_tag_counts.get(kv, 0), kv)
+            )
+        ]
+
+        if selected_post_tags_list:
+            tag_join = (
+                " JOIN entry_tag et_filter ON et_filter.entry_id = e.id"
+                " JOIN tag t_filter ON t_filter.id = et_filter.tag_id"
+            )
+            tag_group_having = f"""
+            GROUP BY e.id
+              HAVING COUNT(
+                  DISTINCT CASE WHEN t_filter.name IN ({q_marks_post})
+                                THEN t_filter.name END
+              )=?
+            """
+            params.extend(selected_post_tags_list)
+            params.append(len(selected_post_tags_list))
     elif kind == "pin":
         q_marks_pin = (
             ",".join("?" * len(selected_pin_tags_list)) if selected_pin_tags_list else ""
@@ -4568,6 +4716,9 @@ def by_kind(slug):
         selected_project=selected_project,
         selected_site=selected_site,
         total_posts=total_posts,
+        post_tags=post_tag_filters,
+        selected_post_tags=selected_post_tags,
+        selected_post_tags_param=selected_post_tags_param,
         photo_tags=photo_tag_filters,
         selected_photo_tags=selected_photo_tags,
         selected_photo_tags_param=selected_photo_tags_param,
@@ -4629,44 +4780,113 @@ TEMPL_LIST = wrap("""
         {% endif %}
         <hr>
         {% if kind == 'post' %}
-            {% if project_filters %}
-            <div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem; margin-bottom:.75rem;">
-                <a href="{{ url_for('by_kind', slug=kind_to_slug('post')) }}"
-                   style="text-decoration:none !important;
-                          border-bottom:none!important;
-                          display:inline-flex;
-                          margin:.15rem 0;
-                          padding:.15rem .6rem;
-                          border-radius:1rem;
-                          white-space:nowrap;
-                          font-size:.8em;
-                          {% if not selected_project %}
-                              background:{{ theme_color() }}; color:#000;
-                          {% else %}
-                              background:#444;   color:{{ theme_color() }};
-                          {% endif %}">
-                    All
-                    <sup style="font-size:.5em;">{{ total_posts }}</sup>
-                </a>
-                {% for pr in project_filters %}
-                <a href="{{ url_for('by_kind', slug=kind_to_slug('post'), project=pr['slug']) }}"
-                   style="text-decoration:none !important;
-                          border-bottom:none!important;
-                          display:inline-flex;
-                          margin:.15rem 0;
-                          padding:.15rem .6rem;
-                          border-radius:1rem;
-                          white-space:nowrap;
-                          font-size:.8em;
-                          {% if selected_project == pr['slug'] %}
-                              background:{{ theme_color() }}; color:#000;
-                          {% else %}
-                              background:#444;   color:{{ theme_color() }};
-                          {% endif %}">
-                    {{ pr['title'] }}
-                    <sup style="font-size:.5em;">{{ pr['cnt'] }}</sup>
-                </a>
-                {% endfor %}
+            {% if project_filters or post_tags %}
+            <style>
+            .post-filter-grid details.more-toggle + .more-panel{display:none;}
+            .post-filter-grid details.more-toggle[open] + .more-panel{display:flex;flex-wrap:wrap;gap:.25rem .5rem;margin-top:.35rem;grid-column:1 / span 2;}
+            </style>
+            {% set active_project = (project_filters|selectattr('slug','equalto',selected_project)|list|first) %}
+            {% set active_post_tags = post_tags|selectattr('active')|list %}
+            <div class="post-filter-grid" style="display:grid; grid-template-columns:1fr auto; grid-template-rows:auto auto; column-gap:.75rem; row-gap:.35rem; align-items:start; margin-bottom:.75rem;">
+                <div style="display:flex; flex-wrap:wrap; gap:.25rem .5rem;">
+                    <a href="{{ url_for('by_kind', slug=kind_to_slug('post')) }}"
+                       style="text-decoration:none !important;
+                              border-bottom:none!important;
+                              display:inline-flex;
+                              margin:.15rem 0;
+                              padding:.15rem .6rem;
+                              border-radius:1rem;
+                              white-space:nowrap;
+                              font-size:.8em;
+                              {% if not selected_project and not selected_post_tags %}
+                                  background:{{ theme_color() }}; color:#000;
+                              {% else %}
+                                  background:#444;   color:{{ theme_color() }};
+                              {% endif %}">
+                        All
+                        <sup style="font-size:.5em;">{{ total_posts }}</sup>
+                    </a>
+                    {% if active_project %}
+                    <a href="{{ url_for('by_kind', slug=kind_to_slug('post'), **({'tag': selected_post_tags_param} if selected_post_tags_param else {})) }}"
+                       style="text-decoration:none !important;
+                              border-bottom:none!important;
+                              display:inline-flex;
+                              margin:.15rem 0;
+                              padding:.15rem .6rem;
+                              border-radius:1rem;
+                              white-space:nowrap;
+                              font-size:.8em;
+                              background:{{ theme_color() }}; color:#000;">
+                        {{ active_project.title }}
+                        <sup style="font-size:.5em;">{{ active_project.cnt }}</sup>
+                    </a>
+                    {% endif %}
+                    {% for t in active_post_tags %}
+                    <a href="{{ t.href }}"
+                       style="text-decoration:none !important;
+                              border-bottom:none!important;
+                              display:inline-flex;
+                              margin:.15rem 0;
+                              padding:.15rem .6rem;
+                              border-radius:1rem;
+                              white-space:nowrap;
+                              font-size:.8em;
+                              background:{{ theme_color() }}; color:#000;">
+                        #{{ t.tag }}
+                        <sup style="font-size:.5em;">{{ t.cnt }}</sup>
+                    </a>
+                    {% endfor %}
+                </div>
+                <details class="more-toggle" style="justify-self:end;">
+                    <summary style="list-style:none;
+                                    display:inline-flex;
+                                    align-items:center;
+                                    gap:.25rem;
+                                    margin:0;
+                                    padding:.15rem .6rem;
+                                    border-radius:1rem;
+                                    border:1px solid #555;
+                                    background:#333;
+                                    color:{{ theme_color() }};
+                                    font-size:.8em;
+                                    cursor:pointer;">
+                        Filter
+                        <span aria-hidden="true" style="font-size:.75em;">▾</span>
+                    </summary>
+                </details>
+                <div class="more-panel" style="grid-column:1 / span 2;">
+                    {% for pr in project_filters if pr.slug != selected_project %}
+                    <a href="{{ url_for('by_kind', slug=kind_to_slug('post'), project=pr['slug'], **({'tag': selected_post_tags_param} if selected_post_tags_param else {})) }}"
+                       style="text-decoration:none !important;
+                              border-bottom:none!important;
+                              display:inline-flex;
+                              margin:.15rem 0;
+                              padding:.15rem .6rem;
+                              border-radius:1rem;
+                              white-space:nowrap;
+                              font-size:.8em;
+                              background:#444;   color:{{ theme_color() }};">
+                        {{ pr['title'] }}
+                        <sup style="font-size:.5em;">{{ pr['cnt'] }}</sup>
+                    </a>
+                    {% endfor %}
+                    {% if project_filters and post_tags %}<div style="width:100%; height:1px; background:#333; margin:.25rem 0;"></div>{% endif %}
+                    {% for t in post_tags if not t.active %}
+                    <a href="{{ t.href }}"
+                       style="text-decoration:none !important;
+                              border-bottom:none!important;
+                              display:inline-flex;
+                              margin:.15rem 0;
+                              padding:.15rem .6rem;
+                              border-radius:1rem;
+                              white-space:nowrap;
+                              font-size:.8em;
+                              background:#444;   color:{{ theme_color() }};">
+                        #{{ t.tag }}
+                        <sup style="font-size:.5em;">{{ t.cnt }}</sup>
+                    </a>
+                    {% endfor %}
+                </div>
             </div>
             {% endif %}
             <ul style="list-style:none; padding:0; margin:0;">
@@ -5090,7 +5310,7 @@ TEMPL_LIST = wrap("""
                         <span style="border-bottom:0.33rem solid #aaa;">{{ p }}</span>
                     {% else %}
                         <a href="{% if kind == 'post' %}
-                                    {{ url_for('by_kind', slug=kind_to_slug('post'), project=selected_project or None, page=p) }}
+                                    {{ url_for('by_kind', slug=kind_to_slug('post'), project=selected_project or None, page=p, **({'tag': selected_post_tags_param} if selected_post_tags_param else {})) }}
                                  {% elif kind == 'pin' %}
                                     {{ request.path }}?page={{ p }}{% if selected_site %}&from={{ selected_site }}{% endif %}{% if selected_pin_tags_param %}&tag={{ selected_pin_tags_param }}{% endif %}
                                  {% elif kind == 'say' %}
