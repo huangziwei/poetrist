@@ -910,6 +910,7 @@ def init_db():
         );
         INSERT OR IGNORE INTO settings (key, value)
             VALUES ('site_name', 'po.etr.ist'),
+                   ('site_tagline',''),
                    ('theme_color','#A5BA93'),
                    ('timezone','{TZ_DFLT}');
 
@@ -2219,7 +2220,13 @@ nav a[aria-current=page]:hover,nav a[aria-current=page]:focus-visible{text-decor
     {% endif %}
 {%- endmacro %}
 <div class="container h-feed" style="max-width: 60rem; margin: 3rem auto;">
-    <h1 id="page-top" style="margin-top:0;"><a href="{{ url_for('index') }}" style="color:{{ theme_color() }};">{{title or 'po.etr.ist'}}</a></h1>
+    <div style="display:flex; flex-wrap:wrap; align-items:baseline; gap:.65rem .85rem; margin-bottom:1rem;">
+        <h1 id="page-top" style="margin:0;"><a href="{{ url_for('index') }}" style="color:{{ theme_color() }};">{{title or 'po.etr.ist'}}</a></h1>
+        {% set tagline = get_setting('site_tagline','').strip() %}
+        {% if tagline %}
+            <span style="color:#aaa; font-size:1.4rem;">{{ tagline }}</span>
+        {% endif %}
+    </div>
     <nav aria-label="Primary" class="nav-primary">
         <div class="nav-row nav-primary-links">
             <a href="{{ url_for('by_kind', slug=kind_to_slug('say')) }}"
@@ -2924,6 +2931,7 @@ def settings():
 
     if request.method == "POST":
         site_name = request.form["site_name"].strip()
+        site_tagline = request.form.get("site_tagline", "").strip()
         username = request.form["username"].strip()
         col = request.form["theme_color"].strip()
         tz = request.form.get("timezone", "").strip()
@@ -2932,6 +2940,7 @@ def settings():
 
         if site_name:
             set_setting("site_name", site_name)
+        set_setting("site_tagline", site_tagline)
 
         if username:
             db.execute("UPDATE user SET username=? WHERE id=1", (username,))
@@ -3002,6 +3011,7 @@ def settings():
     return render_template_string(
         TEMPL_SETTINGS,
         site_name=get_setting("site_name", "po.etr.ist"),
+        site_tagline=get_setting("site_tagline", ""),
         username=cur_username,
         new_token=new_token,
         title=get_setting("site_name", "po.etr.ist"),
@@ -3025,6 +3035,10 @@ TEMPL_SETTINGS = wrap("""
             <label style="display:block; margin:.5rem 0">
                 <span style="font-size:.8em; color:#aaa">Site name</span><br>
                 <input name="site_name" value="{{ site_name }}" style="width:100%">
+            </label>
+            <label style="display:block; margin:.5rem 0">
+                <span style="font-size:.8em; color:#aaa">Tagline (optional)</span><br>
+                <input name="site_tagline" value="{{ site_tagline }}" style="width:100%" placeholder="A short subtitle under the site name">
             </label>
 
             <label style="display:block; margin:.5rem 0">
