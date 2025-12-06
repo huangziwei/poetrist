@@ -4233,7 +4233,9 @@ def by_kind(slug):
                     else (selected_photo_tags | {t})
                 ),
             }
-            for t in sorted(all_filter_tags, key=lambda kv: (-tag_counts.get(kv, 0), kv))
+            for t in sorted(
+                all_filter_tags, key=lambda kv: (-tag_counts.get(kv, 0), kv)
+            )
         ]
 
         total_cards = len(cards)
@@ -4275,13 +4277,13 @@ def by_kind(slug):
         )
 
     if kind == "say":
-        total_says = (
-            db.execute("SELECT COUNT(*) AS c FROM entry WHERE kind='say'").fetchone()[
-                "c"
-            ]
-        )
+        total_says = db.execute(
+            "SELECT COUNT(*) AS c FROM entry WHERE kind='say'"
+        ).fetchone()["c"]
         q_marks_say = (
-            ",".join("?" * len(selected_say_tags_list)) if selected_say_tags_list else ""
+            ",".join("?" * len(selected_say_tags_list))
+            if selected_say_tags_list
+            else ""
         )
         co_occurring_say: set[str] = set()
         say_count_rows = []
@@ -4403,11 +4405,9 @@ def by_kind(slug):
             for r in site_rows
             if r["host"]
         ]
-        total_pins = (
-            db.execute("SELECT COUNT(*) AS c FROM entry WHERE kind='pin'").fetchone()[
-                "c"
-            ]
-        )
+        total_pins = db.execute(
+            "SELECT COUNT(*) AS c FROM entry WHERE kind='pin'"
+        ).fetchone()["c"]
         if selected_site:
             site_where = " AND link_host(e.link)=?"
             params.append(selected_site)
@@ -5470,7 +5470,7 @@ TEMPL_ENTRY_DETAIL = wrap("""
         <article class="h-entry">
             {% if e['kind']=='pin' %}
                 {% set host = link_host(e['link']) %}
-                <h2 class="pin-title" style="margin-top:0">
+                <h2 class="pin-title">
                     <a class="u-bookmark-of p-name" href="{{ e['link'] }}" target="_blank" rel="noopener" title="{{ e['link'] }}"
                     style="word-break:break-all; overflow-wrap:anywhere;">
                     {{ e['title'] }} 
@@ -5913,8 +5913,7 @@ def _render_tags(tag_list: str):
              )
         """
         co_occurring = {
-            r["name"].lower()
-            for r in db.execute(co_sql, (*selected, len(selected)))
+            r["name"].lower() for r in db.execute(co_sql, (*selected, len(selected)))
         }
 
     # ---------- scale counts → font-size (same as before) -------------------
@@ -5929,7 +5928,9 @@ def _render_tags(tag_list: str):
         r["hint"] = bool(selected and not r["active"] and r_name_lower in co_occurring)
 
         # ── URL that would result from clicking the pill ────────────────────
-        new_sel = (selected - {r_name_lower}) if r["active"] else (selected | {r_name_lower})
+        new_sel = (
+            (selected - {r_name_lower}) if r["active"] else (selected | {r_name_lower})
+        )
         r["href"] = tags_href("+".join(sorted(new_sel))) if new_sel else tags_href()
 
     # ---------- fetch entries if something is selected ----------------------
