@@ -263,7 +263,7 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 EMBED_MAX_DEPTH = 2
 EMBED_MAX_COUNT = 10
-_EMBED_RE = re.compile(r"^@entry:(\S+?)(?:#([A-Za-z0-9._-]+))?\s*$")
+_EMBED_RE = re.compile(r"^@(entry|item):(\S+?)(?:#([A-Za-z0-9._-]+))?\s*$")
 
 MD_EXTENSION_CONFIGS = {
     "pymdownx.highlight": {
@@ -541,6 +541,158 @@ def _parse_embed_target(
     return raw, section, None
 
 
+TEMPL_ITEM_EMBED = """
+<div class="entry-embed entry-embed--item" data-item="{{ item['slug'] }}">
+  <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
+    <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;font-weight:700;">
+      {% if item_url %}
+      <a href="{{ item_url }}" style="color:inherit;border-bottom:none;display:inline-flex;align-items:center;gap:.35rem;">
+        <span>{{ item['title'] }}{% if year %} ({{ year }}){% endif %}</span>
+      </a>
+      {% else %}
+      <span>{{ item['title'] }}{% if year %} ({{ year }}){% endif %}</span>
+      {% endif %}
+      {% if rating_value %}
+        <span aria-label="Score {{ rating_value }} of 5"
+              style="display:inline-flex;align-items:center;color:{{ theme_color() }};font-size:1.2rem;letter-spacing:1px;white-space:nowrap;">
+            {{ "★" * rating_value }}
+        </span>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if meta %}
+  <div class="entry-embed__body">
+    <ul  style="display:flex;align-items:flex-start;gap:1rem;
+                list-style:none;padding:0;margin:0;font-size:.9em;color:#aaa;">
+      {% for r in meta if is_b64_image(r.k, r.v) or is_url_image(r.k, r.v) %}
+      <li style="float:left;margin:.65em .75rem .75rem 0;">
+        <img src="{% if is_b64_image(r.k, r.v) %}data:image/webp;base64,{{ r.v }}{% else %}{{ r.v }}{% endif %}"
+             alt="{{ item['title'] }}"
+             style="width:135px;max-width:100%;
+                    border:1px solid #555;margin:0;">
+      </li>
+      {% endfor %}
+
+      <li style="flex:1;">
+        <ul style="list-style:none;padding:0;margin:0;">
+        {% for r in meta if not is_b64_image(r.k, r.v) and not is_url_image(r.k, r.v) %}
+          <li style="margin:.2em 0;">
+            <strong>{{ r.k|smartcap }}:</strong>
+            {{ r.v|mdinline }}
+          </li>
+        {% endfor %}
+        </ul>
+      </li>
+    </ul>
+  </div>
+  {% endif %}
+
+  <div class="entry-embed__footer" style="color:#aaa;">
+    <span class="entry-embed__pill">{{ item['item_type']|smartcap }}</span>
+    {% if verb %}
+      <span class="entry-embed__pill">{{ verb|smartcap }}</span>
+    {% endif %}
+    {% if item_url %}
+    <a href="{{ item_url }}" style="text-decoration:none; color:inherit;border-bottom:none;">View item</a>
+    {% endif %}
+  </div>
+</div>
+"""
+
+
+def render_item_embed(slug: str, *, ctx: dict | None = None) -> str:
+    """
+    Resolve @item:slug embeds into item metadata cards.
+    """
+    slug, section, parse_err = _parse_embed_target(slug, None)
+    if parse_err:
+        return _embed_error(parse_err)
+    if section:
+        return _embed_error("item embeds do not support sections")
+
+    use_external = bool(getattr(g, "_absolute_links", False))
+    ctx = ctx or _get_embed_ctx()
+    ctx.setdefault("stack", set())
+    ctx.setdefault("depth", 0)
+    ctx.setdefault("count", 0)
+
+    if ctx["count"] >= EMBED_MAX_COUNT:
+        return _embed_error("too many embeds in one entry")
+
+    target_key = f"item:{slug}"
+    if target_key in ctx["stack"]:
+        return _embed_error("circular embed detected")
+    if ctx["depth"] >= EMBED_MAX_DEPTH:
+        return _embed_error("embed depth limit reached")
+
+    db = get_db()
+    ensure_item_rating_column(db)
+    row = db.execute(
+        "SELECT id, title, slug, item_type, rating FROM item WHERE slug=?", (slug,)
+    ).fetchone()
+    if not row:
+        return _embed_error(f"item '{slug}' not found")
+
+    meta = db.execute(
+        """
+        SELECT k, v
+          FROM item_meta
+         WHERE item_id=?
+         ORDER BY ord, LOWER(k)
+        """,
+        (row["id"],),
+    ).fetchall()
+
+    verb_row = db.execute(
+        """
+        SELECT ei.verb
+          FROM entry_item ei
+          JOIN entry e ON e.id = ei.entry_id
+         WHERE ei.item_id=?
+         ORDER BY e.created_at DESC
+         LIMIT 1
+        """,
+        (row["id"],),
+    ).fetchone()
+    verb = verb_row["verb"] if verb_row else None
+    verb_slug = kind_to_slug(verb) if verb else None
+    item_url = (
+        url_for(
+            "item_detail",
+            verb=verb_slug,
+            item_type=row["item_type"],
+            slug=row["slug"],
+            _external=use_external,
+        )
+        if verb_slug
+        else None
+    )
+    rating_value = int(row["rating"]) if row["rating"] is not None else 0
+    year = ""
+    for r in meta:
+        if (r["k"] or "").lower() == "date" and r["v"]:
+            year = (r["v"] or "")[:4]
+            break
+
+    ctx["stack"].add(target_key)
+    ctx["depth"] += 1
+    ctx["count"] += 1
+    try:
+        return render_template_string(
+            TEMPL_ITEM_EMBED,
+            item=row,
+            meta=meta,
+            rating_value=rating_value,
+            item_url=item_url,
+            year=year,
+            verb=verb,
+        )
+    finally:
+        ctx["stack"].discard(target_key)
+        ctx["depth"] -= 1
+
+
 def render_entry_embed(
     slug: str, section: str | None, *, ctx: dict | None = None
 ) -> str:
@@ -597,7 +749,9 @@ def render_entry_embed(
     if ctx["count"] >= EMBED_MAX_COUNT:
         return _embed_error("too many embeds in one entry")
 
-    if slug == ctx.get("root") or slug in ctx["stack"]:
+    target_key = f"entry:{slug}"
+    root_key = f"entry:{ctx.get('root')}" if ctx.get("root") else None
+    if target_key == root_key or target_key in ctx["stack"]:
         return _embed_error("circular embed detected")
 
     if ctx["depth"] >= EMBED_MAX_DEPTH:
@@ -622,13 +776,13 @@ def render_entry_embed(
         body = part
 
     clean = _drop_caret_meta(body)
-    ctx["stack"].add(slug)
+    ctx["stack"].add(target_key)
     ctx["depth"] += 1
     ctx["count"] += 1
     try:
         inner_html = _render_markdown(clean, ctx=ctx, renderer=_markdown_renderer())
     finally:
-        ctx["stack"].discard(slug)
+        ctx["stack"].discard(target_key)
         ctx["depth"] -= 1
 
     url = url_for(
@@ -725,7 +879,7 @@ def entry_images(body: str | None, slug: str | None = None) -> list[dict[str, st
 
 
 class EntryEmbedPreprocessor(markdown.preprocessors.Preprocessor):
-    """Replace @entry:slug references with embedded entry HTML blocks."""
+    """Replace @entry:slug / @item:slug references with embed HTML blocks."""
 
     def run(self, lines: list[str]) -> list[str]:
         ctx = _get_embed_ctx()
@@ -750,8 +904,11 @@ class EntryEmbedPreprocessor(markdown.preprocessors.Preprocessor):
                 out.append(ln)
                 continue
 
-            slug, section = m.group(1), m.group(2)
-            out.append(render_entry_embed(slug, section, ctx=ctx))
+            kind, slug, section = m.group(1), m.group(2), m.group(3)
+            if kind == "item":
+                out.append(render_item_embed(slug, ctx=ctx))
+            else:
+                out.append(render_entry_embed(slug, section, ctx=ctx))
         return out
 
 
@@ -6587,7 +6744,9 @@ def _rss(entries, *, title, feed_url, site_url, feed_kind: str | None = None):
         clean = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", clean)
         clean = re.sub(r"<img[^>]*alt=['\"]([^'\"]+)['\"][^>]*>", r"\1", clean)
         clean = re.sub(r"<img\b[^>]*>", "", clean)
-        clean = re.sub(r"@entry:[^\s]+", "", clean)  # drop inline embed markers
+        clean = re.sub(
+            r"@(entry|item):[^\s]+", "", clean
+        )  # drop inline embed markers
         clean = re.sub(r"\s+", " ", clean).strip()
         if not clean:
             return ""

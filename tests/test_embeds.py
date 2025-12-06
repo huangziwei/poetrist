@@ -3,7 +3,10 @@ tests/test_embeds.py
 """
 from __future__ import annotations
 
+from uuid import uuid4
+
 from poetrist.blog import get_db, kind_to_slug
+from poetrist.blog import utc_now
 
 CSRF = "test-token"
 
@@ -24,6 +27,41 @@ def _latest_entry():
 
 def _detail_url(kind: str, slug: str) -> str:
     return f"/{kind_to_slug(kind)}/{slug}"
+
+
+def _seed_item_with_meta() -> str:
+    """Create one item with metadata + a linking entry for embeds."""
+    db = get_db()
+    now = utc_now().isoformat(timespec="seconds")
+    item_slug = f"itm-{uuid4().hex[:8]}"
+    entry_slug = f"entry-{uuid4().hex[:8]}"
+
+    db.execute(
+        "INSERT INTO item (uuid, slug, item_type, title, rating) VALUES (?,?,?,?,?)",
+        (str(uuid4()), item_slug, "book", "Embed Item", 4),
+    )
+    item_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    db.execute(
+        "INSERT INTO item_meta (item_id, k, v, ord) VALUES (?,?,?,?)",
+        (item_id, "date", f"{now[:4]}-01-01", 1),
+    )
+    db.execute(
+        "INSERT INTO item_meta (item_id, k, v, ord) VALUES (?,?,?,?)",
+        (item_id, "author", "Embed Author", 2),
+    )
+
+    db.execute(
+        "INSERT INTO entry (body, created_at, slug, kind) VALUES (?,?,?,?)",
+        ("body", now, entry_slug, "read"),
+    )
+    entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    db.execute(
+        "INSERT INTO entry_item (entry_id, item_id, verb, action, progress) VALUES (?,?,?,?,?)",
+        (entry_id, item_id, "read", "finished", None),
+    )
+    db.commit()
+    return item_slug
 
 
 def test_embed_full_entry(client):
@@ -51,6 +89,27 @@ def test_embed_full_entry(client):
     assert 'class="entry-embed' in html
     assert "<strong>embed</strong>" in html
     assert f'href="{_detail_url(src["kind"], src["slug"])}"' in html
+
+
+def test_embed_item_meta_and_rating(client):
+    _login(client)
+    item_slug = _seed_item_with_meta()
+
+    client.post(
+        "/posts",
+        data={"title": "Wrapper", "body": f"@item:{item_slug}", "csrf": CSRF},
+        follow_redirects=True,
+    )
+    dest = _latest_entry()
+
+    resp = client.get(_detail_url(dest["kind"], dest["slug"]))
+    assert resp.status_code == 200
+    html = resp.data.decode()
+    assert "entry-embed--item" in html
+    assert "Embed Author" in html
+    assert "Embed Item" in html
+    assert "★★★★" in html
+    assert f'href="/{kind_to_slug("read")}/book/{item_slug}"' in html
 
 
 def test_embed_section_only(client):
