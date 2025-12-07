@@ -19,7 +19,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from time import time
 from typing import DefaultDict
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
 from zoneinfo import ZoneInfo, available_timezones
 
 import boto3
@@ -1018,6 +1018,7 @@ def url_filter(url: str | None) -> str:
 # Database helpers
 ###############################################################################
 _RATING_COL_CHECKED = False
+_WM_TABLES_CHECKED = False
 
 
 def get_db():
@@ -1028,6 +1029,9 @@ def get_db():
         g.db.create_function("strip_caret", 1, strip_caret)
         g.db.create_function("link_host", 1, link_host)
         g.photo_kind_normalized = False
+    if not getattr(g, "_wm_tables_checked", False):
+        ensure_webmention_tables(g.db)
+        g._wm_tables_checked = True
     if not getattr(g, "photo_kind_normalized", False):
         normalize_photo_kinds(db=g.db)
         g.photo_kind_normalized = True
@@ -1205,6 +1209,37 @@ def init_db():
         );
 
         ------------------------------------------------------------
+        -- 10. Webmentions (inbox + blocklist)
+        ------------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS webmention_inbox (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            source     TEXT NOT NULL,
+            target     TEXT NOT NULL,
+            domain     TEXT NOT NULL,
+            status     TEXT NOT NULL DEFAULT 'unread', -- unread | read | blocked
+            created_at TEXT NOT NULL,
+            payload    TEXT
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_webmention_pair
+            ON webmention_inbox(source, target);
+        CREATE INDEX IF NOT EXISTS idx_webmention_status
+            ON webmention_inbox(status);
+        CREATE INDEX IF NOT EXISTS idx_webmention_domain
+            ON webmention_inbox(domain);
+
+        CREATE TABLE IF NOT EXISTS webmention_block (
+            domain     TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS webmention_outbox (
+            source     TEXT NOT NULL,
+            target     TEXT NOT NULL,
+            last_sent  TEXT NOT NULL,
+            PRIMARY KEY (source, target)
+        );
+
+        ------------------------------------------------------------
         --  9. Passkeys  (multiple per account)
         ------------------------------------------------------------
         CREATE TABLE IF NOT EXISTS passkey (
@@ -1235,6 +1270,58 @@ def ensure_item_rating_column(db) -> None:
         db.execute("ALTER TABLE item ADD COLUMN rating INTEGER")
         db.commit()
     _RATING_COL_CHECKED = True
+
+
+def ensure_webmention_tables(db) -> None:
+    """Create webmention tables for older DBs if missing."""
+    global _WM_TABLES_CHECKED
+    if _WM_TABLES_CHECKED:
+        return
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS webmention_inbox (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            source     TEXT NOT NULL,
+            target     TEXT NOT NULL,
+            domain     TEXT NOT NULL,
+            status     TEXT NOT NULL DEFAULT 'unread',
+            created_at TEXT NOT NULL,
+            payload    TEXT
+        )
+        """
+    )
+    db.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_webmention_pair
+               ON webmention_inbox(source, target)"""
+    )
+    db.execute(
+        """CREATE INDEX IF NOT EXISTS idx_webmention_status
+               ON webmention_inbox(status)"""
+    )
+    db.execute(
+        """CREATE INDEX IF NOT EXISTS idx_webmention_domain
+               ON webmention_inbox(domain)"""
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS webmention_block (
+            domain     TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS webmention_outbox (
+            source     TEXT NOT NULL,
+            target     TEXT NOT NULL,
+            last_sent  TEXT NOT NULL,
+            PRIMARY KEY (source, target)
+        )
+        """
+    )
+    db.commit()
+    _WM_TABLES_CHECKED = True
 
 
 # -------------------------------------------------------------------------
@@ -1442,6 +1529,55 @@ def is_url_image(k: str, v: str) -> bool:
     return _is_urlish(v or "")
 
 
+def _domain_from_url(url: str | None) -> str | None:
+    try:
+        netloc = urlparse(url or "").netloc.lower()
+    except Exception:
+        return None
+    if not netloc:
+        return None
+    return netloc.split("@")[-1].split(":")[0]
+
+
+def is_blocked_domain(domain: str, *, db) -> bool:
+    dom = (domain or "").lower().strip()
+    if not dom:
+        return False
+    parts = dom.split(".")
+    to_check = [".".join(parts[i:]) for i in range(len(parts) - 1)]
+    to_check.insert(0, dom)
+    q_marks = ",".join("?" * len(to_check))
+    if not q_marks:
+        return False
+    row = db.execute(
+        f"SELECT 1 FROM webmention_block WHERE domain IN ({q_marks}) LIMIT 1",
+        to_check,
+    ).fetchone()
+    return bool(row)
+
+
+def block_domain(domain: str, *, db):
+    dom = (domain or "").lower().strip()
+    if not dom:
+        return
+    db.execute(
+        """INSERT OR IGNORE INTO webmention_block (domain, created_at)
+                 VALUES (?, ?)""",
+        (dom, utc_now().isoformat(timespec="seconds")),
+    )
+
+
+def webmention_unread_count() -> int:
+    try:
+        db = get_db()
+        row = db.execute(
+            "SELECT COUNT(*) AS c FROM webmention_inbox WHERE status='unread'"
+        ).fetchone()
+        return int(row["c"]) if row else 0
+    except Exception:
+        return 0
+
+
 def linkable_meta(k: str | None, v: str | None) -> bool:
     """
     Heuristic: only auto-link short, human-name fields (authors, publishers, …)
@@ -1522,6 +1658,154 @@ def meta_search_tokens(
         if q:
             tokens.append({"label": part, "query": q})
     return tokens
+
+
+WEBMENTION_UA = "poetrist-webmention/0.1"
+
+
+def _extract_webmention_links(text: str | None) -> list[str]:
+    links: set[str] = set()
+    if not text:
+        return []
+    for m in re.finditer(r"\[[^\]]+]\((https?://[^)]+)\)", text):
+        links.add(m.group(1).strip())
+    for m in re.finditer(r"https?://[^\s)>\"]+", text):
+        links.add(m.group(0).rstrip(".,);"))
+    return [l for l in links if l]
+
+
+def _is_internal_link(url: str) -> bool:
+    try:
+        host = urlparse(url).netloc.lower()
+        root = urlparse(request.url_root).netloc.lower()
+    except Exception:
+        return False
+    return host == root or host.endswith(f".{root}")
+
+
+def _parse_link_header(link_hdr: str | None) -> str | None:
+    if not link_hdr:
+        return None
+    for part in link_hdr.split(","):
+        if 'rel="webmention"' in part or "rel=webmention" in part:
+            href_match = re.search(r"<([^>]+)>", part)
+            if href_match:
+                return href_match.group(1)
+    return None
+
+
+def _discover_webmention_endpoint(target: str) -> str | None:
+    headers = {"User-Agent": WEBMENTION_UA, "Accept": "text/html, */*;q=0.8"}
+    try:
+        resp = requests.head(target, timeout=5, allow_redirects=True, headers=headers)
+        endpoint = _parse_link_header(resp.headers.get("Link"))
+        if endpoint:
+            return urljoin(resp.url, endpoint)
+    except Exception:
+        pass
+
+    try:
+        resp = requests.get(target, timeout=8, allow_redirects=True, headers=headers)
+    except Exception:
+        return None
+
+    endpoint = _parse_link_header(resp.headers.get("Link"))
+    if endpoint:
+        return urljoin(resp.url, endpoint)
+
+    html = resp.text or ""
+    m = re.search(
+        r'<(?:link|a)[^>]+rel=["\']?webmention["\']?[^>]+href=["\']([^"\']+)',
+        html,
+        re.I,
+    )
+    if m:
+        return urljoin(resp.url, m.group(1))
+    return None
+
+
+def _send_webmention(endpoint: str, source: str, target: str):
+    data = {"source": source, "target": target}
+    requests.post(endpoint, data=data, timeout=5, headers={"User-Agent": WEBMENTION_UA})
+
+
+def _webmention_targets_for_source(source: str, *, db) -> list[str]:
+    rows = db.execute(
+        "SELECT target FROM webmention_outbox WHERE source=?", (source,)
+    ).fetchall()
+    return [r["target"] for r in rows]
+
+
+def _record_webmention_outbox(source: str, targets: set[str], *, db):
+    db.execute("DELETE FROM webmention_outbox WHERE source=?", (source,))
+    now_iso = utc_now().isoformat(timespec="seconds")
+    for tgt in targets:
+        db.execute(
+            """INSERT OR REPLACE INTO webmention_outbox (source, target, last_sent)
+                      VALUES (?,?,?)""",
+            (source, tgt, now_iso),
+        )
+    db.commit()
+
+
+def send_webmentions_for_entry(kind: str, slug: str, body: str | None):
+    """Best-effort outgoing webmentions for links in this entry (create/update)."""
+    if app.config.get("TESTING"):
+        return
+    db = get_db()
+    try:
+        source = url_for(
+            "entry_detail",
+            kind_slug=kind_to_slug(kind),
+            entry_slug=slug,
+            _external=True,
+        )
+    except RuntimeError:
+        return
+
+    links = _extract_webmention_links(body)
+    prev = _webmention_targets_for_source(source, db=db)
+    targets = {t for t in links + prev if not _is_internal_link(t)}
+
+    for tgt in targets:
+        try:
+            endpoint = _discover_webmention_endpoint(tgt)
+            if not endpoint:
+                continue
+            _send_webmention(endpoint, source, tgt)
+        except Exception:
+            app.logger.debug("webmention send failed", exc_info=True)
+    if targets:
+        _record_webmention_outbox(source, targets, db=db)
+
+
+def send_webmentions_for_delete(kind: str, slug: str):
+    """Best-effort webmention resend on delete (using stored targets)."""
+    if app.config.get("TESTING"):
+        return
+    db = get_db()
+    try:
+        source = url_for(
+            "entry_detail",
+            kind_slug=kind_to_slug(kind),
+            entry_slug=slug,
+            _external=True,
+        )
+    except RuntimeError:
+        return
+    targets = set(_webmention_targets_for_source(source, db=db))
+    if not targets:
+        return
+    for tgt in targets:
+        try:
+            endpoint = _discover_webmention_endpoint(tgt)
+            if not endpoint:
+                continue
+            _send_webmention(endpoint, source, tgt)
+        except Exception:
+            app.logger.debug("webmention delete-send failed", exc_info=True)
+    db.execute("DELETE FROM webmention_outbox WHERE source=?", (source,))
+    db.commit()
 
 
 # Slug helpers
@@ -2329,6 +2613,7 @@ app.jinja_env.globals["link_host"] = link_host
 app.jinja_env.globals["linkable_meta"] = linkable_meta
 app.jinja_env.globals["meta_search_query"] = meta_search_query
 app.jinja_env.globals["meta_search_tokens"] = meta_search_tokens
+app.jinja_env.globals["webmention_unread_count"] = webmention_unread_count
 
 
 def backlinks(entries, *, db) -> dict[int, list]:
@@ -2431,7 +2716,7 @@ TEMPL_PROLOG = """
 <link rel="alternate" type="application/rss+xml"
       href="{{ url_for('global_rss') }}" title="{{ title }} – RSS">
 <style>
-html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif}body{font-size:1.8rem;line-height:1.618;max-width:38em;margin:auto;color:#c9c9c9;background-color:#222222;padding:13px}@media (max-width:684px){body{font-size:1.75rem}pre,pre>code{white-space:pre-wrap;word-break:break-word;}}@media (max-width:382px)@media (max-width:560px){.meta {flex:0 0 100%;order:1;margin-left:0;text-align:left;}}{body{font-size:1.35rem}}h1,h2,h3,h4,h5,h6{line-height:1.1;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;font-weight:700;margin-top:3rem;margin-bottom:1.5rem;overflow-wrap:break-word;word-wrap:break-word;-ms-word-break:break-all;word-break:break-word}h1{font-size:2.35em}h2{font-size:1.7em}h3{font-size:1.55em}h4{font-size:1.4em}h5{font-size:1.25em}h6{font-size:1.1em}p{margin-top:0px;margin-bottom:2.5rem;hyphens:auto}small,sub,sup{font-size:75%}hr{border-color:#ffffff}a{color:#ffffff;text-decoration:underline;text-decoration-color:transparent;text-decoration-thickness:2px;text-underline-offset:0.18em;}a:hover{color:#c9c9c9;text-decoration-color:#c9c9c9;}p>a{color:inherit;text-decoration:underline dotted #ffffff;text-decoration-thickness:1px;text-underline-offset:0.18em;}p>a:hover{text-decoration-color:#c9c9c9;}}ul{padding-left:1.4em;margin-top:0px;margin-bottom:2.5rem}li{margin-bottom:0.4em}blockquote{margin-left:0px;margin-right:0px;padding-left:1em;padding-top:0.8em;padding-bottom:0.8em;padding-right:0.8em;border-left:5px solid #ffffff;margin-bottom:2.5rem;background-color:#4a4a4a}blockquote p{margin-bottom:0.75em}img,video{height:auto;max-width:100%;margin-top:0px;margin-bottom:0px}pre{background-color:#4a4a4a;display:block;padding:1em;overflow-x:auto;margin-top:0px;margin-bottom:2.5rem;font-size:0.9em}code,kbd,samp{font-size:0.9em;padding:0 0.5em;background-color:#4a4a4a;white-space:pre-wrap;word-break:break-word}pre>code{padding:0;background-color:transparent;white-space:pre;font-size:1em}table{text-align:justify;width:100%;border-collapse:collapse;margin-bottom:2rem}td,th{padding:0.5em;border-bottom:1px solid #4a4a4a}input,textarea{border:1px solid #c9c9c9}input:focus,textarea:focus{border:1px solid #ffffff}textarea{width:100%}.button,button,input[type=submit],input[type=reset],input[type=button],input[type=file]::file-selector-button{display:inline-block;padding:5px 10px;text-align:center;text-decoration:none;white-space:nowrap;background-color:#ffffff;color:#222222;border-radius:1px;border:1px solid #ffffff;cursor:pointer;box-sizing:border-box}.button[disabled],button[disabled],input[type=submit][disabled],input[type=reset][disabled],input[type=button][disabled],input[type=file]::file-selector-button[disabled]{cursor:default;opacity:0.5}.button:hover,button:hover,input[type=submit]:hover,input[type=reset]:hover,input[type=button]:hover,input[type=file]::file-selector-button:hover{background-color:#c9c9c9;color:#222222;outline:0}.button:focus-visible,button:focus-visible,input[type=submit]:focus-visible,input[type=reset]:focus-visible,input[type=button]:focus-visible,input[type=file]::file-selector-button:focus-visible{outline-style:solid;outline-width:2px}textarea,select,input{color:#c9c9c9;padding:6px 10px;margin-bottom:10px;background-color:#4a4a4a;border:1px solid #4a4a4a;border-radius:4px;box-shadow:none;box-sizing:border-box}textarea:focus,select:focus,input:focus{border:1px solid #ffffff;outline:0}input[type=checkbox]:focus{outline:1px dotted #ffffff}label,legend,fieldset{display:block;margin-bottom:0.5rem;font-weight:600}p>math[display="block"]{display: block;margin: 1em 0}math[display="block"]:not(:first-child){margin-top: 1.2em}sup.fn{position:relative;display:inline-block;}sup.fn>.fn-ref,.fn-badge{position:relative;z-index:2500;display:inline-flex;align-items:center;justify-content:center;min-width:1rem;max-width:25em;padding:0.2em .4em;min-height:1.5rem;margin:0 0.25em;vertical-align:top;border-radius:.75em;white-space:normal;background:var(--fn-badge-bg,#666); color:#fff;font-size:.65em;line-height:1;cursor:pointer;transition:background .2s ease;text-decoration:none;}sup.fn>.fn-ref:hover{background:var(--fn-badge-bg-hover,#888);text-decoration:none !important;}.fn-popup{position:fixed;left:50%; bottom:0;transform:translate(-50%,100%);width:90vw;max-width:60rem; z-index:3000;max-height:40vh; overflow:auto;background:#222; color:#fff; line-height:1.45;padding:1rem 1.25rem;border:1px solid #444;transition:transform .25s ease;will-change:transform;}.fn-overlay{position:fixed; inset:0;background:transparent;opacity:0; visibility:hidden; pointer-events:none;transition:opacity .25s ease;touch-action:none;-webkit-tap-highlight-color:transparent;z-index:2000}sup.fn .fn-toggle:checked + .fn-ref + .fn-popup{transform:translate(-50%,0);box-shadow:0 -4px 12px rgba(0,0,0,.4);}sup.fn .fn-toggle:checked ~ .fn-overlay{opacity:1; visibility:visible; pointer-events:auto}.math-scroll{overflow-x:auto;overflow-y:hidden;max-width:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}.jump-btn{position:fixed;bottom:1.25rem;right:1.25rem;width:3rem;height:3rem;display:flex;align-items:center;justify-content:center;font-size:1.5rem;line-height:1;border-radius:50%;background:#aaa;color:#000;text-decoration:none;border-bottom:none;box-shadow:0 2px 6px rgba(0,0,0,.3);z-index:1000;opacity:.15;transition:opacity .3s}.jump-btn:hover{opacity:.8;text-decoration:none}.jump-up{display:none}#page-bottom:target~.jump-up{display:flex}#page-bottom:target~.jump-down{display:none}#page-top:target~.jump-down{display:flex}#page-top:target~.jump-up{display:none}a.fn-badge,a.fn-badge:hover,a.fn-badge:focus{border-bottom:none !important;text-decoration:none !important}.entry-embed{border:1px solid #444;border-radius:6px;padding:1rem;margin:1.5rem 0;background:#2a2a2a}.entry-embed__body{margin-top:.5rem}.entry-embed__footer{color:#aaa;font-size:.75em;display:flex;align-items:center;gap:.35rem;flex-wrap:wrap;margin-top:.25rem}.entry-embed__footer a{color:inherit;text-decoration:none;border-bottom:0.1px dotted currentColor}.entry-embed__pill{display:inline-block;padding:.1em .6em;margin-right:.4em;background:#444;color:#fff;border-radius:1em;font-size:.75em;text-transform:capitalize;vertical-align:middle;line-height:1.6}.entry-embed--error{border-color:#b33;background:#331414;color:#f9c0c0}
+html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif}body{font-size:1.8rem;line-height:1.618;max-width:38em;margin:auto;color:#c9c9c9;background-color:#222222;padding:13px}@media (max-width:684px){body{font-size:1.75rem}pre,pre>code{white-space:pre-wrap;word-break:break-word;}}@media (max-width:382px)@media (max-width:560px){.meta {flex:0 0 100%;order:1;margin-left:0;text-align:left;}}{body{font-size:1.35rem}}h1,h2,h3,h4,h5,h6{line-height:1.1;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;font-weight:700;margin-top:3rem;margin-bottom:1.5rem;overflow-wrap:break-word;word-wrap:break-word;-ms-word-break:break-all;word-break:break-word}h1{font-size:2.35em}h2{font-size:1.7em}h3{font-size:1.55em}h4{font-size:1.4em}h5{font-size:1.25em}h6{font-size:1.1em}p{margin-top:0px;margin-bottom:2.5rem;hyphens:auto}small,sub,sup{font-size:75%}hr{border-color:#ffffff}a{color:#ffffff;text-decoration:underline;text-decoration-color:transparent;text-decoration-thickness:2px;text-underline-offset:0.18em;}a:hover{color:#c9c9c9;text-decoration-color:#c9c9c9;}p>a{color:inherit;text-decoration:underline dotted #ffffff;text-decoration-thickness:1px;text-underline-offset:0.18em;}p>a:hover{text-decoration-color:#c9c9c9;}}ul{padding-left:1.4em;margin-top:0px;margin-bottom:2.5rem}li{margin-bottom:0.4em}blockquote{margin-left:0px;margin-right:0px;padding-left:1em;padding-top:0.8em;padding-bottom:0.8em;padding-right:0.8em;border-left:5px solid #ffffff;margin-bottom:2.5rem;background-color:#4a4a4a}blockquote p{margin-bottom:0.75em}img,video{height:auto;max-width:100%;margin-top:0px;margin-bottom:0px}pre{background-color:#4a4a4a;display:block;padding:1em;overflow-x:auto;margin-top:0px;margin-bottom:2.5rem;font-size:0.9em}code,kbd,samp{font-size:0.9em;padding:0 0.5em;background-color:#4a4a4a;white-space:pre-wrap;word-break:break-word}pre>code{padding:0;background-color:transparent;white-space:pre;font-size:1em}table{text-align:justify;width:100%;border-collapse:collapse;margin-bottom:2rem}td,th{padding:0.5em;border-bottom:1px solid #4a4a4a}input,textarea{border:1px solid #c9c9c9}input:focus,textarea:focus{border:1px solid #ffffff}textarea{width:100%}.button,button,input[type=submit],input[type=reset],input[type=button],input[type=file]::file-selector-button{display:inline-block;padding:5px 10px;text-align:center;text-decoration:none;white-space:nowrap;background-color:#ffffff;color:#222222;border-radius:1px;border:1px solid #ffffff;cursor:pointer;box-sizing:border-box}.button[disabled],button[disabled],input[type=submit][disabled],input[type=reset][disabled],input[type=button][disabled],input[type=file]::file-selector-button[disabled]{cursor:default;opacity:0.5}.button:hover,button:hover,input[type=submit]:hover,input[type=reset]:hover,input[type=button]:hover,input[type=file]::file-selector-button:hover{background-color:#c9c9c9;color:#222222;outline:0}.button:focus-visible,button:focus-visible,input[type=submit]:focus-visible,input[type=reset]:focus-visible,input[type=button]:focus-visible,input[type=file]::file-selector-button:focus-visible{outline-style:solid;outline-width:2px}textarea,select,input{color:#c9c9c9;padding:6px 10px;margin-bottom:10px;background-color:#4a4a4a;border:1px solid #4a4a4a;border-radius:4px;box-shadow:none;box-sizing:border-box}textarea:focus,select:focus,input:focus{border:1px solid #ffffff;outline:0}input[type=checkbox]:focus{outline:1px dotted #ffffff}label,legend,fieldset{display:block;margin-bottom:0.5rem;font-weight:600}p>math[display="block"]{display: block;margin: 1em 0}math[display="block"]:not(:first-child){margin-top: 1.2em}sup.fn{position:relative;display:inline-block;}sup.fn>.fn-ref,.fn-badge{position:relative;z-index:2500;display:inline-flex;align-items:center;justify-content:center;min-width:1rem;max-width:25em;padding:0.2em .4em;min-height:1.5rem;margin:0 0.25em;vertical-align:top;border-radius:.75em;white-space:normal;background:var(--fn-badge-bg,#666); color:#fff;font-size:.65em;line-height:1;cursor:pointer;transition:background .2s ease;text-decoration:none;}sup.fn>.fn-ref:hover{background:var(--fn-badge-bg-hover,#888);text-decoration:none !important;}.fn-popup{position:fixed;left:50%; bottom:0;transform:translate(-50%,100%);width:90vw;max-width:60rem; z-index:3000;max-height:40vh; overflow:auto;background:#222; color:#fff; line-height:1.45;padding:1rem 1.25rem;border:1px solid #444;transition:transform .25s ease;will-change:transform;}.fn-overlay{position:fixed; inset:0;background:transparent;opacity:0; visibility:hidden; pointer-events:none;transition:opacity .25s ease;touch-action:none;-webkit-tap-highlight-color:transparent;z-index:2000}sup.fn .fn-toggle:checked + .fn-ref + .fn-popup{transform:translate(-50%,0);box-shadow:0 -4px 12px rgba(0,0,0,.4);}sup.fn .fn-toggle:checked ~ .fn-overlay{opacity:1; visibility:visible; pointer-events:auto}.math-scroll{overflow-x:auto;overflow-y:hidden;max-width:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}.jump-btn{position:fixed;bottom:1.25rem;right:1.25rem;width:3rem;height:3rem;display:flex;align-items:center;justify-content:center;font-size:1.5rem;line-height:1;border-radius:50%;background:#aaa;color:#000;text-decoration:none;border-bottom:none;box-shadow:0 2px 6px rgba(0,0,0,.3);z-index:1000;opacity:.15;transition:opacity .3s}.jump-btn:hover{opacity:.8;text-decoration:none}.jump-up{display:none}#page-bottom:target~.jump-up{display:flex}#page-bottom:target~.jump-down{display:none}#page-top:target~.jump-down{display:flex}#page-top:target~.jump-up{display:none}a.fn-badge,a.fn-badge:hover,a.fn-badge:focus{border-bottom:none !important;text-decoration:none !important}.entry-embed{border:1px solid #444;border-radius:6px;padding:1rem;margin:1.5rem 0;background:#2a2a2a}.entry-embed__body{margin-top:.5rem}.entry-embed__footer{color:#aaa;font-size:.75em;display:flex;align-items:center;gap:.35rem;flex-wrap:wrap;margin-top:.25rem}.entry-embed__footer a{color:inherit;text-decoration:none;border-bottom:0.1px dotted currentColor}.entry-embed__pill{display:inline-block;padding:.1em .6em;margin-right:.4em;background:#444;color:#fff;border-radius:1em;font-size:.75em;text-transform:capitalize;vertical-align:middle;line-height:1.6}.entry-embed--error{border-color:#b33;background:#331414;color:#f9c0c0}.wm-btn{position:fixed;bottom:4.75rem;right:1.25rem;width:3rem;height:3rem;display:flex;align-items:center;justify-content:center;font-size:1.2rem;line-height:1;border-radius:50%;background:#aaa;color:#000;text-decoration:none;box-shadow:0 2px 6px rgba(0,0,0,.35);z-index:1050;opacity:.15;transition:opacity .2s;position:fixed}.wm-btn:hover{opacity:1;text-decoration:none}
 .skip-link{position:absolute;left:-999px;top:auto;width:1px;height:1px;overflow:hidden}
 .skip-link:focus{left:1.5rem;top:1.5rem;width:auto;height:auto;padding:.5rem .85rem;background:#fff;color:#000;border-radius:.25rem;z-index:1100;text-decoration:none;border-bottom:none}
 /* Primary nav layout */
@@ -2581,6 +2866,14 @@ TEMPL_EPILOG = """
             {% endfor %}
         </nav>
     </footer>
+    {% if session.get('logged_in') %}
+    {% set wm_count = webmention_unread_count() %}
+    <a href="{{ url_for('webmention_inbox') }}"
+       aria-label="Webmention inbox{% if wm_count %} ({{ wm_count }}){% endif %}"
+       class="wm-btn">
+        {{ wm_count }}
+    </a>
+    {% endif %}
     <a href="#page-bottom" aria-label="Jump to footer" class="jump-btn jump-down">↓</a>
     <a href="#page-top" aria-label="Jump to top" class="jump-btn jump-up">↑</a>
     {% if session.get('logged_in') and r2_enabled() %}
@@ -3849,6 +4142,7 @@ def index():
                     "UPDATE entry SET body=? WHERE id=?", (body_parsed, entry_id)
                 )
                 db.commit()
+                send_webmentions_for_entry(kind, slug, body_parsed)
                 return redirect(url_for("index"))
 
     # pagination
@@ -6335,6 +6629,7 @@ def edit_entry(kind_slug, entry_slug):
         else:
             sync_projects(row["id"], [], db=db)
         db.commit()
+        send_webmentions_for_entry(new_kind, new_slug, body_parsed)
 
         if new_kind == "page":
             return redirect(url_for("by_kind", slug=new_slug))
@@ -6491,6 +6786,7 @@ def delete_entry(kind_slug, entry_slug):
             "DELETE FROM tag WHERE id NOT IN (SELECT DISTINCT tag_id FROM entry_tag)"
         )
         db.commit()
+        send_webmentions_for_delete(kind, entry_slug)
         return redirect(url_for("index"))
 
     return render_template_string(
@@ -7175,6 +7471,7 @@ def item_detail(verb, item_type, slug):
 
         db.execute("UPDATE entry SET body=? WHERE id=?", (body, entry_id))
         db.commit()
+        send_webmentions_for_entry(verb, slug_ent, body)
 
         flash("Check-in added.")
         return redirect(request.url)
@@ -7244,9 +7541,7 @@ def item_detail(verb, item_type, slug):
     timeline_rows = [_row_dict(r) for r in rows]
     timeline_rows += [_row_dict(r, is_embed=True) for r in embed_rows]
     timeline_rows += [
-        _row_dict(r, is_embed=True)
-        for r in mention_rows
-        if r["id"] not in embed_ids
+        _row_dict(r, is_embed=True) for r in mention_rows if r["id"] not in embed_ids
     ]
     if sort == "old":
         timeline_rows.sort(key=lambda r: r["created_at"])
@@ -8060,6 +8355,107 @@ def search():
     )
 
 
+###############################################################################
+# Webmentions
+###############################################################################
+@app.route("/webmention", methods=["POST"])
+def webmention_receive():
+    db = get_db()
+    source = (request.form.get("source") or "").strip()
+    target = (request.form.get("target") or "").strip()
+    if not source or not target:
+        return "source and target are required", 400
+
+    dom = _domain_from_url(source)
+    if not dom:
+        return "invalid source", 400
+
+    tgt_parsed = urlparse(target)
+    site_host = urlparse(request.url_root).netloc.lower()
+    if not tgt_parsed.netloc or tgt_parsed.netloc.lower() != site_host:
+        return "target must be on this site", 400
+
+    if is_blocked_domain(dom, db=db):
+        return "domain blocked", 403
+
+    now_iso = utc_now().isoformat(timespec="seconds")
+    db.execute(
+        """INSERT INTO webmention_inbox (source, target, domain, status, created_at)
+                 VALUES (?, ?, ?, 'unread', ?)
+           ON CONFLICT(source, target) DO UPDATE SET
+                 status='unread', created_at=excluded.created_at""",
+        (source, target, dom, now_iso),
+    )
+    db.commit()
+    return "accepted", 202
+
+
+@app.route("/webmentions", methods=["GET", "POST"])
+def webmention_inbox():
+    login_required()
+    db = get_db()
+    if request.method == "POST":
+        action = request.form.get("action")
+        wm_id = request.form.get("id")
+        csrf_val = request.form.get("csrf")
+        if _csrf_token() and csrf_val != _csrf_token():
+            abort(400)
+        if not wm_id:
+            abort(400)
+        row = db.execute(
+            "SELECT * FROM webmention_inbox WHERE id=?", (wm_id,)
+        ).fetchone()
+        if not row:
+            abort(404)
+
+        if action == "read":
+            db.execute("UPDATE webmention_inbox SET status='read' WHERE id=?", (wm_id,))
+        elif action == "delete":
+            db.execute("DELETE FROM webmention_inbox WHERE id=?", (wm_id,))
+        elif action == "block":
+            block_domain(row["domain"], db=db)
+            db.execute("DELETE FROM webmention_inbox WHERE domain=?", (row["domain"],))
+        db.commit()
+
+    rows = db.execute(
+        "SELECT * FROM webmention_inbox ORDER BY created_at DESC"
+    ).fetchall()
+    return render_template_string(
+        TEMPL_WEBMENTION_INBOX,
+        rows=rows,
+        unread=webmention_unread_count(),
+        title=get_setting("site_name", "po.etr.ist"),
+        username=current_username(),
+    )
+
+
+@app.route("/webmentions/blocks", methods=["GET", "POST"])
+def webmention_blocks():
+    login_required()
+    db = get_db()
+    if request.method == "POST":
+        action = request.form.get("action")
+        dom = (request.form.get("domain") or "").strip()
+        csrf_val = request.form.get("csrf")
+        if _csrf_token() and csrf_val != _csrf_token():
+            abort(400)
+        if action == "add" and dom:
+            block_domain(dom, db=db)
+        elif action == "remove" and dom:
+            db.execute("DELETE FROM webmention_block WHERE domain=?", (dom.lower(),))
+            db.commit()
+
+    rows = db.execute(
+        "SELECT domain, created_at FROM webmention_block ORDER BY created_at DESC"
+    ).fetchall()
+    return render_template_string(
+        TEMPL_WEBMENTION_BLOCKS,
+        rows=rows,
+        title=get_setting("site_name", "po.etr.ist"),
+        username=current_username(),
+    )
+
+
 TEMPL_SEARCH_ENTRIES = wrap("""
 {% block body %}
     <hr>
@@ -8210,6 +8606,90 @@ TEMPL_SEARCH_ITEMS = wrap("""
     {% endif %}
   {% else %}
       <p>No items.</p>
+  {% endif %}
+{% endblock %}
+""")
+
+
+TEMPL_WEBMENTION_INBOX = wrap("""
+{% block body %}
+  <hr>
+  <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;justify-content:space-between;">
+    <h2 style="margin:0;">Webmentions</h2>
+    <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;font-size:.9em;color:#888;">
+      <span>Unread: {{ unread }}</span>
+      <a href="{{ url_for('webmention_blocks') }}" style="color:{{ theme_color() }};">Block list</a>
+    </div>
+  </div>
+
+  {% if rows %}
+  <ul style="list-style:none;padding:0;margin:1rem 0 0 0;display:flex;flex-direction:column;gap:.75rem;">
+    {% for wm in rows %}
+    <li style="padding:.75rem;border:1px solid #444;border-radius:6px;{% if wm.status=='unread' %}background:#2f2f2f;{% endif %}">
+      <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;font-weight:700;">
+        <span style="background:#444;color:#fff;padding:.1em .6em;border-radius:1em;font-size:.75em;">{{ wm.domain }}</span>
+        <span style="font-size:.85em;color:#888;">{{ wm.created_at|ts }}</span>
+        <span style="font-size:.75em;color:#888;">{{ wm.status }}</span>
+      </div>
+      <div style="margin-top:.35rem;word-break:break-all;">
+        <div><strong>Source:</strong> <a href="{{ wm.source }}" target="_blank" rel="noopener" style="color:{{ theme_color() }};">{{ wm.source }}</a></div>
+        <div><strong>Target:</strong> {{ wm.target }}</div>
+      </div>
+      <form method="post" style="margin-top:.5rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;">
+        {% if csrf_token() %}
+        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+        {% endif %}
+        <input type="hidden" name="id" value="{{ wm.id }}">
+        {% if wm.status != 'read' %}
+        <button name="action" value="read">Mark read</button>
+        {% endif %}
+        <button name="action" value="delete" style="background:#444;color:#fff;">Delete</button>
+        <button name="action" value="block" style="background:#b33;color:#fff;">Block domain</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+    <p>No mentions yet.</p>
+  {% endif %}
+{% endblock %}
+""")
+
+
+TEMPL_WEBMENTION_BLOCKS = wrap("""
+{% block body %}
+  <hr>
+  <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;justify-content:space-between;">
+    <h2 style="margin:0;">Blocked domains</h2>
+    <a href="{{ url_for('webmention_inbox') }}" style="color:{{ theme_color() }};">Back to inbox</a>
+  </div>
+
+  <form method="post" style="margin:1rem 0;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
+    {% if csrf_token() %}
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    {% endif %}
+    <input name="domain" placeholder="example.com" style="padding:.35rem .5rem;">
+    <button name="action" value="add">Add</button>
+  </form>
+
+  {% if rows %}
+    <ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:.5rem;">
+    {% for r in rows %}
+      <li style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
+        <span style="background:#444;color:#fff;padding:.1em .6em;border-radius:1em;font-size:.85em;">{{ r.domain }}</span>
+        <small style="color:#888;">{{ r.created_at|ts }}</small>
+        <form method="post" style="display:inline;">
+          {% if csrf_token() %}
+            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          {% endif %}
+          <input type="hidden" name="domain" value="{{ r.domain }}">
+          <button name="action" value="remove" style="background:#b33;color:#fff;">Unblock</button>
+        </form>
+      </li>
+    {% endfor %}
+    </ul>
+  {% else %}
+    <p>No blocked domains.</p>
   {% endif %}
 {% endblock %}
 """)
