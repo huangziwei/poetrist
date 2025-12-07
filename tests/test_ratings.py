@@ -14,7 +14,12 @@ def _login(client) -> None:
         sess["csrf"] = CSRF
 
 
-def _seed_item(action: str, verb: str = "read", item_type: str = "book") -> tuple[str, int]:
+def _seed_item(
+    action: str,
+    verb: str = "read",
+    item_type: str = "book",
+    meta: dict[str, str] | None = None,
+) -> tuple[str, int]:
     """Create one item + entry_item row for tests."""
     db = get_db()
     now = utc_now().isoformat(timespec="seconds")
@@ -26,6 +31,13 @@ def _seed_item(action: str, verb: str = "read", item_type: str = "book") -> tupl
         (str(uuid4()), item_slug, item_type, "Item Title"),
     )
     item_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    if meta:
+        for ord_, (k, v) in enumerate(meta.items(), 1):
+            db.execute(
+                "INSERT INTO item_meta (item_id, k, v, ord) VALUES (?,?,?,?)",
+                (item_id, k, v, ord_),
+            )
 
     db.execute(
         "INSERT INTO entry (body, created_at, slug, kind) VALUES (?,?,?,?)",
@@ -130,3 +142,30 @@ def test_item_detail_only_one_star_row_for_logged_in(client):
     assert resp.status_code == 200
     assert "score-star" in body          # interactive row present
     assert 'aria-label="Score 4 of 5"' not in body  # no duplicate display block
+
+
+def test_item_meta_links_include_people_fields_only(client):
+    meta = {
+        "author": "Author One / Author Two",
+        "publisher": "Pub House",
+        "date": "2024-01-02",
+        "isbn": "9781234567890",
+        "link": "[Site](https://example.com)",
+    }
+    slug, _ = _seed_item("finished", meta=meta)
+
+    resp = client.get(f"/read/book/{slug}")
+    html = resp.data.decode()
+
+    # author (split) / publisher should link to item search
+    assert 'q=book:author:%22Author+One%22' in html
+    assert 'q=book:author:%22Author+Two%22' in html
+    assert 'q=book:publisher:%22Pub+House%22' in html
+
+    # but date/ids/links should stay plain text
+    assert "2024-01-02" in html
+    assert "9781234567890" in html
+    assert "Site" in html  # markdown link still renders
+    assert "q=book%3Adate" not in html
+    assert "q=book%3Aisbn" not in html
+    assert "q=book%3Alink" not in html

@@ -579,7 +579,17 @@ TEMPL_ITEM_EMBED = """
         {% for r in meta if not is_b64_image(r.k, r.v) and not is_url_image(r.k, r.v) %}
           <li style="margin:.2em 0;">
             <strong>{{ r.k|smartcap }}:</strong>
-            {{ r.v|mdinline }}
+            {% set tokens = meta_search_tokens(item['item_type'], r.k, r.v) %}
+            {% if tokens %}
+              {% for tok in tokens %}
+                <a href="{{ url_for('search', q=tok.query) }}"
+                   style="color:{{ theme_color() }};border-bottom:0.1px dotted currentColor;text-decoration:none;">
+                  {{ tok.label|mdinline }}
+                </a>{% if not loop.last %}<span aria-hidden="true"> / </span>{% endif %}
+              {% endfor %}
+            {% else %}
+              {{ r.v|mdinline }}
+            {% endif %}
           </li>
         {% endfor %}
         </ul>
@@ -1421,6 +1431,74 @@ def is_url_image(k: str, v: str) -> bool:
     return _is_urlish(v or "")
 
 
+def linkable_meta(k: str | None, v: str | None) -> bool:
+    """
+    Heuristic: only auto-link short, human-name fields (authors, publishers, …)
+    while skipping dates, identifiers, and URL-ish values.
+    """
+    key = (k or "").strip().lower()
+    val = (v or "").strip()
+    if not key or not val:
+        return False
+    if key in {"date", "year", "link", "url", "href"}:
+        return False
+    if key.startswith(("date", "year")):
+        return False
+    if any(token in key for token in ("isbn", "issn", "asin", "ean", "upc", "gtin", "doi", "uuid", "guid", "id")):
+        return False
+    if key in {"cover", "img", "poster"}:
+        return False
+    if _is_urlish(val) or "](" in val:  # already a link/markdown link
+        return False
+    if "\n" in val or len(val) > 120:  # avoid long notes/paragraphs
+        return False
+    if not any(ch.isalpha() for ch in val):  # skip number-only values
+        return False
+    return True
+
+
+def meta_search_query(
+    item_type: str | None, key: str | None, val: str | None, *, validate: bool = True
+) -> str | None:
+    """
+    Build `<item>:<meta_key>:"<meta_val>"` search query when linkable, else None.
+    """
+    if validate and not linkable_meta(key, val):
+        return None
+    itype = (item_type or "").strip().lower()
+    if not itype:
+        return None
+    k = (key or "").strip().lower()
+    term = " ".join((val or "").split())
+    term = term.replace('"', "")  # keep parser simple
+    if not term:
+        return None
+    return f'{itype}:{k}:"{term}"'
+
+
+def meta_search_tokens(
+    item_type: str | None, key: str | None, val: str | None
+) -> list[dict[str, str]]:
+    """
+    Split multi-value meta fields (e.g., "A / B / C") into individual search links.
+    """
+    if not linkable_meta(key, val):
+        return []
+    itype = (item_type or "").strip().lower()
+    if not itype:
+        return []
+    key_norm = (key or "").strip().lower()
+    tokens = []
+    for part in re.split(r"\s*/\s*", val or ""):
+        part = part.strip()
+        if not part or not linkable_meta(key_norm, part):
+            continue
+        q = meta_search_query(itype, key_norm, part, validate=False)
+        if q:
+            tokens.append({"label": part, "query": q})
+    return tokens
+
+
 # Slug helpers
 def slug_map() -> dict[str, str]:
     """
@@ -2223,6 +2301,9 @@ app.jinja_env.globals.update(
 app.jinja_env.globals["csrf_token"] = _csrf_token
 app.jinja_env.globals["is_b64_image"] = is_b64_image
 app.jinja_env.globals["link_host"] = link_host
+app.jinja_env.globals["linkable_meta"] = linkable_meta
+app.jinja_env.globals["meta_search_query"] = meta_search_query
+app.jinja_env.globals["meta_search_tokens"] = meta_search_tokens
 
 
 def backlinks(entries, *, db) -> dict[int, list]:
@@ -7159,7 +7240,17 @@ TEMPL_ITEM_DETAIL = wrap("""
         {% for r in meta if not is_b64_image(r.k, r.v) and not is_url_image(r.k, r.v) %}
             <li style="margin:.2em 0;">
                 <strong>{{ r.k|smartcap }}:</strong>
-                {{ r.v|mdinline }}
+                {% set tokens = meta_search_tokens(item['item_type'], r.k, r.v) %}
+                {% if tokens %}
+                    {% for tok in tokens %}
+                    <a href="{{ url_for('search', q=tok.query) }}"
+                       style="color:{{ theme_color() }};border-bottom:0.1px dotted currentColor;text-decoration:none;">
+                        {{ tok.label|mdinline }}
+                    </a>{% if not loop.last %}<span aria-hidden="true"> / </span>{% endif %}
+                    {% endfor %}
+                {% else %}
+                    {{ r.v|mdinline }}
+                {% endif %}
             </li>
         {% endfor %}
         </ul>
@@ -7678,9 +7769,9 @@ def search_entries(
 _ITEM_Q_RE = re.compile(
     r"""
     ^\s*
-    (?P<type>[^\s:]+)                 # track / book / …
-    (?:\s*:\s*(?P<field>[^\s:]+))?    # 演唱 / 作者 / …
+    (?P<type>[^:]+?)               # track / short story / …
     \s*:\s*
+    (?: (?P<field>[^:]+?) \s*:\s* )?   # 演唱 / 作者 / …
     (?P<term>".+?"|[^"].*?)           # ← fixed here
     \s*$
 """,
@@ -7701,8 +7792,8 @@ def _parse_item_query(q: str):
     if term.startswith('"') and term.endswith('"'):
         term = term[1:-1]
     d["term"] = term
-    d["type"] = d["type"].lower()
-    d["field"] = d["field"].lower() if d["field"] else None
+    d["type"] = (d["type"] or "").strip().lower()
+    d["field"] = d["field"].strip().lower() if d["field"] else None
     return d
 
 
@@ -7725,7 +7816,7 @@ def search_items(q: str, *, db, page=1, per_page=PAGE_DEFAULT):
     # ------------------------------------------------------------------
     # Build WHERE-clause and parameter list
     # ------------------------------------------------------------------
-    conds, params = ["i.item_type = ?"], [spec["type"]]
+    conds, params = ["LOWER(i.item_type) = ?"], [spec["type"]]
     like = f"%{spec['term'].lower()}%"
 
     # --- helper fragment: exclude base64 images -----------------------

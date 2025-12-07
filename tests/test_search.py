@@ -138,7 +138,7 @@ def _item_slugs(html: str) -> list[str]:
     """
     Extract every `/verb/<type>/<slug>` occurrence from the item-search page.
     """
-    return re.findall(r'/[a-z]+/[a-z0-9_-]+/([a-z0-9_-]+)"', html, flags=re.I)
+    return re.findall(r'/[a-z]+/[^/]+/([a-z0-9_-]+)"', html, flags=re.I)
 
 
 # ───────────────────────── actual tests ────────────────────────────────
@@ -173,3 +173,16 @@ def test_item_search_by_specific_field(client):
     assert "Metamorphosis" in html
     # ensure the Iliad is NOT in the result set
     assert "iliad" not in html.lower()
+
+
+def test_item_search_allows_multiword_type(client):
+    slug = _add_item(
+        item_type="short story",
+        title="Mystery Tale",
+        meta={"author": "Anthony Abbot"},
+    )
+
+    html = client.get("/search", query_string={"q": 'short story:author:"Anthony Abbot"'}).data.decode()
+
+    assert slug in _item_slugs(html)
+    assert "Mystery Tale" in html
