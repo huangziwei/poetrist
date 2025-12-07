@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "poetrist"
-version = "0.1.2"
+version = "0.1.3"
 description = "a tiny, single-file blog"
 authors = []
 requires-python = ">=3.13.0"
