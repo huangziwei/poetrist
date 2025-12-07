@@ -144,6 +144,15 @@ def test_item_detail_only_one_star_row_for_logged_in(client):
     assert 'aria-label="Score 4 of 5"' not in body  # no duplicate display block
 
 
+def test_item_checkin_row_omits_kind_pill(client):
+    _login(client)
+    slug, _ = _seed_item("finished")
+    resp = client.get(f"/read/book/{slug}")
+    body = resp.data.decode()
+    assert "class=\"score-stars\"" in body  # sanity: page loaded
+    assert 'href="/reading"' not in body.lower()  # no verb pill in timeline
+
+
 def test_item_meta_links_include_people_fields_only(client):
     meta = {
         "author": "Author One / Author Two",

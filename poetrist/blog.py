@@ -541,6 +541,20 @@ def _parse_embed_target(
     return raw, section, None
 
 
+def _strip_embed_lines(text: str | None) -> str:
+    """
+    Drop lines that are pure embed markers (@entry:… / @item:…).
+    """
+    if not text:
+        return ""
+    out = []
+    for ln in (text or "").splitlines():
+        if _EMBED_RE.match(ln.strip()):
+            continue
+        out.append(ln)
+    return "\n".join(out)
+
+
 TEMPL_ITEM_EMBED = """
 <div class="entry-embed entry-embed--item" data-item="{{ item['slug'] }}">
   <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
@@ -599,13 +613,10 @@ TEMPL_ITEM_EMBED = """
   {% endif %}
 
   <div class="entry-embed__footer" style="color:#aaa;">
-    <span class="entry-embed__pill">{{ item['item_type']|smartcap }}</span>
     {% if verb %}
       <span class="entry-embed__pill">{{ verb|smartcap }}</span>
     {% endif %}
-    {% if item_url %}
-    <a href="{{ item_url }}" style="text-decoration:none; color:inherit;border-bottom:none;">View item</a>
-    {% endif %}
+    <span class="entry-embed__pill">{{ item['item_type']|smartcap }}</span>
   </div>
 </div>
 """
@@ -1444,7 +1455,21 @@ def linkable_meta(k: str | None, v: str | None) -> bool:
         return False
     if key.startswith(("date", "year")):
         return False
-    if any(token in key for token in ("isbn", "issn", "asin", "ean", "upc", "gtin", "doi", "uuid", "guid", "id")):
+    if any(
+        token in key
+        for token in (
+            "isbn",
+            "issn",
+            "asin",
+            "ean",
+            "upc",
+            "gtin",
+            "doi",
+            "uuid",
+            "guid",
+            "id",
+        )
+    ):
         return False
     if key in {"cover", "img", "poster"}:
         return False
@@ -6825,9 +6850,7 @@ def _rss(entries, *, title, feed_url, site_url, feed_kind: str | None = None):
         clean = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", clean)
         clean = re.sub(r"<img[^>]*alt=['\"]([^'\"]+)['\"][^>]*>", r"\1", clean)
         clean = re.sub(r"<img\b[^>]*>", "", clean)
-        clean = re.sub(
-            r"@(entry|item):[^\s]+", "", clean
-        )  # drop inline embed markers
+        clean = re.sub(r"@(entry|item):[^\s]+", "", clean)  # drop inline embed markers
         clean = re.sub(r"\s+", " ", clean).strip()
         if not clean:
             return ""
@@ -7184,14 +7207,43 @@ def item_detail(verb, item_type, slug):
         (itm["id"], verb),
     ).fetchall()
 
-    back_map = backlinks(rows, db=db)
+    embed_rows = db.execute(
+        """
+            SELECT id, slug, kind, title, created_at, body, link
+              FROM entry
+             WHERE body LIKE ?
+               AND kind!='page'
+               AND id NOT IN (SELECT entry_id FROM entry_item WHERE item_id=?)
+             ORDER BY created_at DESC
+        """,
+        (f"%@item:{itm['slug']}%", itm["id"]),
+    ).fetchall()
+
+    def _row_dict(r, *, is_embed: bool = False):
+        d = dict(r)
+        d.setdefault("action", None)
+        d.setdefault("progress", None)
+        d["is_embed"] = is_embed
+        body = r["body"] or ""
+        d["timeline_body"] = _strip_embed_lines(body) if is_embed else body
+        return d
+
+    timeline_rows = [_row_dict(r) for r in rows] + [
+        _row_dict(r, is_embed=True) for r in embed_rows
+    ]
+    if sort == "old":
+        timeline_rows.sort(key=lambda r: r["created_at"])
+    else:
+        timeline_rows.sort(key=lambda r: r["created_at"], reverse=True)
+
+    back_map = backlinks(timeline_rows, db=db)
     rating_value = int(itm["rating"]) if itm["rating"] is not None else 0
 
     return render_template_string(
         TEMPL_ITEM_DETAIL,
         item=itm,
         meta=meta,
-        entries=rows,
+        entries=timeline_rows,
         can_rate=rating_ready,
         rating_value=rating_value,
         verb=verb,
@@ -7402,19 +7454,53 @@ TEMPL_ITEM_DETAIL = wrap("""
 {% endif %}
 {% for e in entries %}    
 <article style="padding-bottom:1rem; {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
-    <div class="e-content" style="margin-top:1.5em;">{{ e['body']|md(e['slug']) }}</div>
+    {% if e.is_embed %}
+        {% if e.kind == 'pin' and e.link %}
+            {% set host = link_host(e.link) %}
+            <h2 class="pin-title">
+                <a class="u-bookmark-of p-name" href="{{ e.link }}" target="_blank" rel="noopener"
+                   title="{{ e.link }}"
+                   style="word-break:break-all; overflow-wrap:anywhere; text-decoration:none; border-bottom:0.1px dotted currentColor; color:inherit;">
+                    {{ e['title'] or e['slug'] }}
+                </a>
+                {% if host %}
+                    <span class="pin-host">(<a href="{{ pins_from_href(host) }}">{{ host }}</a>)</span>
+                {% endif %}
+            </h2>
+        {% elif e['title'] %}
+            <h2 class="p-name" style="margin:0;">{{ e['title'] }}</h2>
+        {% endif %}
+        <div class="e-content" style="margin-top:1.5em;">{{ e['timeline_body']|md(e['slug']) }}</div>
+    {% else %}
+        <div class="e-content" style="margin-top:1.5em;">{{ e['timeline_body']|md(e['slug']) }}</div>
+    {% endif %}
     {{ backlinks_panel(backlinks[e.id]) }}
     <small style="color:#aaa;">
 
         {# —— action pill ——————————————————————————————— #}
+        {% if e.is_embed %}
+        <span style="
+            display:inline-block;padding:.1em .6em;margin-right:.4em;
+            background:#555;color:#fff;border-radius:1em;font-size:.75em;
+            text-transform:capitalize;vertical-align:middle;">
+            mentioned
+        </span>
+        <span style="
+            display:inline-block;padding:.1em .6em;margin-right:.4em;
+            background:#444;color:#fff;border-radius:1em;font-size:.75em;
+            text-transform:capitalize;vertical-align:middle;">
+            <a href="{{ url_for('by_kind', slug=kind_to_slug(e['kind'])) }}"
+               style="text-decoration:none;color:inherit;border-bottom:none;">
+               {{ e.kind }}
+            </a>
+        </span>
+        {% else %}
         <span style="
             display:inline-block;padding:.1em .6em;margin-right:.4em;
             background:#444;color:#fff;border-radius:1em;font-size:.75em;
             text-transform:capitalize;vertical-align:middle;">
             {{ e.action | smartcap }}
         </span>
-
-        {# —— progress pill (optional) ———————————————— #}
         {% if e.progress %}
         <span style="
                 display:inline-block;padding:.1em .6em;margin-right:.4em;
@@ -7422,6 +7508,7 @@ TEMPL_ITEM_DETAIL = wrap("""
                 vertical-align:middle;">
             {{ e.progress }}
         </span>
+        {% endif %}
         {% endif %}
 
         {# —— timestamp & author ———————————————————————— #}
@@ -7448,6 +7535,7 @@ TEMPL_ITEM_DETAIL = wrap("""
 {% else %}
 <p>No entries yet.</p>
 {% endfor %}
+
 {% endblock %}
 """)
 

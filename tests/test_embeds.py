@@ -112,6 +112,30 @@ def test_embed_item_meta_and_rating(client):
     assert f'href="/{kind_to_slug("read")}/book/{item_slug}"' in html
 
 
+def test_item_detail_mentions_embed_backlinks(client):
+    _login(client)
+    item_slug = _seed_item_with_meta()
+    db = get_db()
+    now = utc_now().isoformat(timespec="seconds")
+    mention_slug = now.replace("-", "").replace(":", "")
+    mention_body = f"Pin body\n\n@item:{item_slug}"
+    db.execute(
+        "INSERT INTO entry (title, body, created_at, slug, kind) VALUES (?,?,?,?,?)",
+        ("Wrapper", mention_body, now, mention_slug, "pin"),
+    )
+    db.commit()
+
+    resp = client.get(f"/read/book/{item_slug}")
+    html = resp.data.decode()
+
+    assert "mentioned" in html
+    assert "Wrapper" in html
+    assert "Pin body" in html
+    assert f'href="/{kind_to_slug("pin")}/{mention_slug}"' in html
+    # ensure the embed card itself isn't rendered in the timeline row
+    assert "entry-embed--item" not in html
+
+
 def test_embed_section_only(client):
     _login(client)
 
