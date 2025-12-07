@@ -7219,17 +7219,34 @@ def item_detail(verb, item_type, slug):
         (f"%@item:{itm['slug']}%", itm["id"]),
     ).fetchall()
 
+    embed_ids = {r["id"] for r in embed_rows}
+
+    mention_rows = db.execute(
+        """
+            SELECT id, slug, kind, title, created_at, body, link
+              FROM entry
+             WHERE body LIKE ?
+               AND kind!='page'
+               AND id NOT IN (SELECT entry_id FROM entry_item WHERE item_id=?)
+        """,
+        (f"%{itm['slug']}%", itm["id"]),
+    ).fetchall()
+
     def _row_dict(r, *, is_embed: bool = False):
         d = dict(r)
         d.setdefault("action", None)
         d.setdefault("progress", None)
-        d["is_embed"] = is_embed
+        d["is_mention"] = is_embed
         body = r["body"] or ""
         d["timeline_body"] = _strip_embed_lines(body) if is_embed else body
         return d
 
-    timeline_rows = [_row_dict(r) for r in rows] + [
-        _row_dict(r, is_embed=True) for r in embed_rows
+    timeline_rows = [_row_dict(r) for r in rows]
+    timeline_rows += [_row_dict(r, is_embed=True) for r in embed_rows]
+    timeline_rows += [
+        _row_dict(r, is_embed=True)
+        for r in mention_rows
+        if r["id"] not in embed_ids
     ]
     if sort == "old":
         timeline_rows.sort(key=lambda r: r["created_at"])
@@ -7454,7 +7471,7 @@ TEMPL_ITEM_DETAIL = wrap("""
 {% endif %}
 {% for e in entries %}    
 <article style="padding-bottom:1rem; {% if not loop.last %}border-bottom:1px solid #444;{% endif %}">
-    {% if e.is_embed %}
+    {% if e.is_mention %}
         {% if e.kind == 'pin' and e.link %}
             {% set host = link_host(e.link) %}
             <h2 class="pin-title">
@@ -7478,7 +7495,7 @@ TEMPL_ITEM_DETAIL = wrap("""
     <small style="color:#aaa;">
 
         {# —— action pill ——————————————————————————————— #}
-        {% if e.is_embed %}
+        {% if e.is_mention %}
         <span style="
             display:inline-block;padding:.1em .6em;margin-right:.4em;
             background:#555;color:#fff;border-radius:1em;font-size:.75em;

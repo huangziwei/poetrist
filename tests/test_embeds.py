@@ -136,6 +136,26 @@ def test_item_detail_mentions_embed_backlinks(client):
     assert "entry-embed--item" not in html
 
 
+def test_item_detail_mentions_link_backlinks(client):
+    _login(client)
+    item_slug = _seed_item_with_meta()
+    db = get_db()
+    now = utc_now().isoformat(timespec="seconds")
+    mention_slug = f"m-{uuid4().hex[:6]}"
+    body = f"Linked item [here](/reading/book/{item_slug})."
+    db.execute(
+        "INSERT INTO entry (title, body, created_at, slug, kind) VALUES (?,?,?,?,?)",
+        ("Linker", body, now, mention_slug, "post"),
+    )
+    db.commit()
+
+    resp = client.get(f"/read/book/{item_slug}")
+    html = resp.data.decode()
+    assert "mentioned" in html
+    assert "Linker" in html
+    assert f'href="/{kind_to_slug("post")}/{mention_slug}"' in html
+
+
 def test_embed_section_only(client):
     _login(client)
 
