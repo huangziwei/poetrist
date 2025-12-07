@@ -583,7 +583,7 @@ TEMPL_ITEM_EMBED = """
             {% if tokens %}
               {% for tok in tokens %}
                 <a href="{{ url_for('search', q=tok.query) }}"
-                   style="color:{{ theme_color() }};border-bottom:0.1px dotted currentColor;text-decoration:none;">
+                   style="color:#ccc;border-bottom:0.1px dotted currentColor;text-decoration:none;">
                   {{ tok.label|mdinline }}
                 </a>{% if not loop.last %}<span aria-hidden="true"> / </span>{% endif %}
               {% endfor %}
@@ -7244,7 +7244,7 @@ TEMPL_ITEM_DETAIL = wrap("""
                 {% if tokens %}
                     {% for tok in tokens %}
                     <a href="{{ url_for('search', q=tok.query) }}"
-                       style="color:{{ theme_color() }};border-bottom:0.1px dotted currentColor;text-decoration:none;">
+                       style="color:#ccc;border-bottom:0.1px dotted currentColor;text-decoration:none;">
                         {{ tok.label|mdinline }}
                     </a>{% if not loop.last %}<span aria-hidden="true"> / </span>{% endif %}
                     {% endfor %}
