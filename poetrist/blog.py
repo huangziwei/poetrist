@@ -8868,11 +8868,6 @@ TEMPL_STATS = wrap("""
         <p>No check-ins yet.</p>
       {% endif %}
     </section>
-
-    <p style="font-size:.8em;color:#666;margin-top:1.5rem;">
-      <a href="{{ url_for('stats', format='json', months=months_window) }}" style="color:{{ theme_color() }};">Download as JSON</a>.
-      <br>Generated at {{ stats.generated_at }}.
-    </p>
   {% endif %}
 {% endblock %}
 """)
