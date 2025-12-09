@@ -4,6 +4,7 @@ tests/test_stats.py
 from __future__ import annotations
 
 import datetime as _dt
+import re
 import uuid
 
 from poetrist.blog import get_db
@@ -216,3 +217,37 @@ def test_stats_normalizes_case_and_typos(client):
     assert data["items"]["checkins"] >= before + 1
     actions = {a["action"] for a in data["items"]["by_action"]}
     assert "read" in actions
+
+
+def test_stats_items_section_shows_when_checkins_exist(client):
+    """Items & check-ins section should not display the empty state."""
+    entry_id = _add_entry(
+        year=2305,
+        month=4,
+        day=1,
+        kind="read",
+        body="render items section",
+    )
+    _attach_item(
+        entry_id,
+        verb="read",
+        action="reading",
+        progress="10%",
+        title="HTML Check",
+    )
+
+    resp = client.get("/stats")
+    html = resp.data.decode()
+
+    assert "No check-ins yet." not in html
+    assert "Items & check-ins" in html
+    assert re.search(
+        r"Check-ins</div>\s*<div[^>]*>\s*\d+",
+        html,
+        re.MULTILINE,
+    )
+    assert re.search(
+        r"unique item[s]?",
+        html,
+        re.IGNORECASE,
+    )

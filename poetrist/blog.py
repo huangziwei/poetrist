@@ -2287,11 +2287,7 @@ def has_kind(kind: str) -> bool:
 
 def has_stats() -> bool:
     """True if there is at least one non-page entry (for nav visibility)."""
-    row = (
-        get_db()
-        .execute("SELECT 1 FROM entry WHERE kind!='page' LIMIT 1")
-        .fetchone()
-    )
+    row = get_db().execute("SELECT 1 FROM entry WHERE kind!='page' LIMIT 1").fetchone()
     return bool(row)
 
 
@@ -2584,11 +2580,6 @@ nav a[aria-current=page]:hover,nav a[aria-current=page]:focus-visible{text-decor
             <a href="{{ tags_href() }}"
             {% if kind=='tags' %}aria-current="page"{% endif %}>
             Tags</a>
-            {% if has_stats() %}
-            <a href="{{ url_for('stats') }}"
-            {% if request.endpoint=='stats' %}aria-current="page"{% endif %}>
-            Stats</a>
-            {% endif %}
         </div>
         {% if active_verbs() %}
         <div class="nav-row nav-secondary-links">
@@ -8625,7 +8616,7 @@ def _stats_items(*, db) -> dict:
         SELECT LOWER(kind) AS kind,
                COUNT(*) AS cnt
           FROM entry e
-         WHERE LOWER(kind) IN ({','.join('?' * len(VERB_KINDS_LOWER))})
+         WHERE LOWER(kind) IN ({",".join("?" * len(VERB_KINDS_LOWER))})
            AND NOT EXISTS (SELECT 1 FROM entry_item ei WHERE ei.entry_id = e.id)
       GROUP BY LOWER(kind)
         """,
@@ -8726,7 +8717,7 @@ TEMPL_STATS = wrap("""
   <hr>
   <header style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap;">
     <div>
-      <h2 style="margin:0;">Stats</h2>
+      <h2 style="margin:1rem 0;">Statistics</h2>
       {% if stats.overview.first_year %}
         <small style="color:#888;">
           {{ stats.overview.first_year }} – {{ stats.overview.latest_year }}
@@ -8743,6 +8734,7 @@ TEMPL_STATS = wrap("""
   {% if not stats.yearly %}
     <p>No entries yet.</p>
   {% else %}
+    {% set items = stats['items'] %}
     <!-- Summary cards -->
     <section style="margin:1.5rem 0;">
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:1rem;">
@@ -8767,8 +8759,8 @@ TEMPL_STATS = wrap("""
         </div>
         <div style="padding:1rem;border:1px solid #444;border-radius:.4rem;background:#2a2a2a;">
           <div style="font-size:.9em;color:#888;">Check-ins</div>
-          <div style="font-size:2.1rem;line-height:1;">{{ stats.items.checkins }}</div>
-          <div style="font-size:.85em;color:#888;">{{ stats.items.unique_items }} unique item{{ '' if stats.items.unique_items==1 else 's' }}</div>
+          <div style="font-size:2.1rem;line-height:1;">{{ items.checkins }}</div>
+          <div style="font-size:.85em;color:#888;">{{ items.unique_items }} unique item{{ '' if items.unique_items==1 else 's' }}</div>
         </div>
       </div>
     </section>
@@ -8852,17 +8844,17 @@ TEMPL_STATS = wrap("""
     <!-- Items -->
     <section style="margin:1.5rem 0;">
       <h3 style="margin-bottom:.35rem;">Items & check-ins</h3>
-      {% if stats.items.checkins %}
+      {% if items.checkins %}
         <p style="margin:.4rem 0;color:#bbb;font-size:.95em;">
-          {{ stats.items.checkins }} check-in{{ '' if stats.items.checkins==1 else 's' }},
-          {{ stats.items.unique_items }} item{{ '' if stats.items.unique_items==1 else 's' }},
-          {{ stats.items.completed }} completed,
-          {{ stats.items.open }} open,
-          {{ stats.items.with_progress }} with progress.
+          {{ items.checkins }} check-in{{ '' if items.checkins==1 else 's' }},
+          {{ items.unique_items }} item{{ '' if items.unique_items==1 else 's' }},
+          {{ items.completed }} completed,
+          {{ items.open }} open,
+          {{ items.with_progress }} with progress.
         </p>
-        {% if stats.items.by_action %}
+        {% if items.by_action %}
           <div style="display:flex;flex-wrap:wrap;gap:.45rem 1rem;font-size:.9em;color:#bbb;">
-            {% for a in stats.items.by_action %}
+            {% for a in items.by_action %}
               <span style="display:inline-flex;align-items:center;gap:.35rem;">
                 <span style="display:inline-block;padding:.1em .55em;border-radius:1em;background:#444;color:#fff;text-transform:capitalize;">
                   {{ a.action }}
@@ -8877,31 +8869,9 @@ TEMPL_STATS = wrap("""
       {% endif %}
     </section>
 
-    <!-- On this day -->
-    <section style="margin:1.5rem 0;">
-      <h3 style="margin-bottom:.35rem;">On this day</h3>
-      {% if stats.today.total %}
-        <p style="margin:.4rem 0;color:#bbb;font-size:.95em;">
-          {{ stats.today.total }} entr{{ 'y' if stats.today.total==1 else 'ies' }} share today’s date across {{ stats.today.rows|length }} year{{ '' if stats.today.rows|length==1 else 's' }}.
-          <a href="{{ url_for('today') }}" style="color:{{ theme_color() }};">See the list</a>.
-        </p>
-        <div style="display:flex;flex-wrap:wrap;gap:.25rem .5rem;">
-          {% for y in stats.today.rows %}
-            <a href="{{ url_for('today', year=y.y) }}"
-               style="text-decoration:none;border-bottom:none;display:inline-flex;margin:.15rem 0;padding:.15rem .6rem;border-radius:1rem;font-size:.8em;background:#444;color:{{ theme_color() }};">
-               {{ y.y }}
-               <sup style="font-size:.5em;">{{ y.cnt }}</sup>
-            </a>
-          {% endfor %}
-        </div>
-      {% else %}
-        <p>No same-day history yet.</p>
-      {% endif %}
-    </section>
-
     <p style="font-size:.8em;color:#666;margin-top:1.5rem;">
-      Need the raw numbers? <a href="{{ url_for('stats', format='json', months=months_window) }}" style="color:{{ theme_color() }};">Download as JSON</a>.
-      Generated at {{ stats.generated_at }}.
+      <a href="{{ url_for('stats', format='json', months=months_window) }}" style="color:{{ theme_color() }};">Download as JSON</a>.
+      <br>Generated at {{ stats.generated_at }}.
     </p>
   {% endif %}
 {% endblock %}
