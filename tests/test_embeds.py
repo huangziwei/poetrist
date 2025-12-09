@@ -156,6 +156,31 @@ def test_item_detail_mentions_link_backlinks(client):
     assert f'href="/{kind_to_slug("post")}/{mention_slug}"' in html
 
 
+def test_item_detail_ignores_code_block_mentions(client):
+    _login(client)
+    item_slug = _seed_item_with_meta()
+    db = get_db()
+    now = utc_now().isoformat(timespec="seconds")
+    tutorial_slug = f"tut-{uuid4().hex[:6]}"
+    body = (
+        "Example usage for docs:\n\n"
+        "```\n"
+        f"@item:{item_slug}\n"
+        "```\n\n"
+        f"Inline `@item:{item_slug}` stays code."
+    )
+    db.execute(
+        "INSERT INTO entry (title, body, created_at, slug, kind) VALUES (?,?,?,?,?)",
+        ("Tutorial", body, now, tutorial_slug, "post"),
+    )
+    db.commit()
+
+    resp = client.get(f"/read/book/{item_slug}")
+    html = resp.data.decode()
+    assert "Tutorial" not in html
+    assert tutorial_slug not in html
+
+
 def test_embed_section_only(client):
     _login(client)
 

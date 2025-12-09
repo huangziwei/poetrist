@@ -555,6 +555,51 @@ def _strip_embed_lines(text: str | None) -> str:
     return "\n".join(out)
 
 
+def _non_code_lines(text: str | None):
+    """Yield lines outside fenced code blocks."""
+    in_code, fence = False, ""
+    for ln in (text or "").splitlines():
+        m_f = _CODE_FENCE_RE.match(ln)
+        if m_f:
+            tok = m_f.group(1)
+            if not in_code:
+                in_code, fence = True, tok
+            elif tok == fence:
+                in_code, fence = False, ""
+            continue
+        if in_code:
+            continue
+        yield ln
+
+
+def _strip_code_blocks(text: str | None) -> str:
+    """
+    Remove fenced + inline code spans so backlink detection ignores them.
+    """
+    if not text:
+        return ""
+    return "\n".join(_CODE_SPAN_RE.sub("", ln) for ln in _non_code_lines(text))
+
+
+def _contains_slug_outside_code(text: str | None, slug: str) -> bool:
+    """True if slug remains after dropping fenced/inline code."""
+    if not text or not slug:
+        return False
+    return slug in _strip_code_blocks(text)
+
+
+def _has_item_embed(body: str | None, slug: str) -> bool:
+    """True if body contains an @item:slug embed outside code fences."""
+    for ln in _non_code_lines(body):
+        m = _EMBED_RE.match(ln.strip())
+        if not m or m.group(1) != "item":
+            continue
+        target_slug, _, parse_err = _parse_embed_target(m.group(2), m.group(3))
+        if not parse_err and target_slug == slug:
+            return True
+    return False
+
+
 TEMPL_ITEM_EMBED = """
 <div class="entry-embed entry-embed--item" data-item="{{ item['slug'] }}">
   <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
@@ -1867,6 +1912,7 @@ IMPORT_RE = re.compile(
     re.X | re.I,
 )
 _CODE_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+_CODE_SPAN_RE = re.compile(r"`+[^`]*`+")
 
 
 def _resolve_verb(
@@ -2355,7 +2401,7 @@ def backlinks(entries, *, db) -> dict[int, list]:
     sql = f"""
         SELECT target.slug      AS target_slug,
                src.id, src.slug, src.kind,
-               src.title, src.created_at
+               src.title, src.created_at, src.body
           FROM entry_fts                      -- trigram index
           JOIN entry src    ON src.id = entry_fts.rowid
           JOIN entry target ON target.slug IN ({q_marks})
@@ -2366,6 +2412,8 @@ def backlinks(entries, *, db) -> dict[int, list]:
 
     out: dict[int, list] = {e["id"]: [] for e in entries}
     for r in rows:
+        if not _contains_slug_outside_code(r["body"], r["target_slug"]):
+            continue
         out[slug_to_id[r["target_slug"]]].append(r)
 
     # sort each bucket oldest → newest
@@ -7375,6 +7423,7 @@ def item_detail(verb, item_type, slug):
         (f"%@item:{itm['slug']}%", itm["id"]),
     ).fetchall()
 
+    embed_rows = [r for r in embed_rows if _has_item_embed(r["body"], itm["slug"])]
     embed_ids = {r["id"] for r in embed_rows}
 
     mention_rows = db.execute(
@@ -7387,6 +7436,12 @@ def item_detail(verb, item_type, slug):
         """,
         (f"%{itm['slug']}%", itm["id"]),
     ).fetchall()
+    mention_rows = [
+        r
+        for r in mention_rows
+        if r["id"] not in embed_ids
+        and _contains_slug_outside_code(r["body"], itm["slug"])
+    ]
 
     def _row_dict(r, *, is_embed: bool = False):
         d = dict(r)
@@ -7399,9 +7454,7 @@ def item_detail(verb, item_type, slug):
 
     timeline_rows = [_row_dict(r) for r in rows]
     timeline_rows += [_row_dict(r, is_embed=True) for r in embed_rows]
-    timeline_rows += [
-        _row_dict(r, is_embed=True) for r in mention_rows if r["id"] not in embed_ids
-    ]
+    timeline_rows += [_row_dict(r, is_embed=True) for r in mention_rows]
     if sort == "old":
         timeline_rows.sort(key=lambda r: r["created_at"])
     else:
