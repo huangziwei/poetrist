@@ -3405,7 +3405,7 @@ TEMPL_SETTINGS = wrap("""
         <!-- ──────────── slugs ──────────── -->
         <fieldset style="margin:0 0 1.5rem 0; border:0; padding:0">
             <legend style="font-weight:bold; margin-bottom:.5rem;">URL slugs</legend>
-                <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(10rem,1fr)); gap:.75rem;">
+                <div style="display:grid; grid-template-columns:repeat(2,minmax(14rem,1fr)); gap:.75rem; width:100%;">
                     <label>
                         <span style="font-size:.8em; color:#aaa">Says</span><br>
                         <input name="slug_say"
@@ -3430,7 +3430,7 @@ TEMPL_SETTINGS = wrap("""
             </div>
             <div style="margin-top:1rem;">
                 <span style="font-size:.8em; color:#aaa">Other</span>
-                <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(10rem,1fr)); gap:.75rem; margin-top:.4rem;">
+                <div style="display:grid; grid-template-columns:repeat(2,minmax(14rem,1fr)); gap:.75rem; margin-top:.4rem; width:100%;">
                     <label>
                         <span style="font-size:.8em; color:#aaa">Tags</span><br>
                         <input name="slug_tags"
@@ -3450,7 +3450,7 @@ TEMPL_SETTINGS = wrap("""
             <div style="margin-top:1rem;">
                 {% if verb_slugs %}
                     <span style="font-size:.8em; color:#aaa">Verbs</span>
-                    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(10rem,1fr)); gap:.75rem; margin-top:.4rem;">
+                    <div style="display:grid; grid-template-columns:repeat(2,minmax(14rem,1fr)); gap:.75rem; margin-top:.4rem; width:100%;">
                         {% for verb, slug in verb_slugs %}
                         <label>
                             <span style="font-size:.8em; color:#aaa">{{ verb|capitalize }}</span><br>
@@ -3489,7 +3489,7 @@ TEMPL_SETTINGS = wrap("""
                 {% endif %}
                 · leave fields blank to keep existing values
             </div>
-            <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(12rem,1fr)); gap:.75rem;">
+            <div style="display:grid; grid-template-columns:repeat(2, minmax(14rem,1fr)); gap:.75rem; width:100%;">
                 <label>
                     <span style="font-size:.8em; color:#aaa">Account ID
                         <small style="color:#777;">{% if r2_status.account %}saved{% else %}missing{% endif %}</small>
