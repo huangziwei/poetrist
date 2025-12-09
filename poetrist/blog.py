@@ -241,6 +241,13 @@ IMG_TAG_RE = re.compile(
     re.I,
 )
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
+WORD_COUNT_SQL = (
+    "CASE WHEN body IS NULL OR LENGTH(TRIM(body))=0 THEN 0 "
+    "ELSE LENGTH(REPLACE(REPLACE(body, char(10), ' '), char(13), ' ')) "
+    "     - LENGTH(REPLACE(REPLACE(REPLACE(body, char(10), ' '), char(13), ' '), ' ', '')) "
+    "     + 1 "
+    "END"
+)
 
 try:
     __version__ = version("poetrist")
@@ -2278,7 +2285,18 @@ def has_kind(kind: str) -> bool:
     return bool(row)
 
 
+def has_stats() -> bool:
+    """True if there is at least one non-page entry (for nav visibility)."""
+    row = (
+        get_db()
+        .execute("SELECT 1 FROM entry WHERE kind!='page' LIMIT 1")
+        .fetchone()
+    )
+    return bool(row)
+
+
 VERB_KINDS = tuple(VERB_MAP.keys())
+VERB_KINDS_LOWER = tuple(k.lower() for k in VERB_KINDS)
 
 
 def active_verbs() -> list[str]:
@@ -2362,6 +2380,7 @@ app.jinja_env.globals["nav_pages"] = nav_pages
 app.jinja_env.globals["version"] = __version__
 app.jinja_env.globals.update(
     has_kind=has_kind,
+    has_stats=has_stats,
     pins_from_href=pins_from_href,
     active_verbs=active_verbs,
     verb_kinds=VERB_KINDS,
@@ -2565,6 +2584,11 @@ nav a[aria-current=page]:hover,nav a[aria-current=page]:focus-visible{text-decor
             <a href="{{ tags_href() }}"
             {% if kind=='tags' %}aria-current="page"{% endif %}>
             Tags</a>
+            {% if has_stats() %}
+            <a href="{{ url_for('stats') }}"
+            {% if request.endpoint=='stats' %}aria-current="page"{% endif %}>
+            Stats</a>
+            {% endif %}
         </div>
         {% if active_verbs() %}
         <div class="nav-row nav-secondary-links">
@@ -2625,6 +2649,13 @@ TEMPL_EPILOG = """
 
         <!-- right-hand side – extra pages -->
         <nav aria-label="Footer" style="display:inline-block;">
+            {% if has_stats() %}
+                <a href="{{ url_for('stats') }}"
+                {% if request.endpoint == 'stats' %}
+                    aria-current="page"
+                {% endif %}>
+                Stats</a>&nbsp;
+            {% endif %}
             {% if has_today() %}
                 <a href="{{ url_for('today') }}"
                 {% if request.endpoint == 'today' %}
@@ -8444,6 +8475,434 @@ TEMPL_SEARCH_ITEMS = wrap("""
     {% endif %}
   {% else %}
       <p>No items.</p>
+  {% endif %}
+{% endblock %}
+""")
+
+
+###############################################################################
+# Statistics
+###############################################################################
+def _order_kinds(used: set[str]) -> list[str]:
+    """Stable ordering for kind pills: core kinds first, then the rest."""
+    base = [k for k in KINDS if k != "page" and k in used]
+    for k in sorted(used):
+        if k not in base and k != "page":
+            base.append(k)
+    return base
+
+
+def _stats_yearly(*, db, limit: int | None = None):
+    """
+    Aggregate entries per year with per-kind counts, words, and tag breadth.
+    """
+    rows = db.execute(
+        f"""
+        SELECT substr(created_at,1,4) AS y,
+               LOWER(kind)            AS kind,
+               COUNT(*)                AS cnt,
+               SUM({WORD_COUNT_SQL})   AS words
+          FROM entry
+         WHERE kind!='page'
+      GROUP BY y, LOWER(kind)
+      ORDER BY y DESC
+        """
+    ).fetchall()
+
+    buckets: dict[str, dict] = {}
+    used: set[str] = set()
+    for r in rows:
+        year = r["y"]
+        bucket = buckets.setdefault(
+            year, {"year": year, "total": 0, "words": 0, "kinds": {}, "tags": 0}
+        )
+        bucket["kinds"][r["kind"]] = r["cnt"]
+        bucket["total"] += r["cnt"]
+        bucket["words"] += int(r["words"] or 0)
+        used.add(r["kind"])
+
+    tag_rows = db.execute(
+        """
+        SELECT substr(e.created_at,1,4) AS y,
+               COUNT(DISTINCT et.tag_id) AS tags
+          FROM entry e
+          JOIN entry_tag et ON et.entry_id = e.id
+         WHERE e.kind!='page'
+      GROUP BY y
+      ORDER BY y DESC
+        """
+    ).fetchall()
+
+    for r in tag_rows:
+        bucket = buckets.setdefault(
+            r["y"], {"year": r["y"], "total": 0, "words": 0, "kinds": {}, "tags": 0}
+        )
+        bucket["tags"] = r["tags"]
+
+    yearly = sorted(buckets.values(), key=lambda d: d["year"], reverse=True)
+    return yearly if limit is None else yearly[:limit], used
+
+
+def _stats_monthly(*, db, months: int = 12):
+    """
+    Last *months* (newest first) grouped as YYYY-MM with per-kind counts.
+    """
+    rows = db.execute(
+        """
+        SELECT substr(created_at,1,7) AS ym,
+               LOWER(kind)            AS kind,
+               COUNT(*)               AS cnt
+          FROM entry
+         WHERE kind!='page'
+      GROUP BY ym, LOWER(kind)
+      ORDER BY ym DESC
+        """
+    ).fetchall()
+
+    buckets: dict[str, dict] = {}
+    used: set[str] = set()
+    for r in rows:
+        month = r["ym"]
+        bucket = buckets.setdefault(month, {"month": month, "total": 0, "kinds": {}})
+        bucket["kinds"][r["kind"]] = r["cnt"]
+        bucket["total"] += r["cnt"]
+        used.add(r["kind"])
+
+    ordered = sorted(buckets.values(), key=lambda d: d["month"], reverse=True)
+    return ordered[:months], used
+
+
+def _stats_tags(*, db, limit: int = 12) -> tuple[list[dict], int]:
+    """
+    Top tags plus the total count of distinct tags used.
+    """
+    rows = db.execute(
+        """
+        SELECT t.name,
+               COUNT(*) AS cnt
+          FROM tag t
+          JOIN entry_tag et ON et.tag_id = t.id
+          JOIN entry e      ON e.id      = et.entry_id
+         WHERE e.kind!='page'
+      GROUP BY t.id
+      ORDER BY cnt DESC, LOWER(t.name)
+         LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+    total_used = (
+        db.execute(
+            """
+            SELECT COUNT(DISTINCT et.tag_id) AS c
+              FROM entry_tag et
+              JOIN entry e ON e.id = et.entry_id
+             WHERE e.kind!='page'
+            """
+        ).fetchone()[0]
+        or 0
+    )
+
+    return [dict(name=r["name"], cnt=r["cnt"]) for r in rows], total_used
+
+
+def _stats_items(*, db) -> dict:
+    """Check-in stats derived from entry_item with a fallback to verb-only entries."""
+    rows = db.execute("SELECT action, progress FROM entry_item").fetchall()
+    total_with_items = len(rows)
+    completed = sum(1 for r in rows if is_completed_action(r["action"]))
+    with_progress = sum(1 for r in rows if (r["progress"] or "").strip())
+
+    action_counts: DefaultDict[str, int] = defaultdict(int)
+    for r in rows:
+        act = (r["action"] or "").strip().lower()
+        if not act:
+            continue
+        action_counts[act] += 1
+
+    fallback = db.execute(
+        f"""
+        SELECT LOWER(kind) AS kind,
+               COUNT(*) AS cnt
+          FROM entry e
+         WHERE LOWER(kind) IN ({','.join('?' * len(VERB_KINDS_LOWER))})
+           AND NOT EXISTS (SELECT 1 FROM entry_item ei WHERE ei.entry_id = e.id)
+      GROUP BY LOWER(kind)
+        """,
+        VERB_KINDS_LOWER,
+    ).fetchall()
+
+    fallback_total = 0
+    for r in fallback:
+        action_counts[r["kind"]] += r["cnt"]
+        fallback_total += r["cnt"]
+
+    total = total_with_items + fallback_total
+
+    unique_items = (
+        db.execute("SELECT COUNT(DISTINCT item_id) FROM entry_item").fetchone()[0] or 0
+    )
+
+    by_action = sorted(
+        [{"action": k, "cnt": v} for k, v in action_counts.items()],
+        key=lambda d: (-d["cnt"], d["action"]),
+    )
+
+    return {
+        "checkins": total,
+        "unique_items": unique_items,
+        "completed": completed,
+        "open": max(total - completed, 0),
+        "with_progress": with_progress,
+        "by_action": by_action,
+    }
+
+
+def stats_snapshot(*, db, months: int = 12) -> dict:
+    """Compose a reusable stats payload for HTML and JSON views."""
+    yearly, kinds_y = _stats_yearly(db=db)
+    monthly, kinds_m = _stats_monthly(db=db, months=months)
+    tag_top, total_tags = _stats_tags(db=db)
+    items = _stats_items(db=db)
+
+    kinds_used = kinds_y | kinds_m
+    kind_order = _order_kinds(kinds_used)
+
+    overview = {
+        "total_entries": sum(y["total"] for y in yearly),
+        "total_words": sum(y["words"] for y in yearly),
+        "years": len(yearly),
+        "first_year": yearly[-1]["year"] if yearly else None,
+        "latest_year": yearly[0]["year"] if yearly else None,
+        "total_tags": total_tags,
+    }
+
+    today_rows = _today_stats(db=db)
+    today_total = sum(r["cnt"] for r in today_rows)
+
+    return {
+        "yearly": yearly,
+        "monthly": monthly,
+        "tags": tag_top,
+        "items": items,
+        "today": {"rows": today_rows, "total": today_total},
+        "overview": overview,
+        "kinds": kind_order,
+        "generated_at": utc_now().isoformat(),
+    }
+
+
+@app.route("/stats")
+def stats():
+    db = get_db()
+    try:
+        months_window = int(request.args.get("months", 12))
+    except (TypeError, ValueError):
+        months_window = 12
+    months_window = min(max(months_window, 3), 36)
+
+    snapshot = stats_snapshot(db=db, months=months_window)
+    if request.args.get("format") == "json":
+        return snapshot
+
+    max_year_total = max((y["total"] for y in snapshot["yearly"]), default=0)
+    max_month_total = max((m["total"] for m in snapshot["monthly"]), default=0)
+
+    return render_template_string(
+        TEMPL_STATS,
+        stats=snapshot,
+        kinds=snapshot["kinds"],
+        max_year_total=max_year_total,
+        max_month_total=max_month_total,
+        months_window=months_window,
+        title=get_setting("site_name", "po.etr.ist"),
+        username=current_username(),
+        kind="stats",
+    )
+
+
+TEMPL_STATS = wrap("""
+{% block body %}
+  <hr>
+  <header style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap;">
+    <div>
+      <h2 style="margin:0;">Stats</h2>
+      {% if stats.overview.first_year %}
+        <small style="color:#888;">
+          {{ stats.overview.first_year }} – {{ stats.overview.latest_year }}
+          ({{ stats.overview.years }} year{{ 's' if stats.overview.years!=1 else '' }})
+        </small>
+      {% endif %}
+    </div>
+    <a href="{{ url_for('today') }}"
+       style="color:{{ theme_color() }};font-size:.9em;text-decoration:none;border-bottom:0.1px dotted currentColor;">
+       On this day →
+    </a>
+  </header>
+
+  {% if not stats.yearly %}
+    <p>No entries yet.</p>
+  {% else %}
+    <!-- Summary cards -->
+    <section style="margin:1.5rem 0;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:1rem;">
+        <div style="padding:1rem;border:1px solid #444;border-radius:.4rem;background:#2a2a2a;">
+          <div style="font-size:.9em;color:#888;">Entries</div>
+          <div style="font-size:2.1rem;line-height:1;">{{ '{:,}'.format(stats.overview.total_entries) }}</div>
+          <div style="font-size:.85em;color:#888;">{{ stats.overview.years }} year{{ 's' if stats.overview.years!=1 else '' }}</div>
+        </div>
+        <div style="padding:1rem;border:1px solid #444;border-radius:.4rem;background:#2a2a2a;">
+          <div style="font-size:.9em;color:#888;">Words</div>
+          <div style="font-size:2.1rem;line-height:1;">{{ '{:,}'.format(stats.overview.total_words) }}</div>
+          <div style="font-size:.85em;color:#888;">approximate count</div>
+        </div>
+        <div style="padding:1rem;border:1px solid #444;border-radius:.4rem;background:#2a2a2a;">
+          <div style="font-size:.9em;color:#888;">Tags used</div>
+          <div style="font-size:2.1rem;line-height:1;">{{ stats.overview.total_tags }}</div>
+          {% if stats.tags %}
+            <div style="font-size:.85em;color:#888;">Top {{ stats.tags|length }} shown below</div>
+          {% else %}
+            <div style="font-size:.85em;color:#888;">No tags yet</div>
+          {% endif %}
+        </div>
+        <div style="padding:1rem;border:1px solid #444;border-radius:.4rem;background:#2a2a2a;">
+          <div style="font-size:.9em;color:#888;">Check-ins</div>
+          <div style="font-size:2.1rem;line-height:1;">{{ stats.items.checkins }}</div>
+          <div style="font-size:.85em;color:#888;">{{ stats.items.unique_items }} unique item{{ '' if stats.items.unique_items==1 else 's' }}</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Yearly cadence -->
+    <section style="margin:1.5rem 0;">
+      <h3 style="margin-bottom:.35rem;">Yearly cadence</h3>
+      <div style="display:flex;flex-direction:column;gap:.65rem;">
+        {% for y in stats.yearly %}
+          <article style="border:1px solid #444;border-radius:.35rem;padding:.75rem 1rem;background:#2a2a2a;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;font-variant-numeric:tabular-nums;">
+              <strong>{{ y.year }}</strong>
+              <span style="color:#ccc;font-size:.95em;">{{ y.total }} entr{{ 'y' if y.total==1 else 'ies' }}</span>
+            </div>
+            <div style="margin:.45rem 0 .35rem;height:8px;background:#333;border-radius:999px;overflow:hidden;">
+              {% set pct = (y.total / max_year_total * 100) if max_year_total else 0 %}
+              <span style="display:block;height:100%;width:{{ '%.1f' % pct }}%;background:{{ theme_color() }};"></span>
+            </div>
+            <div style="font-size:.85em;color:#bbb;display:flex;flex-wrap:wrap;gap:.6rem;">
+              {% for k in kinds %}
+                {% if y.kinds.get(k) %}
+                  <span>{{ k|smartcap }} {{ y.kinds[k] }}</span>
+                {% endif %}
+              {% endfor %}
+              <span style="color:#888;">{{ '{:,}'.format(y.words) }} words</span>
+              <span style="color:#888;">{{ y.tags or 0 }} tags</span>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    </section>
+
+    <!-- Monthly trend -->
+    <section style="margin:1.5rem 0;">
+      <h3 style="margin-bottom:.35rem;">Last {{ months_window }} month{{ '' if months_window==1 else 's' }}</h3>
+      {% if stats.monthly %}
+        <div style="display:flex;flex-direction:column;gap:.35rem;">
+          {% for m in stats.monthly %}
+            <div style="display:grid;grid-template-columns:7ch 1fr auto;align-items:center;gap:.65rem;font-variant-numeric:tabular-nums;">
+              <span>{{ m.month }}</span>
+              <div style="background:#333;border-radius:999px;overflow:hidden;height:8px;">
+                {% set pct = (m.total / max_month_total * 100) if max_month_total else 0 %}
+                <span style="display:block;height:100%;width:{{ '%.1f' % pct }}%;background:{{ theme_color() }};"></span>
+              </div>
+              <span style="color:#ccc;font-size:.9em;">{{ m.total }}</span>
+            </div>
+            <div style="font-size:.8em;color:#bbb; margin-left:7ch; display:flex; flex-wrap:wrap; gap:.5rem 1rem;">
+              {% for k in kinds %}
+                {% if m.kinds.get(k) %}
+                  <span>{{ k|smartcap }} {{ m.kinds[k] }}</span>
+                {% endif %}
+              {% endfor %}
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p>No recent months yet.</p>
+      {% endif %}
+    </section>
+
+    <!-- Tags -->
+    <section style="margin:1.5rem 0;">
+      <h3 style="margin-bottom:.35rem;">Top tags</h3>
+      {% if stats.tags %}
+        <ul style="list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:.5rem 1rem;font-size:.95em;">
+          {% for t in stats.tags %}
+            <li>
+              <a href="{{ tags_href(t.name) }}"
+                 style="color:{{ theme_color() }};text-decoration:none;border-bottom:0.1px dotted currentColor;">
+                #{{ t.name }}
+              </a>
+              <small style="color:#888;">{{ t.cnt }}</small>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p>No tags yet.</p>
+      {% endif %}
+    </section>
+
+    <!-- Items -->
+    <section style="margin:1.5rem 0;">
+      <h3 style="margin-bottom:.35rem;">Items & check-ins</h3>
+      {% if stats.items.checkins %}
+        <p style="margin:.4rem 0;color:#bbb;font-size:.95em;">
+          {{ stats.items.checkins }} check-in{{ '' if stats.items.checkins==1 else 's' }},
+          {{ stats.items.unique_items }} item{{ '' if stats.items.unique_items==1 else 's' }},
+          {{ stats.items.completed }} completed,
+          {{ stats.items.open }} open,
+          {{ stats.items.with_progress }} with progress.
+        </p>
+        {% if stats.items.by_action %}
+          <div style="display:flex;flex-wrap:wrap;gap:.45rem 1rem;font-size:.9em;color:#bbb;">
+            {% for a in stats.items.by_action %}
+              <span style="display:inline-flex;align-items:center;gap:.35rem;">
+                <span style="display:inline-block;padding:.1em .55em;border-radius:1em;background:#444;color:#fff;text-transform:capitalize;">
+                  {{ a.action }}
+                </span>
+                <small style="color:#888;">{{ a.cnt }}</small>
+              </span>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% else %}
+        <p>No check-ins yet.</p>
+      {% endif %}
+    </section>
+
+    <!-- On this day -->
+    <section style="margin:1.5rem 0;">
+      <h3 style="margin-bottom:.35rem;">On this day</h3>
+      {% if stats.today.total %}
+        <p style="margin:.4rem 0;color:#bbb;font-size:.95em;">
+          {{ stats.today.total }} entr{{ 'y' if stats.today.total==1 else 'ies' }} share today’s date across {{ stats.today.rows|length }} year{{ '' if stats.today.rows|length==1 else 's' }}.
+          <a href="{{ url_for('today') }}" style="color:{{ theme_color() }};">See the list</a>.
+        </p>
+        <div style="display:flex;flex-wrap:wrap;gap:.25rem .5rem;">
+          {% for y in stats.today.rows %}
+            <a href="{{ url_for('today', year=y.y) }}"
+               style="text-decoration:none;border-bottom:none;display:inline-flex;margin:.15rem 0;padding:.15rem .6rem;border-radius:1rem;font-size:.8em;background:#444;color:{{ theme_color() }};">
+               {{ y.y }}
+               <sup style="font-size:.5em;">{{ y.cnt }}</sup>
+            </a>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p>No same-day history yet.</p>
+      {% endif %}
+    </section>
+
+    <p style="font-size:.8em;color:#666;margin-top:1.5rem;">
+      Need the raw numbers? <a href="{{ url_for('stats', format='json', months=months_window) }}" style="color:{{ theme_color() }};">Download as JSON</a>.
+      Generated at {{ stats.generated_at }}.
+    </p>
   {% endif %}
 {% endblock %}
 """)
