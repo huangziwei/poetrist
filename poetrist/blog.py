@@ -2640,7 +2640,7 @@ TEMPL_EPILOG = """
 
         <!-- right-hand side – extra pages -->
         <nav aria-label="Footer" style="display:inline-block;">
-            {% if has_stats() %}
+            {% if session.get('logged_in') and has_stats() %}
                 <a href="{{ url_for('stats') }}"
                 {% if request.endpoint == 'stats' %}
                     aria-current="page"
@@ -8685,6 +8685,8 @@ def stats_snapshot(*, db, months: int = 12) -> dict:
 
 @app.route("/stats")
 def stats():
+    login_required()
+
     db = get_db()
     try:
         months_window = int(request.args.get("months", 12))

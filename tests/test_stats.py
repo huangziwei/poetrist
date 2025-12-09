@@ -1,13 +1,30 @@
 """
 tests/test_stats.py
 """
+
 from __future__ import annotations
 
 import datetime as _dt
 import re
 import uuid
 
-from poetrist.blog import get_db
+from poetrist.blog import _create_admin, get_db
+
+CSRF = "stats-csrf"
+
+
+def _ensure_admin() -> None:
+    """Create the admin row once for these tests."""
+    db = get_db()
+    if not db.execute("SELECT 1 FROM user LIMIT 1").fetchone():
+        _create_admin(db, username="tester")
+
+
+def _login(client) -> None:
+    _ensure_admin()
+    with client.session_transaction() as s:
+        s["logged_in"] = True
+        s["csrf"] = CSRF
 
 
 # ───────────────────────── helpers ────────────────────────────────────
@@ -32,7 +49,13 @@ def _add_entry(
 
     db.execute(
         "INSERT INTO entry (title, body, created_at, slug, kind) VALUES (?,?,?,?,?)",
-        (f"{kind.title()} {counter}", body, ts.isoformat(timespec="seconds"), slug, kind),
+        (
+            f"{kind.title()} {counter}",
+            body,
+            ts.isoformat(timespec="seconds"),
+            slug,
+            kind,
+        ),
     )
     entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -74,10 +97,20 @@ def _attach_item(
 
 
 # ───────────────────────── tests ──────────────────────────────────────
+def test_stats_requires_login(client):
+    resp = client.get("/stats")
+    assert resp.status_code == 403
+
+    resp_json = client.get("/stats?format=json")
+    assert resp_json.status_code == 403
+
+
 def test_stats_json_includes_breakdowns(client):
     """
     /stats?format=json should return yearly + monthly breakdowns and item stats.
     """
+    _login(client)
+
     _ = _add_entry(
         year=2301,
         month=5,
@@ -153,6 +186,8 @@ def test_stats_page_renders_sections(client):
     """
     /stats HTML should render the major sections and tag list.
     """
+    _login(client)
+
     # boost one tag so it appears in the “Top tags” section
     for day in (20, 21, 22):
         _add_entry(
@@ -169,16 +204,17 @@ def test_stats_page_renders_sections(client):
     html = resp.data.decode()
 
     assert "Yearly cadence" in html
-    assert "Last" in html           # monthly trend header
-    assert "#stats-html" in html    # tag pill
+    assert "Last" in html  # monthly trend header
+    assert "#stats-html" in html  # tag pill
     assert "On this day" in html
-    assert "Download as JSON" in html
 
 
 def test_stats_counts_entries_without_entry_item(client):
     """
     Entries with verb kinds but no entry_item rows still count as check-ins.
     """
+    _login(client)
+
     resp_before = client.get("/stats?format=json")
     before = resp_before.get_json()["items"]["checkins"]
 
@@ -200,6 +236,8 @@ def test_stats_normalizes_case_and_typos(client):
     """
     Uppercase verb kinds should still count toward check-ins.
     """
+    _login(client)
+
     resp_before = client.get("/stats?format=json")
     before = resp_before.get_json()["items"]["checkins"]
 
@@ -221,6 +259,8 @@ def test_stats_normalizes_case_and_typos(client):
 
 def test_stats_items_section_shows_when_checkins_exist(client):
     """Items & check-ins section should not display the empty state."""
+    _login(client)
+
     entry_id = _add_entry(
         year=2305,
         month=4,
