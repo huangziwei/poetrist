@@ -2463,6 +2463,9 @@ nav a[aria-current=page]:hover,nav a[aria-current=page]:focus-visible{text-decor
 .writing-area{font-family:"Iowan Old Style","Palatino","Book Antiqua","Georgia",serif;font-size:1.05em;line-height:1.6;padding:12px 14px;width:100%;min-height:7.5rem;max-height:60vh;background:#2b2b2b;border:1px solid #555;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,.18);transition:border-color .15s ease,box-shadow .2s ease,background .2s ease;resize:vertical;overflow:auto;letter-spacing:.01em;caret-color:{{ theme_color() }};}
 .writing-area:focus{border-color:{{ theme_color() }};background:#242424;box-shadow:0 4px 12px rgba(0,0,0,.35),0 0 0 2px rgba(255,255,255,.04);}
 .writing-area::placeholder{color:#9a9a9a;}
+.writing-input{font-family:"Iowan Old Style","Palatino","Book Antiqua","Georgia",serif;font-size:1.02em;line-height:1.5;padding:10px 12px;width:100%;background:#2b2b2b;border:1px solid #555;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,.18);transition:border-color .15s ease,box-shadow .2s ease,background .2s ease;letter-spacing:.01em;}
+.writing-input:focus{border-color:{{ theme_color() }};background:#242424;box-shadow:0 4px 12px rgba(0,0,0,.35),0 0 0 2px rgba(255,255,255,.04);outline:0;}
+.writing-input::placeholder{color:#9a9a9a;}
 </style>
 <body>
 <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -2587,6 +2590,7 @@ TEMPL_EPILOG = """
     </footer>
     <a href="#page-bottom" aria-label="Jump to footer" class="jump-btn jump-down">↓</a>
     <a href="#page-top" aria-label="Jump to top" class="jump-btn jump-up">↑</a>
+    {% if session.get('logged_in') %}
     <script>
     (() => {
         const areas = Array.from(document.querySelectorAll('textarea[data-autogrow]'));
@@ -2620,6 +2624,7 @@ TEMPL_EPILOG = """
         window.addEventListener('resize', () => raf(refreshAll), {passive: true});
     })();
     </script>
+    {% endif %}
     {% if session.get('logged_in') and r2_enabled() %}
     <script>
     (() => {
@@ -5065,11 +5070,19 @@ TEMPL_LIST = wrap("""
             {% endif %}
             {# Title field for Posts & Pins #}
             {% if kind in ('post', 'pin') %}
-                <input name="title" style="width:100%;margin:0" placeholder="Title" value="{{ form_title or '' }}">
+                <input name="title"
+                       class="writing-input"
+                       style="margin:0"
+                       placeholder="Title"
+                       value="{{ form_title or '' }}">
             {% endif %}
             {# Link field only for Pins #}
             {% if kind == 'pin' %}
-                <input name="link" style="width:100%;margin:0" placeholder="Link" value="{{ form_link or '' }}">
+                <input name="link"
+                       class="writing-input"
+                       style="margin:0"
+                       placeholder="Link"
+                       value="{{ form_link or '' }}">
             {% endif %}
             <textarea name="body"
                       class="writing-area"
@@ -6018,11 +6031,17 @@ TEMPL_PROJECT_EDIT = wrap("""
     {% endif %}
     <label>
         <div style="font-size:.85em;color:#aaa;">Title</div>
-        <input name="title" value="{{ project['title'] or '' }}" style="width:100%;">
+        <input name="title"
+               class="writing-input"
+               value="{{ project['title'] or '' }}"
+               style="width:100%;">
     </label>
     <label>
         <div style="font-size:.85em;color:#aaa;">Slug</div>
-        <input name="slug" value="{{ project['slug'] }}" style="width:100%;">
+        <input name="slug"
+               class="writing-input"
+               value="{{ project['slug'] }}"
+               style="width:100%;">
         <div style="font-size:.8em;color:#777;">Allowed: letters, numbers, hyphen, underscore.</div>
     </label>
     <div style="display:flex; gap:.75rem;">
@@ -6429,6 +6448,7 @@ TEMPL_EDIT_ENTRY = wrap("""
         <div style="position:relative;">
             <input id="title"
                 name="title"
+                class="writing-input"
                 value="{{ e['title'] or '' }}"
                 style="width:100%; padding-right:7rem;">
             <label for="title"
@@ -6448,6 +6468,7 @@ TEMPL_EDIT_ENTRY = wrap("""
     <div style="position:relative;">
         <input id="link"
                 name="link"
+                class="writing-input"
                 value="{{ e['link'] or '' }}"
                 style="width:100%; padding-right:7rem;">
         <label for="link" 
@@ -6461,6 +6482,7 @@ TEMPL_EDIT_ENTRY = wrap("""
 
     <div style="position:relative;">
         <input name="slug" value="{{ e['slug'] }}"
+            class="writing-input"
             style="width:100%; padding-right:7rem;">
         <label for="slug"
                 style="position:absolute;
@@ -7685,12 +7707,18 @@ TEMPL_EDIT_ITEM = wrap("""
   {# ────────── title / slug / type ────────── #}
   <label>
     <span style="font-size:.8em;color:#888">Title</span><br>
-    <input name="title" value="{{ item['title'] }}" style="width:100%">
+    <input name="title"
+           class="writing-input"
+           value="{{ item['title'] }}"
+           style="width:100%">
   </label>
 
   <label>
     <span style="font-size:.8em;color:#888">Slug</span><br>
-    <input name="slug"  value="{{ item['slug']  }}" style="width:100%">
+    <input name="slug"
+           class="writing-input"
+           value="{{ item['slug']  }}"
+           style="width:100%">
   </label>
 
   <label>
