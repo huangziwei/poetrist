@@ -2461,10 +2461,10 @@ nav a[aria-current=page]:hover,nav a[aria-current=page]:focus-visible{text-decor
 .nav-search input{width:100%;}
 }
 /* writing surfaces */
-.writing-area{font-family:"Iowan Old Style","Palatino","Book Antiqua","Georgia",serif;font-size:1.05em;line-height:1.6;padding:12px 14px;width:100%;min-height:7.5rem;max-height:60vh;background:#2b2b2b;border:1px solid #555;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,.18);transition:border-color .15s ease,box-shadow .2s ease,background .2s ease;resize:vertical;overflow:auto;letter-spacing:.01em;caret-color:{{ theme_color() }};}
+.writing-area{font-size:1.05em;line-height:1.6;padding:12px 14px;width:100%;min-height:7.5rem;max-height:60vh;background:#2b2b2b;border:1px solid #555;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,.18);transition:border-color .15s ease,box-shadow .2s ease,background .2s ease;resize:vertical;overflow:auto;letter-spacing:.01em;caret-color:{{ theme_color() }};}
 .writing-area:focus{border-color:{{ theme_color() }};background:#242424;box-shadow:0 4px 12px rgba(0,0,0,.35),0 0 0 2px rgba(255,255,255,.04);}
 .writing-area::placeholder{color:#9a9a9a;}
-.writing-input{font-family:"Iowan Old Style","Palatino","Book Antiqua","Georgia",serif;font-size:1.02em;line-height:1.5;padding:10px 12px;width:100%;background:#2b2b2b;border:1px solid #555;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,.18);transition:border-color .15s ease,box-shadow .2s ease,background .2s ease;letter-spacing:.01em;}
+.writing-input{font-size:1.02em;line-height:1.5;padding:10px 12px;width:100%;background:#2b2b2b;border:1px solid #555;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,.18);transition:border-color .15s ease,box-shadow .2s ease,background .2s ease;letter-spacing:.01em;}
 .writing-input:focus{border-color:{{ theme_color() }};background:#242424;box-shadow:0 4px 12px rgba(0,0,0,.35),0 0 0 2px rgba(255,255,255,.04);outline:0;}
 .writing-input::placeholder{color:#9a9a9a;}
 </style>
@@ -3377,13 +3377,17 @@ TEMPL_SETTINGS = wrap("""
                        style="width:100%">
             </label>
                       
-            <label style="display:flex; margin:.5rem 0">
-                <span style="font-size:.8em; color:#aaa;margin-right:1rem">Theme color</span><br>
+            <label style="display:flex; align-items:center; gap:.8rem; margin:.5rem 0;">
+                <span style="font-size:.8em; color:#aaa; white-space:nowrap;">Theme color</span>
                 <input name="theme_color"
                     class="writing-input"
                     value="{{ get_setting('theme_color', '#A5BA93') }}"
                     placeholder="#A5BA93"
-                    style="width:8rem">
+                    style="width:10rem">
+                <span data-color-chip
+                      aria-hidden="true"
+                      style="width:1.5rem;height:1.5rem;border:1px solid #555;border-radius:.15rem;background:{{ get_setting('theme_color', '#A5BA93') }};">
+                </span>
             </label>
             <details style="margin:.25rem 0 1rem 0;">
                 <summary style="font-size:1rem;color:#aaa;">
@@ -3400,6 +3404,19 @@ TEMPL_SETTINGS = wrap("""
                     {% endfor %}
                 </div>
             </details>
+            <script>
+            (() => {
+                const input = document.querySelector('input[name="theme_color"]');
+                const chip = document.querySelector('[data-color-chip]');
+                if (!input || !chip) return;
+                const sync = () => {
+                    const v = input.value.trim();
+                    chip.style.background = /^#?[0-9a-fA-F]{6}$/.test(v) ? (v.startsWith('#') ? v : '#' + v) : '#444';
+                };
+                input.addEventListener('input', sync);
+                sync();
+            })();
+            </script>
         </fieldset>
 
         <!-- ──────────── slugs ──────────── -->
@@ -3418,6 +3435,13 @@ TEMPL_SETTINGS = wrap("""
                         <input name="slug_post"
                                class="writing-input"
                                value="{{ slug_settings['post'] }}"
+                               style="width:100%">
+                    </label>
+                    <label>
+                        <span style="font-size:.8em; color:#aaa">Photos</span><br>
+                        <input name="slug_photo"
+                               class="writing-input"
+                               value="{{ slug_settings['photo'] }}"
                                style="width:100%">
                     </label>
                     <label>
