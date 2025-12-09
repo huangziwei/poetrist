@@ -2459,6 +2459,10 @@ nav a[aria-current=page]:hover,nav a[aria-current=page]:focus-visible{text-decor
 .nav-search form{width:100%;}
 .nav-search input{width:100%;}
 }
+/* writing surfaces */
+.writing-area{font-family:"Iowan Old Style","Palatino","Book Antiqua","Georgia",serif;font-size:1.05em;line-height:1.6;padding:12px 14px;width:100%;min-height:7.5rem;max-height:60vh;background:#2b2b2b;border:1px solid #555;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,.18);transition:border-color .15s ease,box-shadow .2s ease,background .2s ease;resize:vertical;overflow:auto;letter-spacing:.01em;caret-color:{{ theme_color() }};}
+.writing-area:focus{border-color:{{ theme_color() }};background:#242424;box-shadow:0 4px 12px rgba(0,0,0,.35),0 0 0 2px rgba(255,255,255,.04);}
+.writing-area::placeholder{color:#9a9a9a;}
 </style>
 <body>
 <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -2583,6 +2587,39 @@ TEMPL_EPILOG = """
     </footer>
     <a href="#page-bottom" aria-label="Jump to footer" class="jump-btn jump-down">↓</a>
     <a href="#page-top" aria-label="Jump to top" class="jump-btn jump-up">↑</a>
+    <script>
+    (() => {
+        const areas = Array.from(document.querySelectorAll('textarea[data-autogrow]'));
+        const raf = window.requestAnimationFrame || ((fn) => setTimeout(fn, 16));
+        if (!areas.length || !window.getComputedStyle) return;
+
+        const resize = (ta) => {
+            const styles = getComputedStyle(ta);
+            const fontSize = parseFloat(styles.fontSize) || 16;
+            const lh = parseFloat(styles.lineHeight);
+            const lineHeight = Number.isFinite(lh) ? lh : fontSize * 1.4;
+            const minRows = parseInt(ta.dataset.minRows || ta.getAttribute('rows') || '3', 10);
+            const minHeight = Math.max(1, minRows) * lineHeight;
+            const maxVh = parseFloat(ta.dataset.maxVh || '60') || 60;
+            const maxHeight = Math.max(minHeight, Math.floor(window.innerHeight * (maxVh / 100)));
+
+            ta.style.height = 'auto';
+            const needed = Math.min(Math.max(minHeight, ta.scrollHeight), maxHeight);
+            ta.style.height = `${needed}px`;
+            ta.style.overflowY = ta.scrollHeight > needed ? 'auto' : 'hidden';
+        };
+
+        const refreshAll = () => areas.forEach(resize);
+
+        areas.forEach((ta) => {
+            resize(ta);
+            ta.addEventListener('input', () => resize(ta));
+            ta.addEventListener('change', () => resize(ta));
+        });
+
+        window.addEventListener('resize', () => raf(refreshAll), {passive: true});
+    })();
+    </script>
     {% if session.get('logged_in') and r2_enabled() %}
     <script>
     (() => {
@@ -3906,8 +3943,10 @@ TEMPL_INDEX = wrap("""{% block body %}
             <input type="hidden" name="csrf" value="{{ csrf_token() }}">
             {% endif %}
             <textarea name="body"
+                      class="writing-area"
                       rows="3"
-                      style="width:100%;margin:0"
+                      data-autogrow="true"
+                      style="margin:0"
                       placeholder="What's on your mind?">{{ form_body or '' }}</textarea>
             <div style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;">
                 <button>Add&nbsp;Say</button>
@@ -5032,7 +5071,12 @@ TEMPL_LIST = wrap("""
             {% if kind == 'pin' %}
                 <input name="link" style="width:100%;margin:0" placeholder="Link" value="{{ form_link or '' }}">
             {% endif %}
-            <textarea name="body" rows="3" style="width:100%;margin:0" placeholder="What's on your mind?">{{ form_body or '' }}</textarea>
+            <textarea name="body"
+                      class="writing-area"
+                      rows="3"
+                      data-autogrow="true"
+                      style="margin:0"
+                      placeholder="What's on your mind?">{{ form_body or '' }}</textarea>
             
             <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;width:100%;">
                 <button style="width:">Add&nbsp;{{ kind.capitalize() }}</button>
@@ -6430,7 +6474,10 @@ TEMPL_EDIT_ENTRY = wrap("""
         </label>
     </div>
 
-    <textarea name="body" rows="8" style="width:100%;">{{ e['body'] }}</textarea><br>
+    <textarea name="body"
+              class="writing-area"
+              data-autogrow="true"
+              rows="8">{{ e['body'] }}</textarea><br>
     <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;width:100%;margin-bottom:.5rem;">
         <button>Save</button>
         {% if r2_enabled() %}
@@ -7432,8 +7479,10 @@ TEMPL_ITEM_DETAIL = wrap("""
             <input type="hidden" name="csrf" value="{{ csrf_token() }}">
             {% endif %}
     <textarea name="meta"
+            class="writing-area"
+            data-autogrow="true"
             rows="3"
-            style="width:100%;margin:0;"
+            style="margin:0;"
         placeholder="^action:reading&#10;^progress:42%"></textarea>
     <button>Add&nbsp;Check-in</button>
 </form>
