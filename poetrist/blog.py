@@ -7700,7 +7700,7 @@ TEMPL_EDIT_ITEM = wrap("""
 <hr>
 <h2 style="margin-top:0">Edit item</h2>
 
-<form method="post" style="max-width:32rem;display:flex;flex-direction:column;gap:1rem;">
+<form method="post" style="max-width:100%;display:flex;flex-direction:column;gap:1rem;">
   {% if csrf_token() %}
             <input type="hidden" name="csrf" value="{{ csrf_token() }}">
             {% endif %}
@@ -7723,7 +7723,10 @@ TEMPL_EDIT_ITEM = wrap("""
 
   <label>
     <span style="font-size:.8em;color:#888">Item type</span><br>
-    <input name="item_type" value="{{ item['item_type'] }}" style="width:100%">
+    <input name="item_type"
+           class="writing-input"
+           value="{{ item['item_type'] }}"
+           style="width:100%">
   </label>
 
   {# ────────── key / value rows ────────── #}
@@ -7731,26 +7734,42 @@ TEMPL_EDIT_ITEM = wrap("""
     <legend style="font-weight:bold;margin-bottom:.25rem;font-size:.9em;">Meta data</legend>
 
     <div style="display:grid;
-                grid-template-columns:3rem 1fr 2fr;
+                grid-template-columns:5rem 1fr 2fr;
                 gap:.5rem; align-items:center;">
 
     {# header row #}
-    <span style="font-size:.75em;color:#888;">#</span>
+    <span style="font-size:.75em;color:#888;text-align:right;">#</span>
     <span style="font-size:.75em;color:#888;">Key</span>
     <span style="font-size:.75em;color:#888;">Value</span>
 
     {# existing pairs #}
     {% for r in meta %}
-        <input name="meta_o" value="{{ r['ord'] }}" style="width:3rem;text-align:right;">
-        <input name="meta_k" value="{{ r['k'] }}"  placeholder="key">
-        <input name="meta_v" value="{{ r['v'] }}"  placeholder="value">
+        <input name="meta_o"
+               class="writing-input"
+               value="{{ r['ord'] }}"
+               style="width:5rem;text-align:right;">
+        <input name="meta_k"
+               class="writing-input"
+               value="{{ r['k'] }}"
+               placeholder="key">
+        <input name="meta_v"
+               class="writing-input"
+               value="{{ r['v'] }}"
+               placeholder="value">
     {% endfor %}
 
     {# ten blank rows for new data #}
     {% for _ in range(10) %}
-        <input name="meta_o" placeholder="">
-        <input name="meta_k" placeholder="key">
-        <input name="meta_v" placeholder="value">
+        <input name="meta_o"
+               class="writing-input"
+               placeholder=""
+               style="width:5rem;text-align:right;">
+        <input name="meta_k"
+               class="writing-input"
+               placeholder="key">
+        <input name="meta_v"
+               class="writing-input"
+               placeholder="value">
     {% endfor %}
     </div>
 
