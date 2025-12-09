@@ -3338,7 +3338,7 @@ TEMPL_SETTINGS = wrap("""
     {% block body %}
     <hr>
     <h2>Site Settings</h2>
-    <form method="post" style="max-width:36rem">
+    <form method="post" style="max-width:100%">
         {% if csrf_token() %}
             <input type="hidden" name="csrf" value="{{ csrf_token() }}">
             {% endif %}
@@ -3346,27 +3346,41 @@ TEMPL_SETTINGS = wrap("""
         <fieldset style="margin:0 0 1.5rem 0; border:0; padding:0">
             <label style="display:block; margin:.5rem 0">
                 <span style="font-size:.8em; color:#aaa">Site name</span><br>
-                <input name="site_name" value="{{ site_name }}" style="width:100%">
+                <input name="site_name"
+                       class="writing-input"
+                       value="{{ site_name }}"
+                       style="width:100%">
             </label>
             <label style="display:block; margin:.5rem 0">
                 <span style="font-size:.8em; color:#aaa">Tagline (optional)</span><br>
-                <input name="site_tagline" value="{{ site_tagline }}" style="width:100%" placeholder="A short subtitle under the site name">
+                <input name="site_tagline"
+                       class="writing-input"
+                       value="{{ site_tagline }}"
+                       style="width:100%"
+                       placeholder="A short subtitle under the site name">
             </label>
 
             <label style="display:block; margin:.5rem 0">
                 <span style="font-size:.8em; color:#aaa">Username</span><br>
-                <input name="username" value="{{ username }}" style="width:100%">
+                <input name="username"
+                       class="writing-input"
+                       value="{{ username }}"
+                       style="width:100%">
             </label>
                       
             <label style="display:block;margin:.5rem 0">
                 <span style="font-size:.8em;color:#aaa">Timezone</span><br>
-                <input list="tz-list" name="timezone" value="{{ tz_name() }}"
-                    style="width:100%">
+                <input list="tz-list"
+                       name="timezone"
+                       class="writing-input"
+                       value="{{ tz_name() }}"
+                       style="width:100%">
             </label>
                       
             <label style="display:flex; margin:.5rem 0">
                 <span style="font-size:.8em; color:#aaa;margin-right:1rem">Theme color</span><br>
                 <input name="theme_color"
+                    class="writing-input"
                     value="{{ get_setting('theme_color', '#A5BA93') }}"
                     placeholder="#A5BA93"
                     style="width:8rem">
@@ -3394,15 +3408,24 @@ TEMPL_SETTINGS = wrap("""
                 <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(10rem,1fr)); gap:.75rem;">
                     <label>
                         <span style="font-size:.8em; color:#aaa">Says</span><br>
-                        <input name="slug_say"  value="{{ slug_settings['say'] }}" style="width:100%">
+                        <input name="slug_say"
+                               class="writing-input"
+                               value="{{ slug_settings['say'] }}"
+                               style="width:100%">
                     </label>
                     <label>
                         <span style="font-size:.8em; color:#aaa">Posts</span><br>
-                        <input name="slug_post" value="{{ slug_settings['post'] }}" style="width:100%">
+                        <input name="slug_post"
+                               class="writing-input"
+                               value="{{ slug_settings['post'] }}"
+                               style="width:100%">
                     </label>
                     <label>
                         <span style="font-size:.8em; color:#aaa">Pins</span><br>
-                        <input name="slug_pin" value="{{ slug_settings['pin'] }}" style="width:100%">
+                        <input name="slug_pin"
+                               class="writing-input"
+                               value="{{ slug_settings['pin'] }}"
+                               style="width:100%">
                     </label>
             </div>
             <div style="margin-top:1rem;">
@@ -3410,11 +3433,17 @@ TEMPL_SETTINGS = wrap("""
                 <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(10rem,1fr)); gap:.75rem; margin-top:.4rem;">
                     <label>
                         <span style="font-size:.8em; color:#aaa">Tags</span><br>
-                        <input name="slug_tags" value="{{ slug_settings['tags'] }}" style="width:100%">
+                        <input name="slug_tags"
+                               class="writing-input"
+                               value="{{ slug_settings['tags'] }}"
+                               style="width:100%">
                     </label>
                     <label>
                         <span style="font-size:.8em; color:#aaa">Settings</span><br>
-                        <input name="slug_settings" value="{{ slug_settings['settings'] }}" style="width:100%">
+                        <input name="slug_settings"
+                               class="writing-input"
+                               value="{{ slug_settings['settings'] }}"
+                               style="width:100%">
                     </label>
                 </div>
             </div>
@@ -3425,7 +3454,10 @@ TEMPL_SETTINGS = wrap("""
                         {% for verb, slug in verb_slugs %}
                         <label>
                             <span style="font-size:.8em; color:#aaa">{{ verb|capitalize }}</span><br>
-                            <input name="slug_{{ verb }}" value="{{ slug }}" style="width:100%">
+                            <input name="slug_{{ verb }}"
+                                   class="writing-input"
+                                   value="{{ slug }}"
+                                   style="width:100%">
                         </label>
                         {% endfor %}
                     </div>
@@ -3439,6 +3471,7 @@ TEMPL_SETTINGS = wrap("""
             <label style="display:block; margin:.5rem 0">
                 <span style="font-size:.8em; color:#aaa">Entries per page</span><br>
                 <input name="page_size"
+                    class="writing-input"
                     value="{{ get_setting('page_size', PAGE_DEFAULT) }}"
                     style="width:8rem">
             </label>
@@ -3461,37 +3494,62 @@ TEMPL_SETTINGS = wrap("""
                     <span style="font-size:.8em; color:#aaa">Account ID
                         <small style="color:#777;">{% if r2_status.account %}saved{% else %}missing{% endif %}</small>
                     </span><br>
-                    <input name="r2_account_id" autocomplete="off" placeholder="xxxxxxxxxxxxxxxxxxx" style="width:100%">
+                    <input name="r2_account_id"
+                           class="writing-input"
+                           autocomplete="off"
+                           placeholder="xxxxxxxxxxxxxxxxxxx"
+                           style="width:100%">
                 </label>
                 <label>
                     <span style="font-size:.8em; color:#aaa">Access key ID
                         <small style="color:#777;">{% if r2_status.key %}saved{% else %}missing{% endif %}</small>
                     </span><br>
-                    <input name="r2_access_key_id" autocomplete="off" placeholder="K123..." style="width:100%">
+                    <input name="r2_access_key_id"
+                           class="writing-input"
+                           autocomplete="off"
+                           placeholder="K123..."
+                           style="width:100%">
                 </label>
                 <label>
                     <span style="font-size:.8em; color:#aaa">Secret access key
                         <small style="color:#777;">{% if r2_status.secret %}saved{% else %}missing{% endif %}</small>
                     </span><br>
-                    <input type="password" name="r2_secret_access_key" autocomplete="off" placeholder="••••••••" style="width:100%">
+                    <input type="text"
+                           name="r2_secret_access_key"
+                           class="writing-input"
+                           autocomplete="off"
+                           placeholder="••••••••"
+                           style="width:100%">
                 </label>
                 <label>
                     <span style="font-size:.8em; color:#aaa">Bucket
                         <small style="color:#777;">{% if r2_status.bucket %}saved{% else %}missing{% endif %}</small>
                     </span><br>
-                    <input name="r2_bucket" autocomplete="off" placeholder="poetrist-assets" style="width:100%">
+                    <input name="r2_bucket"
+                           class="writing-input"
+                           autocomplete="off"
+                           placeholder="poetrist-assets"
+                           style="width:100%">
                 </label>
                 <label>
                     <span style="font-size:.8em; color:#aaa">Public base URL
                         <small style="color:#777;">{% if r2_status.public_base %}saved{% else %}optional{% endif %}</small>
                     </span><br>
-                    <input name="r2_public_base" autocomplete="off" placeholder="https://cdn.example.com" style="width:100%">
+                    <input name="r2_public_base"
+                           class="writing-input"
+                           autocomplete="off"
+                           placeholder="https://cdn.example.com"
+                           style="width:100%">
                 </label>
                 <label>
                     <span style="font-size:.8em; color:#aaa">Endpoint override
                         <small style="color:#777;">{% if r2_status.endpoint %}saved{% else %}optional{% endif %}</small>
                     </span><br>
-                    <input name="r2_endpoint" autocomplete="off" placeholder="https://<account>.r2.cloudflarestorage.com" style="width:100%">
+                    <input name="r2_endpoint"
+                           class="writing-input"
+                           autocomplete="off"
+                           placeholder="https://<account>.r2.cloudflarestorage.com"
+                           style="width:100%">
                 </label>
             </div>
         </fieldset>
@@ -3654,7 +3712,7 @@ TEMPL_SETTINGS = wrap("""
             input.value  = span.textContent.trim();
             input.style.maxWidth = '25rem';
             input.style.flex = '1';                 // keep column width
-            input.className  = 'pk-name-edit';      // easy selector
+            input.className  = 'pk-name-edit writing-input';      // easy selector + styling
 
             span.replaceWith(input);
             btn.textContent = 'Save';
