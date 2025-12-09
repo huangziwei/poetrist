@@ -2448,7 +2448,8 @@ html{font-size:62.5%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Rob
 nav a[aria-current=page]{color:#c9c9c9;text-decoration-color:currentColor;text-decoration-thickness:2px;text-underline-offset:.2em;}
 nav a[aria-current=page]:hover,nav a[aria-current=page]:focus-visible{text-decoration-color:currentColor;}
 .nav-search form{margin:0;width:auto;}
-.nav-search input{width:13rem;font-size:.8em;padding:.2em .6em;margin:0;}
+.nav-search input{width:13rem;margin:0;font-size:.8em;padding:.25em .6em;line-height:1.2;background:#2b2b2b;border:1px solid #555;border-radius:6px;color:#c9c9c9;box-shadow:0 2px 4px rgba(0,0,0,.18);transition:border-color .15s ease,box-shadow .2s ease,background .2s ease;}
+.nav-search input:focus{border-color:{{ theme_color() }};background:#242424;box-shadow:0 4px 10px rgba(0,0,0,.3),0 0 0 2px rgba(255,255,255,.04);outline:0;}
 .pin-title{font-size:1.3em;margin-bottom:.75rem;}
 .pin-host{font-size:.75em;color:#888;margin-left:.35em;white-space:nowrap;}
 .pin-host a{color:inherit;text-decoration:none;border-bottom:0.1px dotted currentColor;}
@@ -2540,7 +2541,11 @@ nav a[aria-current=page]:hover,nav a[aria-current=page]:focus-visible{text-decor
         </div>
         <div class="nav-row nav-search">
             <form action="{{ url_for('search') }}" method="get">
-                <input type="search" name="q" aria-label="Search entries" placeholder="Search" value="{{ request.args.get('q','') }}">
+                <input type="search"
+                       name="q"
+                       aria-label="Search entries"
+                       placeholder="Search"
+                       value="{{ request.args.get('q','') }}">
             </form>
         </div>
     </nav>
