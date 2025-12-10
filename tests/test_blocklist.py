@@ -113,6 +113,50 @@ def test_stats_flags_suspicious_ips(client, tmp_path: Path):
     assert any(ev["ip"] == "1.2.3.4" for ev in data["events"])
 
 
+def test_blocked_ips_filtered_from_traffic_json(client, tmp_path: Path):
+    _login(client)
+    app.config.update(
+        TRAFFIC_LOG_DIR=str(tmp_path),
+        TRAFFIC_LOG_ENABLED=True,
+    )
+    with app.app_context():
+        block_ip_addr("203.0.113.20", reason="test", expires_at=None, db=get_db())
+
+    log_path = tmp_path / f"traffic-{blog.utc_now():%Y%m%d}.log"
+    entries = [
+        {
+            "ts": blog.utc_now().isoformat(),
+            "ip": "203.0.113.20",
+            "path": "/",
+            "m": "GET",
+            "st": 200,
+            "flags": [],
+        },
+        {
+            "ts": blog.utc_now().isoformat(),
+            "ip": "198.51.100.1",
+            "path": "/about",
+            "m": "GET",
+            "st": 200,
+            "flags": [],
+        },
+    ]
+    log_path.write_text("\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
+
+    snap = traffic_snapshot(db=get_db(), hours=24)
+    assert snap["total"] == 1
+    assert snap["unique_ips"] == 1
+    assert all(ev["ip"] != "203.0.113.20" for ev in snap["events"])
+    assert any(ev["ip"] == "198.51.100.1" for ev in snap["events"])
+
+    resp_json = client.get("/stats?format=traffic-json&traffic_hours=24")
+    assert resp_json.status_code == 200
+    data = resp_json.get_json()
+    assert data["total"] == 1
+    assert all(ev["ip"] != "203.0.113.20" for ev in data["events"])
+    assert any(ev["ip"] == "198.51.100.1" for ev in data["events"])
+
+
 def test_blocklist_page_shows_entries(client):
     _login(client)
     with app.app_context():

@@ -8947,13 +8947,31 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
             "unique_ips": 0,
         }
 
+    blocklist_rows = db.execute(
+        "SELECT ip, reason, created_at, expires_at FROM ip_blocklist ORDER BY created_at DESC"
+    ).fetchall()
+    blocklist = [dict(r) for r in blocklist_rows]
+    blocked_ips = {_normalize_ip(b["ip"]) for b in blocklist}
+
     events = _recent_traffic_events(hours)
+    filtered_events: list[dict] = []
+    for ev in events:
+        flags = ev.get("flags") or []
+        ip = _normalize_ip(ev.get("ip") or "unknown")
+        if "admin_view" in flags:
+            continue
+        if ip in blocked_ips:
+            continue
+        ev_copy = dict(ev)
+        ev_copy["ip"] = ip
+        filtered_events.append(ev_copy)
+
     ip_stats: dict[str, dict] = {}
     notfound_share = float(
         app.config.get("TRAFFIC_NOTFOUND_SHARE", TRAFFIC_NOTFOUND_SHARE)
     )
 
-    for ev in events:
+    for ev in filtered_events:
         ip = ev.get("ip") or "unknown"
         stat = ip_stats.setdefault(
             ip,
@@ -8994,7 +9012,6 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
         app.config.get("TRAFFIC_SUSPICIOUS_MIN_HITS", TRAFFIC_SUSPICIOUS_MIN_HITS)
     )
     high_hits = int(app.config.get("TRAFFIC_HIGH_HITS", TRAFFIC_HIGH_HITS))
-    blocked_ips = {b["ip"] for b in blocklist}
 
     for ip, stat in ip_stats.items():
         hits = stat["hits"]
@@ -9032,13 +9049,8 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
 
     suspicious.sort(key=lambda r: (-r["hits"], -r["not_found"], r["ip"]))
 
-    blocklist_rows = db.execute(
-        "SELECT ip, reason, created_at, expires_at FROM ip_blocklist ORDER BY created_at DESC"
-    ).fetchall()
-    blocklist = [dict(r) for r in blocklist_rows]
-
     events_out = []
-    for ev in events:
+    for ev in filtered_events:
         ev_copy = {
             "ts": ev.get("ts"),
             "ip": ev.get("ip"),
@@ -9055,7 +9067,7 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
         "log_dir": str(log_dir),
         "suspicious": suspicious,
         "blocklist": blocklist,
-        "total": len(events),
+        "total": len(filtered_events),
         "unique_ips": len(ip_stats),
         "events": events_out,
     }

@@ -45,4 +45,11 @@ def test_admin_traffic_not_flagged(client, tmp_path: Path):
     log_path.write_text("\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
 
     snap = traffic_snapshot(db=get_db(), hours=24)
+    assert snap["total"] == 0
+    assert snap["unique_ips"] == 0
+    assert not snap["events"]
     assert not snap["suspicious"]
+
+    resp = client.get("/stats?format=traffic-json&traffic_hours=24")
+    assert resp.status_code == 200
+    assert not resp.get_json()["events"]
