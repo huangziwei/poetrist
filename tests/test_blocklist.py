@@ -171,3 +171,56 @@ def test_blocklist_page_shows_entries(client):
     stats_html = client.get("/stats").data.decode()
     assert "Blocked IPs" not in stats_html
     assert "Block" in html  # action button rendered
+
+
+def test_blocklist_manual_add_form_present(client):
+    _login(client)
+    resp = client.get("/blocklist")
+    html = resp.data.decode()
+    assert resp.status_code == 200
+    assert "Manually add IP" in html
+    assert "Add to blocklist" in html
+    assert "blank = forever" in html
+
+
+def test_manual_block_with_reason_and_days(client):
+    _login(client)
+    resp = client.post(
+        "/ip-blocklist",
+        data={
+            "ip": "198.51.100.25",
+            "action": "block",
+            "reason": "manual block",
+            "days": "2",
+            "csrf": CSRF,
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code in (302, 303)
+    row = get_db().execute(
+        "SELECT reason, expires_at FROM ip_blocklist WHERE ip=?", ("198.51.100.25",)
+    ).fetchone()
+    assert row
+    assert row["reason"] == "manual block"
+    assert row["expires_at"]
+
+
+def test_manual_block_defaults_to_no_expiry(client):
+    _login(client)
+    resp = client.post(
+        "/ip-blocklist",
+        data={
+            "ip": "198.51.100.30",
+            "action": "block",
+            "reason": "forever block",
+            "csrf": CSRF,
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code in (302, 303)
+    row = get_db().execute(
+        "SELECT reason, expires_at FROM ip_blocklist WHERE ip=?", ("198.51.100.30",)
+    ).fetchone()
+    assert row
+    assert row["reason"] == "forever block"
+    assert row["expires_at"] is None

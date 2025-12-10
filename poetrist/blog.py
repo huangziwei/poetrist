@@ -9362,7 +9362,6 @@ TEMPL_STATS = wrap("""
                     <input type="hidden" name="action" value="block">
                     <input type="hidden" name="ip" value="{{ s.ip }}">
                     <input type="hidden" name="reason" value="{{ s.reason }}">
-                    <input type="hidden" name="days" value="{{ IP_BLOCK_DEFAULT_DAYS }}">
                     <button type="submit" style="background:#c0392b;color:#fff;border:1px solid #922b21;padding:.3rem .6rem;border-radius:.35rem;cursor:pointer;">
                       Block
                     </button>
@@ -9453,7 +9452,6 @@ TEMPL_BLOCKLIST = wrap("""
                     <input type="hidden" name="action" value="block">
                     <input type="hidden" name="ip" value="{{ s.ip }}">
                     <input type="hidden" name="reason" value="{{ s.reason }}">
-                    <input type="hidden" name="days" value="{{ IP_BLOCK_DEFAULT_DAYS }}">
                     <button type="submit" style="background:#c0392b;color:#fff;border:1px solid #922b21;padding:.3rem .6rem;border-radius:.35rem;cursor:pointer;">
                       Block
                     </button>
@@ -9471,6 +9469,29 @@ TEMPL_BLOCKLIST = wrap("""
 
     <section style="margin:1.5rem 0;">
       <h3 style="margin-bottom:.5rem;">Blocked IPs</h3>
+                       
+        <section style="margin:1rem 0;">
+        <form method="post" action="{{ url_for('ip_blocklist_action') }}" style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:flex-end;">
+            {% if csrf_token() %}<input type="hidden" name="csrf" value="{{ csrf_token() }}">{% endif %}
+            <input type="hidden" name="action" value="block">
+            <label style="flex:1 1 12rem;display:flex;flex-direction:column;gap:.2rem;font-size:.9em;color:#bbb;">
+            IP address
+            <input name="ip" type="text" required placeholder="203.0.113.42" style="padding:.45rem;border:1px solid #444;border-radius:.3rem;background:#1f1f1f;color:#fff;">
+            </label>
+            <label style="flex:2 1 18rem;display:flex;flex-direction:column;gap:.2rem;font-size:.9em;color:#bbb;">
+            Reason
+            <input name="reason" type="text" placeholder="(optional)" style="padding:.45rem;border:1px solid #444;border-radius:.3rem;background:#1f1f1f;color:#fff;">
+            </label>
+            <label style="flex:0 0 9rem;display:flex;flex-direction:column;gap:.2rem;font-size:.9em;color:#bbb;">
+            Expired after
+            <input name="days" type="number" min="1" placeholder="e.g. {{ IP_BLOCK_DEFAULT_DAYS }} days." style="padding:.45rem;border:1px solid #444;border-radius:.3rem;background:#1f1f1f;color:#fff;">
+            </label>
+            <button type="submit" style="padding:.55rem 1rem;background:#c0392b;color:#fff;border:1px solid #922b21;border-radius:.35rem;cursor:pointer;flex:0 0 auto;">
+            Add to blocklist
+            </button>
+        </form>
+        </section>
+
       {% if data.blocklist %}
         <div style="overflow-x:auto;">
           <table style="width:100%;border-collapse:collapse;font-size:.9em;">
@@ -9531,11 +9552,11 @@ def ip_blocklist_action():
         expires_at = None
         if days_raw:
             try:
-                expires_at = (utc_now() + timedelta(days=int(days_raw))).isoformat()
+                days_int = int(days_raw)
+                if days_int > 0:
+                    expires_at = (utc_now() + timedelta(days=days_int)).isoformat()
             except ValueError:
                 expires_at = None
-        else:
-            expires_at = (utc_now() + timedelta(days=IP_BLOCK_DEFAULT_DAYS)).isoformat()
         block_ip_addr(ip, reason=reason, expires_at=expires_at, db=db)
         flash(f"Blocked {ip}")
     elif action == "unblock":
