@@ -205,9 +205,9 @@ TRAFFIC_READ_MAX_LINES = int(os.environ.get("TRAFFIC_READ_MAX_LINES", "5000"))
 TRAFFIC_HIGH_HITS = int(os.environ.get("TRAFFIC_HIGH_HITS", "30"))
 TRAFFIC_BOT_KEYWORDS = tuple(
     s.strip().lower()
-    for s in os.environ.get("TRAFFIC_BOT_KEYWORDS", "bot,crawler,spider,gptbot").split(
-        ","
-    )
+    for s in os.environ.get(
+        "TRAFFIC_BOT_KEYWORDS", "bot,crawler,spider,gptbot,baiduspider"
+    ).split(",")
     if s.strip()
 )
 TRAFFIC_SKIP_PATHS = {"/favicon.ico", "/robots.txt"}
@@ -8964,6 +8964,7 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
                 "not_found": 0,
                 "flags": set(),
                 "paths": Counter(),
+                "status_counts": Counter(),
             },
         )
         stat["hits"] += 1
@@ -8975,16 +8976,26 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
             stat["errors"] += 1
         if status == 404:
             stat["not_found"] += 1
+        if status:
+            bucket = f"{(status // 100)}xx"
+            stat["status_counts"][bucket] += 1
         for f in ev.get("flags") or []:
             stat["flags"].add(f)
         if ev.get("path"):
             stat["paths"][ev["path"]] += 1
+
+    blocklist_rows = db.execute(
+        "SELECT ip, reason, created_at, expires_at FROM ip_blocklist ORDER BY created_at DESC"
+    ).fetchall()
+    blocklist = [dict(r) for r in blocklist_rows]
 
     suspicious: list[dict] = []
     min_hits = int(
         app.config.get("TRAFFIC_SUSPICIOUS_MIN_HITS", TRAFFIC_SUSPICIOUS_MIN_HITS)
     )
     high_hits = int(app.config.get("TRAFFIC_HIGH_HITS", TRAFFIC_HIGH_HITS))
+    blocked_ips = {b["ip"] for b in blocklist}
+
     for ip, stat in ip_stats.items():
         hits = stat["hits"]
         nf_rate = (stat["not_found"] / hits) if hits else 0
@@ -8994,17 +9005,17 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
             continue  # mostly admin/owner traffic → ignore
         if "burst_suspect" in stat["flags"]:
             reasons.append("High rate")
-        if "bot_ua" in stat["flags"]:
-            reasons.append("Bot user-agent")
         if hits >= high_hits:
             reasons.append("High volume")
+        if "bot_ua" in stat["flags"] and (hits >= high_hits or reasons):
+            reasons.append("Bot user-agent")
         if nf_rate >= notfound_share and stat["not_found"] >= 3:
             reasons.append("Many missing pages")
         if err_rate >= 0.5 and stat["errors"] >= 3:
             reasons.append("Lots of errors")
         if hits >= min_hits and nf_rate >= 0.25:
             reasons.append("Heavy traffic")
-        if not reasons:
+        if not reasons or ip in blocked_ips:
             continue
         suspicious.append(
             {
@@ -9014,6 +9025,7 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
                 "not_found": stat["not_found"],
                 "flags": sorted(stat["flags"]),
                 "top_paths": [p for p, _ in stat["paths"].most_common(3)],
+                "status_counts": stat["status_counts"],
                 "reason": "; ".join(reasons),
             }
         )
@@ -9309,18 +9321,23 @@ TEMPL_STATS = wrap("""
           <table style="width:100%;border-collapse:collapse;font-size:.9em;">
             <thead>
               <tr style="text-align:left;border-bottom:1px solid #444;">
-                <th style="padding:.35rem;">IP</th>
-                <th style="padding:.35rem;">Hits</th>
-                <th style="padding:.35rem;">Reason</th>
-                <th style="padding:.35rem;">Top paths</th>
-                <th style="padding:.35rem;">Action</th>
-              </tr>
+              <th style="padding:.35rem;">IP</th>
+              <th style="padding:.35rem;">Hits</th>
+              <th style="padding:.35rem;">Status mix</th>
+              <th style="padding:.35rem;">Reason</th>
+              <th style="padding:.35rem;">Top paths</th>
+              <th style="padding:.35rem;">Action</th>
+            </tr>
             </thead>
             <tbody>
             {% for s in stats.traffic.suspicious %}
               <tr style="border-bottom:1px solid #333;">
                 <td style="padding:.35rem;">{{ s.ip }}</td>
                 <td style="padding:.35rem;">{{ s.hits }}</td>
+                <td style="padding:.35rem;font-size:.85em;color:#aaa;">
+                  {% set sc = s.status_counts %}
+                  2xx {{ sc.get('2xx',0) }} · 3xx {{ sc.get('3xx',0) }} · 4xx {{ sc.get('4xx',0) }} · 5xx {{ sc.get('5xx',0) }}
+                </td>
                 <td style="padding:.35rem;">{{ s.reason }}</td>
                 <td style="padding:.35rem;color:#aaa;font-size:.85em;">
                   {% if s.top_paths %}{{ s.top_paths|join(', ') }}{% else %}—{% endif %}
