@@ -202,6 +202,12 @@ TRAFFIC_BURST_LIMIT = int(os.environ.get("TRAFFIC_BURST_LIMIT", "50"))
 TRAFFIC_SUSPICIOUS_MIN_HITS = int(os.environ.get("TRAFFIC_SUSPICIOUS_MIN_HITS", "10"))
 TRAFFIC_NOTFOUND_SHARE = float(os.environ.get("TRAFFIC_NOTFOUND_SHARE", "0.4"))
 TRAFFIC_READ_MAX_LINES = int(os.environ.get("TRAFFIC_READ_MAX_LINES", "5000"))
+TRAFFIC_HIGH_HITS = int(os.environ.get("TRAFFIC_HIGH_HITS", "30"))
+TRAFFIC_BOT_KEYWORDS = tuple(
+    s.strip().lower()
+    for s in os.environ.get("TRAFFIC_BOT_KEYWORDS", "bot,crawler,spider,gptbot").split(",")
+    if s.strip()
+)
 TRAFFIC_SKIP_PATHS = {"/favicon.ico", "/robots.txt"}
 IP_BLOCK_DEFAULT_DAYS = int(os.environ.get("IP_BLOCK_DEFAULT_DAYS", "7"))
 
@@ -289,6 +295,7 @@ app.config.update(
     TRAFFIC_BURST_LIMIT=TRAFFIC_BURST_LIMIT,
     TRAFFIC_READ_MAX_LINES=TRAFFIC_READ_MAX_LINES,
     TRAFFIC_NOTFOUND_SHARE=TRAFFIC_NOTFOUND_SHARE,
+    TRAFFIC_HIGH_HITS=TRAFFIC_HIGH_HITS,
 )
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
@@ -2993,6 +3000,11 @@ def _mark_burst(ip: str, now: float) -> bool:
     return len(dq) >= limit
 
 
+def _is_bot_ua(ua: str | None) -> bool:
+    ua_l = (ua or "").lower()
+    return any(k in ua_l for k in TRAFFIC_BOT_KEYWORDS)
+
+
 def is_ip_blocked(ip: str, *, db) -> bool:
     if not ip:
         return False
@@ -3097,13 +3109,17 @@ def log_traffic(resp):
         if resp.status_code == 404:
             flags.append("nonexistent_path")
 
+        ua = request.user_agent.string or ""
+        if _is_bot_ua(ua):
+            flags.append("bot_ua")
+
         event = {
             "ts": utc_now().isoformat(),
             "ip": _normalize_ip(getattr(g, "client_ip", client_ip())),
             "path": request.path,
             "m": request.method,
             "st": resp.status_code,
-            "ua": (request.user_agent.string or "")[:200],
+            "ua": ua[:200],
             "dur": dur_ms,
             "flags": flags,
         }
@@ -8960,6 +8976,7 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
     min_hits = int(
         app.config.get("TRAFFIC_SUSPICIOUS_MIN_HITS", TRAFFIC_SUSPICIOUS_MIN_HITS)
     )
+    high_hits = int(app.config.get("TRAFFIC_HIGH_HITS", TRAFFIC_HIGH_HITS))
     for ip, stat in ip_stats.items():
         hits = stat["hits"]
         nf_rate = (stat["not_found"] / hits) if hits else 0
@@ -8967,6 +8984,10 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
         reasons = []
         if "burst_suspect" in stat["flags"]:
             reasons.append("High rate")
+        if "bot_ua" in stat["flags"]:
+            reasons.append("Bot user-agent")
+        if hits >= high_hits:
+            reasons.append("High volume")
         if nf_rate >= notfound_share and stat["not_found"] >= 3:
             reasons.append("Many missing pages")
         if err_rate >= 0.5 and stat["errors"] >= 3:
