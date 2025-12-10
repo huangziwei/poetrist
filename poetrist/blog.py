@@ -10,9 +10,10 @@ import re
 import secrets
 import socket
 import sqlite3
+import tempfile
 import uuid
-from collections import defaultdict, deque
-from datetime import datetime, timezone
+from collections import Counter, defaultdict, deque
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from html import escape, unescape
 from importlib.metadata import PackageNotFoundError, version
@@ -189,6 +190,21 @@ UPLOAD_ICON_SVG = """
 </svg>
 """
 
+TRAFFIC_LOG_DIR_DEFAULT = Path(
+    os.environ.get(
+        "TRAFFIC_LOG_DIR", str(Path(tempfile.gettempdir()) / "poetrist-traffic")
+    )
+)
+TRAFFIC_LOG_ENABLED = os.environ.get("TRAFFIC_LOG_ENABLED", "1") != "0"
+TRAFFIC_LOG_RETENTION_DAYS = int(os.environ.get("TRAFFIC_LOG_RETENTION_DAYS", "14"))
+TRAFFIC_BURST_WINDOW_SEC = int(os.environ.get("TRAFFIC_BURST_WINDOW", "5"))
+TRAFFIC_BURST_LIMIT = int(os.environ.get("TRAFFIC_BURST_LIMIT", "50"))
+TRAFFIC_SUSPICIOUS_MIN_HITS = int(os.environ.get("TRAFFIC_SUSPICIOUS_MIN_HITS", "10"))
+TRAFFIC_NOTFOUND_SHARE = float(os.environ.get("TRAFFIC_NOTFOUND_SHARE", "0.4"))
+TRAFFIC_READ_MAX_LINES = int(os.environ.get("TRAFFIC_READ_MAX_LINES", "5000"))
+TRAFFIC_SKIP_PATHS = {"/favicon.ico", "/robots.txt"}
+IP_BLOCK_DEFAULT_DAYS = int(os.environ.get("IP_BLOCK_DEFAULT_DAYS", "7"))
+
 
 def canon(k: str) -> str:  # helper: ^pg → progress
     return ALIASES.get(k.lower(), k.lower())
@@ -248,6 +264,7 @@ WORD_COUNT_SQL = (
     "     + 1 "
     "END"
 )
+_IP_BLOCKLIST_CHECKED = False
 
 try:
     __version__ = version("poetrist")
@@ -265,6 +282,13 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",  # blocks most CSRF on simple links
     SESSION_COOKIE_HTTPONLY=True,  # mitigate XSS → cookie theft
     SESSION_COOKIE_SECURE=True,  # only if you serve over HTTPS
+    TRAFFIC_LOG_DIR=str(TRAFFIC_LOG_DIR_DEFAULT),
+    TRAFFIC_LOG_ENABLED=TRAFFIC_LOG_ENABLED,
+    TRAFFIC_LOG_RETENTION_DAYS=TRAFFIC_LOG_RETENTION_DAYS,
+    TRAFFIC_BURST_WINDOW=TRAFFIC_BURST_WINDOW_SEC,
+    TRAFFIC_BURST_LIMIT=TRAFFIC_BURST_LIMIT,
+    TRAFFIC_READ_MAX_LINES=TRAFFIC_READ_MAX_LINES,
+    TRAFFIC_NOTFOUND_SHARE=TRAFFIC_NOTFOUND_SHARE,
 )
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
@@ -1080,6 +1104,7 @@ def get_db():
         g.db.create_function("strip_caret", 1, strip_caret)
         g.db.create_function("link_host", 1, link_host)
         g.photo_kind_normalized = False
+        ensure_ip_blocklist_table(db=g.db)
     if not getattr(g, "photo_kind_normalized", False):
         normalize_photo_kinds(db=g.db)
         g.photo_kind_normalized = True
@@ -1269,6 +1294,16 @@ def init_db():
             created_at    TEXT    NOT NULL,
         FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
         );
+
+        ------------------------------------------------------------
+        -- 10. IP blocklist
+        ------------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS ip_blocklist (
+            ip         TEXT PRIMARY KEY,
+            reason     TEXT,
+            created_at TEXT NOT NULL,
+            expires_at TEXT
+        );
         """
     )
     db.commit()
@@ -1287,6 +1322,32 @@ def ensure_item_rating_column(db) -> None:
         db.execute("ALTER TABLE item ADD COLUMN rating INTEGER")
         db.commit()
     _RATING_COL_CHECKED = True
+
+
+def ensure_ip_blocklist_table(db) -> None:
+    """Create ip_blocklist table if missing (upgrade path)."""
+    global _IP_BLOCKLIST_CHECKED
+    if _IP_BLOCKLIST_CHECKED:
+        return
+    cols = {
+        row["name"]
+        for row in db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='ip_blocklist'"
+        )
+    }
+    if "ip_blocklist" not in cols:
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ip_blocklist (
+                ip         TEXT PRIMARY KEY,
+                reason     TEXT,
+                created_at TEXT NOT NULL,
+                expires_at TEXT
+            )
+            """
+        )
+        db.commit()
+    _IP_BLOCKLIST_CHECKED = True
 
 
 # -------------------------------------------------------------------------
@@ -2891,6 +2952,166 @@ def rate_limit(max_requests: int, window: int = 60):
         return wrapped
 
     return decorator
+
+
+###############################################################################
+# Traffic logging + blocklist
+###############################################################################
+_traffic_hits: DefaultDict[str, deque] = defaultdict(deque)
+_traffic_pruned_once = False
+
+
+def client_ip() -> str:
+    """Return best-effort client IP after ProxyFix."""
+    return (
+        request.access_route[0] if request.access_route else request.remote_addr
+    ) or "unknown"
+
+
+def _normalize_ip(ip: str) -> str:
+    try:
+        return str(ipaddress.ip_address((ip or "").strip()))
+    except ValueError:
+        return (ip or "").strip()
+
+
+def _should_skip_traffic_log(path: str) -> bool:
+    if path in TRAFFIC_SKIP_PATHS:
+        return True
+    if path.startswith("/static/"):
+        return True
+    return False
+
+
+def _mark_burst(ip: str, now: float) -> bool:
+    window = int(app.config.get("TRAFFIC_BURST_WINDOW", TRAFFIC_BURST_WINDOW_SEC))
+    limit = int(app.config.get("TRAFFIC_BURST_LIMIT", TRAFFIC_BURST_LIMIT))
+    dq = _traffic_hits[ip]
+    while dq and now - dq[0] > window:
+        dq.popleft()
+    dq.append(now)
+    return len(dq) >= limit
+
+
+def is_ip_blocked(ip: str, *, db) -> bool:
+    if not ip:
+        return False
+    norm = _normalize_ip(ip)
+    now = utc_now().isoformat()
+    row = db.execute(
+        "SELECT 1 FROM ip_blocklist WHERE ip=? AND (expires_at IS NULL OR expires_at > ?)",
+        (norm, now),
+    ).fetchone()
+    return bool(row)
+
+
+def block_ip_addr(ip: str, *, reason: str, expires_at: str | None, db) -> None:
+    norm = _normalize_ip(ip)
+    db.execute(
+        "INSERT OR REPLACE INTO ip_blocklist (ip, reason, created_at, expires_at) VALUES (?,?,?,?)",
+        (norm, reason, utc_now().isoformat(timespec="seconds"), expires_at),
+    )
+    db.commit()
+
+
+def unblock_ip_addr(ip: str, *, db) -> None:
+    norm = _normalize_ip(ip)
+    db.execute("DELETE FROM ip_blocklist WHERE ip=?", (norm,))
+    db.commit()
+
+
+def _append_traffic_event(event: dict) -> None:
+    if not app.config.get("TRAFFIC_LOG_ENABLED", True):
+        return
+    log_dir = Path(app.config.get("TRAFFIC_LOG_DIR") or TRAFFIC_LOG_DIR_DEFAULT)
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return
+
+    try:
+        ts = datetime.fromisoformat(event["ts"])
+    except Exception:
+        ts = utc_now()
+    log_path = log_dir / f"traffic-{ts:%Y%m%d}.log"
+    try:
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(event, separators=(",", ":")) + "\n")
+    except OSError:
+        return
+
+    retention_days = int(
+        app.config.get("TRAFFIC_LOG_RETENTION_DAYS", TRAFFIC_LOG_RETENTION_DAYS)
+    )
+    global _traffic_pruned_once
+    if retention_days <= 0 or _traffic_pruned_once:
+        return
+    cutoff = (utc_now() - timedelta(days=retention_days)).date()
+    for p in log_dir.glob("traffic-*.log"):
+        stem = p.stem.replace("traffic-", "")
+        try:
+            dt = datetime.strptime(stem, "%Y%m%d").date()
+        except ValueError:
+            continue
+        if dt < cutoff:
+            try:
+                p.unlink(missing_ok=True)
+            except OSError:
+                continue
+    _traffic_pruned_once = True
+
+
+@app.before_request
+def traffic_gate():
+    ip = client_ip()
+    g.client_ip = ip
+
+    if not session.get("logged_in") and is_ip_blocked(ip, db=get_db()):
+        abort(403)
+
+    if not app.config.get("TRAFFIC_LOG_ENABLED", True):
+        return
+    if _should_skip_traffic_log(request.path or ""):
+        g.skip_traffic_log = True
+        return
+
+    started = time()
+    g._traffic_started_at = started
+    flags: list[str] = []
+    if _mark_burst(ip, started):
+        flags.append("burst_suspect")
+    g._traffic_flags = flags
+
+
+@app.after_request
+def log_traffic(resp):
+    if not app.config.get("TRAFFIC_LOG_ENABLED", True):
+        return resp
+    if getattr(g, "skip_traffic_log", False):
+        return resp
+
+    try:
+        started = getattr(g, "_traffic_started_at", None)
+        dur_ms = int((time() - started) * 1000) if started else None
+        flags = list(getattr(g, "_traffic_flags", []))
+        if resp.status_code == 404:
+            flags.append("nonexistent_path")
+
+        event = {
+            "ts": utc_now().isoformat(),
+            "ip": _normalize_ip(getattr(g, "client_ip", client_ip())),
+            "path": request.path,
+            "m": request.method,
+            "st": resp.status_code,
+            "ua": (request.user_agent.string or "")[:200],
+            "dur": dur_ms,
+            "flags": flags,
+        }
+        _append_traffic_event(event)
+    except Exception:
+        pass
+
+    return resp
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -8649,6 +8870,142 @@ def _stats_items(*, db) -> dict:
     }
 
 
+def _traffic_log_files(start: datetime, end: datetime, *, log_dir: Path) -> list[Path]:
+    files: list[Path] = []
+    day = start.date()
+    while day <= end.date():
+        cand = log_dir / f"traffic-{day:%Y%m%d}.log"
+        if cand.exists():
+            files.append(cand)
+        day += timedelta(days=1)
+    return files
+
+
+def _recent_traffic_events(hours: int) -> list[dict]:
+    if not app.config.get("TRAFFIC_LOG_ENABLED", True):
+        return []
+
+    now = utc_now()
+    start = now - timedelta(hours=hours)
+    log_dir = Path(app.config.get("TRAFFIC_LOG_DIR") or TRAFFIC_LOG_DIR_DEFAULT)
+    files = _traffic_log_files(start, now, log_dir=log_dir)
+    max_lines = int(app.config.get("TRAFFIC_READ_MAX_LINES", TRAFFIC_READ_MAX_LINES))
+
+    buf: deque[dict] = deque(maxlen=max_lines)
+    for path in files:
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    ts_raw = obj.get("ts")
+                    if not ts_raw:
+                        continue
+                    try:
+                        ts = datetime.fromisoformat(ts_raw)
+                    except ValueError:
+                        continue
+                    if ts < start:
+                        continue
+                    obj["_ts"] = ts
+                    buf.append(obj)
+        except OSError:
+            continue
+    return list(buf)
+
+
+def traffic_snapshot(*, db, hours: int = 24) -> dict:
+    enabled = app.config.get("TRAFFIC_LOG_ENABLED", True)
+    log_dir = Path(app.config.get("TRAFFIC_LOG_DIR") or TRAFFIC_LOG_DIR_DEFAULT)
+    if not enabled:
+        return {
+            "enabled": False,
+            "log_dir": str(log_dir),
+            "suspicious": [],
+            "blocklist": [],
+            "total": 0,
+            "unique_ips": 0,
+        }
+
+    events = _recent_traffic_events(hours)
+    ip_stats: dict[str, dict] = {}
+    notfound_share = float(
+        app.config.get("TRAFFIC_NOTFOUND_SHARE", TRAFFIC_NOTFOUND_SHARE)
+    )
+
+    for ev in events:
+        ip = ev.get("ip") or "unknown"
+        stat = ip_stats.setdefault(
+            ip,
+            {
+                "hits": 0,
+                "errors": 0,
+                "not_found": 0,
+                "flags": set(),
+                "paths": Counter(),
+            },
+        )
+        stat["hits"] += 1
+        status = int(ev.get("st") or 0)
+        if status >= 400:
+            stat["errors"] += 1
+        if status == 404:
+            stat["not_found"] += 1
+        for f in ev.get("flags") or []:
+            stat["flags"].add(f)
+        if ev.get("path"):
+            stat["paths"][ev["path"]] += 1
+
+    suspicious: list[dict] = []
+    min_hits = int(
+        app.config.get("TRAFFIC_SUSPICIOUS_MIN_HITS", TRAFFIC_SUSPICIOUS_MIN_HITS)
+    )
+    for ip, stat in ip_stats.items():
+        hits = stat["hits"]
+        nf_rate = (stat["not_found"] / hits) if hits else 0
+        err_rate = (stat["errors"] / hits) if hits else 0
+        reasons = []
+        if "burst_suspect" in stat["flags"]:
+            reasons.append("High rate")
+        if nf_rate >= notfound_share and stat["not_found"] >= 3:
+            reasons.append("Many missing pages")
+        if err_rate >= 0.5 and stat["errors"] >= 3:
+            reasons.append("Lots of errors")
+        if hits >= min_hits and nf_rate >= 0.25:
+            reasons.append("Heavy traffic")
+        if not reasons:
+            continue
+        suspicious.append(
+            {
+                "ip": ip,
+                "hits": hits,
+                "errors": stat["errors"],
+                "not_found": stat["not_found"],
+                "flags": sorted(stat["flags"]),
+                "top_paths": [p for p, _ in stat["paths"].most_common(3)],
+                "reason": "; ".join(reasons),
+            }
+        )
+
+    suspicious.sort(key=lambda r: (-r["hits"], -r["not_found"], r["ip"]))
+
+    blocklist_rows = db.execute(
+        "SELECT ip, reason, created_at, expires_at FROM ip_blocklist ORDER BY created_at DESC"
+    ).fetchall()
+    blocklist = [dict(r) for r in blocklist_rows]
+
+    return {
+        "enabled": True,
+        "log_dir": str(log_dir),
+        "suspicious": suspicious,
+        "blocklist": blocklist,
+        "total": len(events),
+        "unique_ips": len(ip_stats),
+    }
+
+
 def stats_snapshot(*, db, months: int = 12) -> dict:
     """Compose a reusable stats payload for HTML and JSON views."""
     yearly, kinds_y = _stats_yearly(db=db)
@@ -8695,8 +9052,17 @@ def stats():
     months_window = min(max(months_window, 3), 36)
 
     snapshot = stats_snapshot(db=db, months=months_window)
+    try:
+        traffic_hours = int(request.args.get("traffic_hours", 24))
+    except (TypeError, ValueError):
+        traffic_hours = 24
+    traffic_hours = min(max(traffic_hours, 1), 168)
+    traffic = traffic_snapshot(db=db, hours=traffic_hours)
+    snapshot["traffic"] = traffic
     if request.args.get("format") == "json":
         return snapshot
+    if request.args.get("format") == "traffic-json":
+        return traffic
 
     max_year_total = max((y["total"] for y in snapshot["yearly"]), default=0)
     max_month_total = max((m["total"] for m in snapshot["monthly"]), default=0)
@@ -8708,8 +9074,10 @@ def stats():
         max_year_total=max_year_total,
         max_month_total=max_month_total,
         months_window=months_window,
+        traffic_hours=traffic_hours,
         title=get_setting("site_name", "po.etr.ist"),
         username=current_username(),
+        IP_BLOCK_DEFAULT_DAYS=IP_BLOCK_DEFAULT_DAYS,
         kind="stats",
     )
 
@@ -8871,8 +9239,152 @@ TEMPL_STATS = wrap("""
       {% endif %}
     </section>
   {% endif %}
+
+  <!-- Traffic -->
+  <section id="traffic" style="margin:1.5rem 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
+      <h3>Traffic (last {{ traffic_hours }}h)</h3>
+      <div style="font-size:.85em;color:#888;">
+        Log dir: <code>{{ stats.traffic.log_dir }}</code>
+      </div>
+    </div>
+
+    {% if not stats.traffic.enabled %}
+      <p style="color:#888;">Traffic logging is disabled.</p>
+    {% else %}
+      <p style="margin:.4rem 0;color:#bbb;font-size:.95em;">
+        {{ stats.traffic.total }} events, {{ stats.traffic.unique_ips }} unique IPs.
+        <a href="{{ url_for('stats', format='traffic-json', traffic_hours=traffic_hours) }}"
+           style="color:{{ theme_color() }};text-decoration:none;border-bottom:0.1px dotted currentColor;">
+          Download JSON
+        </a>
+      </p>
+
+      <h4 style="margin:.75rem 0 .35rem;">Suspicious</h4>
+      {% if stats.traffic.suspicious %}
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;font-size:.9em;">
+            <thead>
+              <tr style="text-align:left;border-bottom:1px solid #444;">
+                <th style="padding:.35rem;">IP</th>
+                <th style="padding:.35rem;">Hits</th>
+                <th style="padding:.35rem;">404</th>
+                <th style="padding:.35rem;">Errors</th>
+                <th style="padding:.35rem;">Reason</th>
+                <th style="padding:.35rem;">Top paths</th>
+                <th style="padding:.35rem;">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+            {% for s in stats.traffic.suspicious %}
+              <tr style="border-bottom:1px solid #333;">
+                <td style="padding:.35rem;">{{ s.ip }}</td>
+                <td style="padding:.35rem;">{{ s.hits }}</td>
+                <td style="padding:.35rem;">{{ s.not_found }}</td>
+                <td style="padding:.35rem;">{{ s.errors }}</td>
+                <td style="padding:.35rem;">{{ s.reason }}</td>
+                <td style="padding:.35rem;color:#aaa;font-size:.85em;">
+                  {% if s.top_paths %}{{ s.top_paths|join(', ') }}{% else %}—{% endif %}
+                </td>
+                <td style="padding:.35rem;">
+                  <form method="post" action="{{ url_for('ip_blocklist_action') }}" style="display:inline;">
+                    {% if csrf_token() %}
+                      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+                    {% endif %}
+                    <input type="hidden" name="action" value="block">
+                    <input type="hidden" name="ip" value="{{ s.ip }}">
+                    <input type="hidden" name="reason" value="{{ s.reason }}">
+                    <input type="hidden" name="days" value="{{ IP_BLOCK_DEFAULT_DAYS }}">
+                    <button type="submit" style="background:#c0392b;color:#fff;border:1px solid #922b21;padding:.3rem .6rem;border-radius:.35rem;cursor:pointer;">
+                      Block
+                    </button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p style="color:#888;">No suspicious IPs in this window.</p>
+      {% endif %}
+
+      <h4 style="margin:1rem 0 .35rem;">Blocklist</h4>
+      {% if stats.traffic.blocklist %}
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;font-size:.9em;">
+            <thead>
+              <tr style="text-align:left;border-bottom:1px solid #444;">
+                <th style="padding:.35rem;">IP</th>
+                <th style="padding:.35rem;">Reason</th>
+                <th style="padding:.35rem;">Created</th>
+                <th style="padding:.35rem;">Expires</th>
+                <th style="padding:.35rem;">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+            {% for b in stats.traffic.blocklist %}
+              <tr style="border-bottom:1px solid #333;">
+                <td style="padding:.35rem;">{{ b.ip }}</td>
+                <td style="padding:.35rem;">{{ b.reason or '—' }}</td>
+                <td style="padding:.35rem;">{{ b.created_at }}</td>
+                <td style="padding:.35rem;">{{ b.expires_at or '—' }}</td>
+                <td style="padding:.35rem;">
+                  <form method="post" action="{{ url_for('ip_blocklist_action') }}" style="display:inline;">
+                    {% if csrf_token() %}
+                      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+                    {% endif %}
+                    <input type="hidden" name="action" value="unblock">
+                    <input type="hidden" name="ip" value="{{ b.ip }}">
+                    <button type="submit" style="background:#444;color:#fff;border:1px solid #666;padding:.3rem .6rem;border-radius:.35rem;cursor:pointer;">
+                      Unblock
+                    </button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p style="color:#888;">No IPs are blocked.</p>
+      {% endif %}
+    {% endif %}
+  </section>
 {% endblock %}
 """)
+
+
+@app.route("/ip-blocklist", methods=["POST"])
+def ip_blocklist_action():
+    login_required()
+    ip = (request.form.get("ip") or "").strip()
+    if not ip:
+        abort(400)
+    action = (request.form.get("action") or "block").strip().lower()
+    db = get_db()
+
+    if action == "block":
+        reason = (
+            request.form.get("reason") or "manual block"
+        ).strip() or "manual block"
+        days_raw = (request.form.get("days") or "").strip()
+        expires_at = None
+        if days_raw:
+            try:
+                expires_at = (utc_now() + timedelta(days=int(days_raw))).isoformat()
+            except ValueError:
+                expires_at = None
+        else:
+            expires_at = (utc_now() + timedelta(days=IP_BLOCK_DEFAULT_DAYS)).isoformat()
+        block_ip_addr(ip, reason=reason, expires_at=expires_at, db=db)
+        flash(f"Blocked {ip}")
+    elif action == "unblock":
+        unblock_ip_addr(ip, db=db)
+        flash(f"Unblocked {ip}")
+    else:
+        abort(400)
+    return redirect(url_for("stats") + "#traffic")
 
 
 ###############################################################################
