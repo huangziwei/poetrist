@@ -113,6 +113,35 @@ def test_stats_flags_suspicious_ips(client, tmp_path: Path):
     assert any(ev["ip"] == "1.2.3.4" for ev in data["events"])
 
 
+def test_single_suspicious_path_and_ua_gets_flagged(client, tmp_path: Path):
+    _login(client)
+    app.config.update(
+        TRAFFIC_LOG_DIR=str(tmp_path),
+        TRAFFIC_LOG_ENABLED=True,
+        TRAFFIC_SUSPICIOUS_MIN_HITS=10,  # force reliance on heuristics
+        TRAFFIC_SUSPICIOUS_SCORE=3,
+        TRAFFIC_SUSPICIOUS_PATH_LEN=120,
+        TRAFFIC_SUSPICIOUS_TOKEN_THRESHOLD=8,
+    )
+
+    log_path = tmp_path / f"traffic-{blog.utc_now():%Y%m%d}.log"
+    long_path = "/tags/" + "+".join(f"token{i}" for i in range(40))
+    entry = {
+        "ts": blog.utc_now().isoformat(),
+        "ip": "198.51.100.99",
+        "path": long_path,
+        "m": "GET",
+        "st": 200,
+        "flags": [],
+        "ua": "curl/8.0.1",
+    }
+    log_path.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+    snap = traffic_snapshot(db=get_db(), hours=24)
+    assert any(s["ip"] == "198.51.100.99" for s in snap["suspicious"])
+    assert snap["suspicious"][0]["score"] >= 3
+
+
 def test_blocked_ips_filtered_from_traffic_json(client, tmp_path: Path):
     _login(client)
     app.config.update(

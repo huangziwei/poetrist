@@ -210,6 +210,27 @@ TRAFFIC_BOT_KEYWORDS = tuple(
     ).split(",")
     if s.strip()
 )
+TRAFFIC_SUSPICIOUS_PATH_LEN = int(
+    os.environ.get("TRAFFIC_SUSPICIOUS_PATH_LEN", "160")
+)
+TRAFFIC_SUSPICIOUS_TOKEN_THRESHOLD = int(
+    os.environ.get("TRAFFIC_SUSPICIOUS_TOKEN_THRESHOLD", "8")
+)
+TRAFFIC_SUSPICIOUS_MIN_UA_LEN = int(
+    os.environ.get("TRAFFIC_SUSPICIOUS_MIN_UA_LEN", "14")
+)
+TRAFFIC_SUSPICIOUS_UA_KEYWORDS = tuple(
+    s.strip().lower()
+    for s in os.environ.get(
+        "TRAFFIC_SUSPICIOUS_UA_KEYWORDS",
+        "curl,wget,python-requests,httpclient,okhttp,aiohttp,libwww,scrapy,go-http-client,http.rb,java/,postmanruntime,guzzlehttp,restsharp,insomnia",
+    ).split(",")
+    if s.strip()
+)
+TRAFFIC_SUSPICIOUS_CHURN_MIN_HITS = int(
+    os.environ.get("TRAFFIC_SUSPICIOUS_CHURN_MIN_HITS", "8")
+)
+TRAFFIC_SUSPICIOUS_SCORE = int(os.environ.get("TRAFFIC_SUSPICIOUS_SCORE", "3"))
 TRAFFIC_SKIP_PATHS = {"/favicon.ico", "/robots.txt"}
 IP_BLOCK_DEFAULT_DAYS = int(os.environ.get("IP_BLOCK_DEFAULT_DAYS", "0") or 0)
 
@@ -3005,6 +3026,40 @@ def _mark_burst(ip: str, now: float) -> bool:
 def _is_bot_ua(ua: str | None) -> bool:
     ua_l = (ua or "").lower()
     return any(k in ua_l for k in TRAFFIC_BOT_KEYWORDS)
+
+
+def _keyword_tuple(value) -> tuple[str, ...]:
+    if isinstance(value, str):
+        raw_items = value.split(",")
+    else:
+        raw_items = value or []
+    return tuple(
+        str(item).strip().lower() for item in raw_items if str(item).strip()
+    )
+
+
+def _path_token_burst(path: str) -> int:
+    if not path:
+        return 0
+    return (
+        path.count("+")
+        + path.count("%20")
+        + path.count(",")
+        + path.count(";")
+    )
+
+
+def _ua_suspicious(ua: str, *, min_len: int, keywords: tuple[str, ...]) -> tuple[bool, str]:
+    ua_clean = (ua or "").strip()
+    if not ua_clean:
+        return True, "Missing UA"
+    ua_l = ua_clean.lower()
+    if len(ua_clean) < min_len:
+        return True, "Tiny UA"
+    for kw in keywords:
+        if kw and kw in ua_l:
+            return True, f"UA contains {kw}"
+    return False, ""
 
 
 def is_ip_blocked(ip: str, *, db) -> bool:
@@ -8970,6 +9025,29 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
     notfound_share = float(
         app.config.get("TRAFFIC_NOTFOUND_SHARE", TRAFFIC_NOTFOUND_SHARE)
     )
+    path_len_threshold = int(
+        app.config.get("TRAFFIC_SUSPICIOUS_PATH_LEN", TRAFFIC_SUSPICIOUS_PATH_LEN)
+    )
+    token_threshold = int(
+        app.config.get(
+            "TRAFFIC_SUSPICIOUS_TOKEN_THRESHOLD", TRAFFIC_SUSPICIOUS_TOKEN_THRESHOLD
+        )
+    )
+    churn_min_hits = int(
+        app.config.get(
+            "TRAFFIC_SUSPICIOUS_CHURN_MIN_HITS", TRAFFIC_SUSPICIOUS_CHURN_MIN_HITS
+        )
+    )
+    suspicious_score_min = int(
+        app.config.get("TRAFFIC_SUSPICIOUS_SCORE", TRAFFIC_SUSPICIOUS_SCORE)
+    )
+    ua_min_len = int(
+        app.config.get("TRAFFIC_SUSPICIOUS_MIN_UA_LEN", TRAFFIC_SUSPICIOUS_MIN_UA_LEN)
+    )
+    ua_kw_cfg = app.config.get(
+        "TRAFFIC_SUSPICIOUS_UA_KEYWORDS", TRAFFIC_SUSPICIOUS_UA_KEYWORDS
+    )
+    ua_keywords = _keyword_tuple(ua_kw_cfg)
 
     for ev in filtered_events:
         ip = ev.get("ip") or "unknown"
@@ -8983,6 +9061,11 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
                 "flags": set(),
                 "paths": Counter(),
                 "status_counts": Counter(),
+                "ua_samples": Counter(),
+                "ua_suspicious": 0,
+                "ua_reasons": Counter(),
+                "max_path_len": 0,
+                "max_token_like": 0,
             },
         )
         stat["hits"] += 1
@@ -8999,8 +9082,23 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
             stat["status_counts"][bucket] += 1
         for f in ev.get("flags") or []:
             stat["flags"].add(f)
-        if ev.get("path"):
-            stat["paths"][ev["path"]] += 1
+        path = ev.get("path") or ""
+        if path:
+            stat["paths"][path] += 1
+            stat["max_path_len"] = max(stat["max_path_len"], len(path))
+            stat["max_token_like"] = max(
+                stat["max_token_like"], _path_token_burst(path)
+            )
+        ua_val = ev.get("ua") or ""
+        if ua_val:
+            stat["ua_samples"][ua_val] += 1
+        bad_ua, bad_reason = _ua_suspicious(
+            ua_val, min_len=ua_min_len, keywords=ua_keywords
+        )
+        if bad_ua:
+            stat["ua_suspicious"] += 1
+            if bad_reason:
+                stat["ua_reasons"][bad_reason] += 1
 
     blocklist_rows = db.execute(
         "SELECT ip, reason, created_at, expires_at FROM ip_blocklist ORDER BY created_at DESC"
@@ -9017,23 +9115,47 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
         hits = stat["hits"]
         nf_rate = (stat["not_found"] / hits) if hits else 0
         err_rate = (stat["errors"] / hits) if hits else 0
-        reasons = []
+        unique_paths = len(stat["paths"])
+        churn_ratio = (unique_paths / hits) if hits else 0
+        reasons: list[str] = []
+        score = 0
         if stat["admin_hits"] >= hits * 0.8:
             continue  # mostly admin/owner traffic → ignore
         if "burst_suspect" in stat["flags"]:
             reasons.append("High rate")
+            score += 2
         if hits >= high_hits:
             reasons.append("High volume")
-        if "bot_ua" in stat["flags"] and (hits >= high_hits or reasons):
-            reasons.append("Bot user-agent")
+            score += 3
+        elif hits >= min_hits:
+            reasons.append("Elevated volume")
+            score += 1
         if nf_rate >= notfound_share and stat["not_found"] >= 3:
             reasons.append("Many missing pages")
+            score += 2
         if err_rate >= 0.5 and stat["errors"] >= 3:
             reasons.append("Lots of errors")
-        if hits >= min_hits and nf_rate >= 0.25:
+            score += 2
+        if hits >= churn_min_hits and churn_ratio >= 0.9:
+            reasons.append("High URL churn")
+            score += 1
+        if stat["max_path_len"] >= path_len_threshold:
+            reasons.append("Very long paths")
+            score += 1
+        if stat["max_token_like"] >= token_threshold:
+            reasons.append("Tokenized paths")
+            score += 2
+        if stat.get("ua_suspicious"):
+            reasons.append("Suspicious UA")
+            score += 2
+        if "bot_ua" in stat["flags"]:
+            reasons.append("Bot user-agent")
+            score += 1
+        if hits >= min_hits and nf_rate >= 0.25 and "Elevated volume" not in reasons:
             reasons.append("Heavy traffic")
-        if not reasons or ip in blocked_ips:
+        if score < suspicious_score_min or not reasons or ip in blocked_ips:
             continue
+        deduped_reasons = list(dict.fromkeys(reasons))
         suspicious.append(
             {
                 "ip": ip,
@@ -9043,7 +9165,8 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
                 "flags": sorted(stat["flags"]),
                 "top_paths": [p for p, _ in stat["paths"].most_common(3)],
                 "status_counts": stat["status_counts"],
-                "reason": "; ".join(reasons),
+                "reason": "; ".join(deduped_reasons),
+                "score": score,
             }
         )
 
