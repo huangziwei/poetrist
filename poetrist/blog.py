@@ -211,7 +211,7 @@ TRAFFIC_BOT_KEYWORDS = tuple(
     if s.strip()
 )
 TRAFFIC_SKIP_PATHS = {"/favicon.ico", "/robots.txt"}
-IP_BLOCK_DEFAULT_DAYS = int(os.environ.get("IP_BLOCK_DEFAULT_DAYS", "7"))
+IP_BLOCK_DEFAULT_DAYS = int(os.environ.get("IP_BLOCK_DEFAULT_DAYS", "0") or 0)
 
 
 def canon(k: str) -> str:  # helper: ^pg → progress
@@ -9471,6 +9471,7 @@ TEMPL_BLOCKLIST = wrap("""
       <h3 style="margin-bottom:.5rem;">Blocked IPs</h3>
                        
         <section style="margin:1rem 0;">
+        <h4 style="margin-bottom:.35rem;">Manually add IP</h4>
         <form method="post" action="{{ url_for('ip_blocklist_action') }}" style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:flex-end;">
             {% if csrf_token() %}<input type="hidden" name="csrf" value="{{ csrf_token() }}">{% endif %}
             <input type="hidden" name="action" value="block">
@@ -9483,8 +9484,8 @@ TEMPL_BLOCKLIST = wrap("""
             <input name="reason" type="text" placeholder="(optional)" style="padding:.45rem;border:1px solid #444;border-radius:.3rem;background:#1f1f1f;color:#fff;">
             </label>
             <label style="flex:0 0 9rem;display:flex;flex-direction:column;gap:.2rem;font-size:.9em;color:#bbb;">
-            Expired after
-            <input name="days" type="number" min="1" placeholder="e.g. {{ IP_BLOCK_DEFAULT_DAYS }} days." style="padding:.45rem;border:1px solid #444;border-radius:.3rem;background:#1f1f1f;color:#fff;">
+            Expired after x days
+            <input name="days" type="number" min="1" placeholder="blank = forever (add days to set expiry)" style="padding:.45rem;border:1px solid #444;border-radius:.3rem;background:#1f1f1f;color:#fff;">
             </label>
             <button type="submit" style="padding:.55rem 1rem;background:#c0392b;color:#fff;border:1px solid #922b21;border-radius:.35rem;cursor:pointer;flex:0 0 auto;">
             Add to blocklist
