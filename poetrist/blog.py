@@ -205,7 +205,9 @@ TRAFFIC_READ_MAX_LINES = int(os.environ.get("TRAFFIC_READ_MAX_LINES", "5000"))
 TRAFFIC_HIGH_HITS = int(os.environ.get("TRAFFIC_HIGH_HITS", "30"))
 TRAFFIC_BOT_KEYWORDS = tuple(
     s.strip().lower()
-    for s in os.environ.get("TRAFFIC_BOT_KEYWORDS", "bot,crawler,spider,gptbot").split(",")
+    for s in os.environ.get("TRAFFIC_BOT_KEYWORDS", "bot,crawler,spider,gptbot").split(
+        ","
+    )
     if s.strip()
 )
 TRAFFIC_SKIP_PATHS = {"/favicon.ico", "/robots.txt"}
@@ -3112,6 +3114,8 @@ def log_traffic(resp):
         ua = request.user_agent.string or ""
         if _is_bot_ua(ua):
             flags.append("bot_ua")
+        if session.get("logged_in"):
+            flags.append("admin_view")
 
         event = {
             "ts": utc_now().isoformat(),
@@ -8955,6 +8959,7 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
             ip,
             {
                 "hits": 0,
+                "admin_hits": 0,
                 "errors": 0,
                 "not_found": 0,
                 "flags": set(),
@@ -8962,6 +8967,9 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
             },
         )
         stat["hits"] += 1
+        is_admin_view = "admin_view" in (ev.get("flags") or [])
+        if is_admin_view:
+            stat["admin_hits"] += 1
         status = int(ev.get("st") or 0)
         if status >= 400:
             stat["errors"] += 1
@@ -8982,6 +8990,8 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
         nf_rate = (stat["not_found"] / hits) if hits else 0
         err_rate = (stat["errors"] / hits) if hits else 0
         reasons = []
+        if stat["admin_hits"] >= hits * 0.8:
+            continue  # mostly admin/owner traffic → ignore
         if "burst_suspect" in stat["flags"]:
             reasons.append("High rate")
         if "bot_ua" in stat["flags"]:
@@ -9015,6 +9025,19 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
     ).fetchall()
     blocklist = [dict(r) for r in blocklist_rows]
 
+    events_out = []
+    for ev in events:
+        ev_copy = {
+            "ts": ev.get("ts"),
+            "ip": ev.get("ip"),
+            "path": ev.get("path"),
+            "m": ev.get("m"),
+            "st": ev.get("st"),
+            "flags": ev.get("flags") or [],
+            "dur": ev.get("dur"),
+        }
+        events_out.append(ev_copy)
+
     return {
         "enabled": True,
         "log_dir": str(log_dir),
@@ -9022,6 +9045,7 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
         "blocklist": blocklist,
         "total": len(events),
         "unique_ips": len(ip_stats),
+        "events": events_out,
     }
 
 
@@ -9287,8 +9311,6 @@ TEMPL_STATS = wrap("""
               <tr style="text-align:left;border-bottom:1px solid #444;">
                 <th style="padding:.35rem;">IP</th>
                 <th style="padding:.35rem;">Hits</th>
-                <th style="padding:.35rem;">404</th>
-                <th style="padding:.35rem;">Errors</th>
                 <th style="padding:.35rem;">Reason</th>
                 <th style="padding:.35rem;">Top paths</th>
                 <th style="padding:.35rem;">Action</th>
@@ -9299,8 +9321,6 @@ TEMPL_STATS = wrap("""
               <tr style="border-bottom:1px solid #333;">
                 <td style="padding:.35rem;">{{ s.ip }}</td>
                 <td style="padding:.35rem;">{{ s.hits }}</td>
-                <td style="padding:.35rem;">{{ s.not_found }}</td>
-                <td style="padding:.35rem;">{{ s.errors }}</td>
                 <td style="padding:.35rem;">{{ s.reason }}</td>
                 <td style="padding:.35rem;color:#aaa;font-size:.85em;">
                   {% if s.top_paths %}{{ s.top_paths|join(', ') }}{% else %}—{% endif %}
@@ -9328,8 +9348,101 @@ TEMPL_STATS = wrap("""
         <p style="color:#888;">No suspicious IPs in this window.</p>
       {% endif %}
 
-      <h4 style="margin:1rem 0 .35rem;">Blocklist</h4>
-      {% if stats.traffic.blocklist %}
+      <p style="margin-top:.75rem;font-size:.9em;">
+        <a href="{{ url_for('blocklist', traffic_hours=traffic_hours) }}"
+           style="color:{{ theme_color() }};text-decoration:none;border-bottom:0.1px dotted currentColor;">
+           Manage blocklist →
+        </a>
+      </p>
+    {% endif %}
+  </section>
+{% endblock %}
+""")
+
+
+TEMPL_BLOCKLIST = wrap("""
+{% block body %}
+  <hr>
+  <header style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap;">
+    <div>
+      <h2 style="margin:1rem 0;">Blocklist</h2>
+      <small style="color:#888;">Last {{ traffic_hours }}h · log dir {{ data.log_dir }}</small>
+    </div>
+    <a href="{{ url_for('stats', format='traffic-json', traffic_hours=traffic_hours) }}"
+       style="color:{{ theme_color() }};font-size:.9em;text-decoration:none;border-bottom:0.1px dotted currentColor;">
+       Download JSON →
+    </a>
+  </header>
+
+  {% if not data.enabled %}
+    <p>Traffic logging is disabled.</p>
+  {% else %}
+    <section style="margin:1rem 0;">
+      <div style="display:flex;gap:1rem;flex-wrap:wrap;">
+        <div style="padding:1rem;border:1px solid #444;border-radius:.4rem;background:#2a2a2a;min-width:12rem;">
+          <div style="font-size:.9em;color:#888;">Suspicious IPs</div>
+          <div style="font-size:1.8rem;">{{ data.suspicious|length }}</div>
+        </div>
+        <div style="padding:1rem;border:1px solid #444;border-radius:.4rem;background:#2a2a2a;min-width:12rem;">
+          <div style="font-size:.9em;color:#888;">Blocked</div>
+          <div style="font-size:1.8rem;">{{ data.blocklist|length }}</div>
+        </div>
+        <div style="padding:1rem;border:1px solid #444;border-radius:.4rem;background:#2a2a2a;min-width:12rem;">
+          <div style="font-size:.9em;color:#888;">Events</div>
+          <div style="font-size:1.8rem;">{{ data.total }}</div>
+          <div style="font-size:.85em;color:#888;">{{ data.unique_ips }} IPs</div>
+        </div>
+      </div>
+    </section>
+
+    <section style="margin:1.5rem 0;">
+      <h3 style="margin-bottom:.5rem;">Suspicious</h3>
+      {% if data.suspicious %}
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;font-size:.9em;">
+            <thead>
+              <tr style="text-align:left;border-bottom:1px solid #444;">
+                <th style="padding:.35rem;">IP</th>
+                <th style="padding:.35rem;">Hits</th>
+                <th style="padding:.35rem;">Reason</th>
+                <th style="padding:.35rem;">Top paths</th>
+                <th style="padding:.35rem;">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+            {% for s in data.suspicious %}
+              <tr style="border-bottom:1px solid #333;">
+                <td style="padding:.35rem;">{{ s.ip }}</td>
+                <td style="padding:.35rem;">{{ s.hits }}</td>
+                <td style="padding:.35rem;">{{ s.reason }}</td>
+                <td style="padding:.35rem;color:#aaa;font-size:.85em;">
+                  {% if s.top_paths %}{{ s.top_paths|join(', ') }}{% else %}—{% endif %}
+                </td>
+                <td style="padding:.35rem;">
+                  <form method="post" action="{{ url_for('ip_blocklist_action') }}" style="display:inline;">
+                    {% if csrf_token() %}<input type="hidden" name="csrf" value="{{ csrf_token() }}">{% endif %}
+                    <input type="hidden" name="action" value="block">
+                    <input type="hidden" name="ip" value="{{ s.ip }}">
+                    <input type="hidden" name="reason" value="{{ s.reason }}">
+                    <input type="hidden" name="days" value="{{ IP_BLOCK_DEFAULT_DAYS }}">
+                    <button type="submit" style="background:#c0392b;color:#fff;border:1px solid #922b21;padding:.3rem .6rem;border-radius:.35rem;cursor:pointer;">
+                      Block
+                    </button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p style="color:#888;">No suspicious IPs in this window.</p>
+      {% endif %}
+    </section>
+
+    <section style="margin:1.5rem 0;">
+      <h3 style="margin-bottom:.5rem;">Blocked IPs</h3>
+      {% if data.blocklist %}
         <div style="overflow-x:auto;">
           <table style="width:100%;border-collapse:collapse;font-size:.9em;">
             <thead>
@@ -9342,7 +9455,7 @@ TEMPL_STATS = wrap("""
               </tr>
             </thead>
             <tbody>
-            {% for b in stats.traffic.blocklist %}
+            {% for b in data.blocklist %}
               <tr style="border-bottom:1px solid #333;">
                 <td style="padding:.35rem;">{{ b.ip }}</td>
                 <td style="padding:.35rem;">{{ b.reason or '—' }}</td>
@@ -9350,9 +9463,7 @@ TEMPL_STATS = wrap("""
                 <td style="padding:.35rem;">{{ b.expires_at or '—' }}</td>
                 <td style="padding:.35rem;">
                   <form method="post" action="{{ url_for('ip_blocklist_action') }}" style="display:inline;">
-                    {% if csrf_token() %}
-                      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-                    {% endif %}
+                    {% if csrf_token() %}<input type="hidden" name="csrf" value="{{ csrf_token() }}">{% endif %}
                     <input type="hidden" name="action" value="unblock">
                     <input type="hidden" name="ip" value="{{ b.ip }}">
                     <button type="submit" style="background:#444;color:#fff;border:1px solid #666;padding:.3rem .6rem;border-radius:.35rem;cursor:pointer;">
@@ -9368,8 +9479,8 @@ TEMPL_STATS = wrap("""
       {% else %}
         <p style="color:#888;">No IPs are blocked.</p>
       {% endif %}
-    {% endif %}
-  </section>
+    </section>
+  {% endif %}
 {% endblock %}
 """)
 
@@ -9403,7 +9514,27 @@ def ip_blocklist_action():
         flash(f"Unblocked {ip}")
     else:
         abort(400)
-    return redirect(url_for("stats") + "#traffic")
+    return redirect(url_for("blocklist"))
+
+
+@app.route("/blocklist")
+def blocklist():
+    login_required()
+    try:
+        traffic_hours = int(request.args.get("traffic_hours", 24))
+    except (TypeError, ValueError):
+        traffic_hours = 24
+    traffic_hours = min(max(traffic_hours, 1), 168)
+    snap = traffic_snapshot(db=get_db(), hours=traffic_hours)
+    return render_template_string(
+        TEMPL_BLOCKLIST,
+        title=get_setting("site_name", "po.etr.ist"),
+        username=current_username(),
+        traffic_hours=traffic_hours,
+        data=snap,
+        IP_BLOCK_DEFAULT_DAYS=IP_BLOCK_DEFAULT_DAYS,
+        kind="blocklist",
+    )
 
 
 ###############################################################################

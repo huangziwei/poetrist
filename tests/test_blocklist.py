@@ -108,4 +108,22 @@ def test_stats_flags_suspicious_ips(client, tmp_path: Path):
     assert "Traffic (last" in html
     snap = traffic_snapshot(db=get_db(), hours=24)
     assert any(s["ip"] == "1.2.3.4" for s in snap["suspicious"])
+    resp_json = client.get("/stats?format=traffic-json&traffic_hours=24")
+    data = resp_json.get_json()
+    assert any(ev["ip"] == "1.2.3.4" for ev in data["events"])
+
+
+def test_blocklist_page_shows_entries(client):
+    _login(client)
+    with app.app_context():
+        block_ip_addr("198.51.100.10", reason="test", expires_at=None, db=get_db())
+
+    resp = client.get("/blocklist")
+    html = resp.data.decode()
+    assert resp.status_code == 200
+    assert "198.51.100.10" in html
+    assert "Blocked IPs" in html
+
+    stats_html = client.get("/stats").data.decode()
+    assert "Blocked IPs" not in stats_html
     assert "Block" in html  # action button rendered
