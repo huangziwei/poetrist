@@ -3466,8 +3466,6 @@ def robots():
     Allow selected well-behaved crawlers, nudge everyone else away.
     """
     rules = (
-        "User-agent: GPTBot\n"
-        "Allow: /\n\n"
         "User-agent: Googlebot\n"
         "Allow: /\n\n"
         "User-agent: Bingbot\n"
