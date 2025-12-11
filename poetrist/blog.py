@@ -265,14 +265,11 @@ TRAFFIC_SWARM_AUTOBLOCK = str(
     os.environ.get("TRAFFIC_SWARM_AUTOBLOCK", "1")
 ).strip().lower() in {"1", "true", "yes", "on"}
 TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS = int(
-    os.environ.get("TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS", "365")
+    os.environ.get("TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS", "0")
 )
-TRAFFIC_SWARM_AUTOBLOCK_ON_REQUEST = (
-    str(os.environ.get("TRAFFIC_SWARM_AUTOBLOCK_ON_REQUEST", "1"))
-    .strip()
-    .lower()
-    in {"1", "true", "yes", "on"}
-)
+TRAFFIC_SWARM_AUTOBLOCK_ON_REQUEST = str(
+    os.environ.get("TRAFFIC_SWARM_AUTOBLOCK_ON_REQUEST", "1")
+).strip().lower() in {"1", "true", "yes", "on"}
 TRAFFIC_SWARM_AUTOBLOCK_SCAN_HOURS = int(
     os.environ.get("TRAFFIC_SWARM_AUTOBLOCK_SCAN_HOURS", "6")
 )
@@ -3171,9 +3168,7 @@ def _maybe_autoblock_synchronized(*, db) -> None:
     )
     now = time()
     global _last_swarm_autoblock_run
-    if _last_swarm_autoblock_run and now - _last_swarm_autoblock_run < max(
-        interval, 1
-    ):
+    if _last_swarm_autoblock_run and now - _last_swarm_autoblock_run < max(interval, 1):
         return
     _last_swarm_autoblock_run = now
     try:
@@ -3328,9 +3323,9 @@ def traffic_gate():
                     days = TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS
                 expires_at = None
                 if days > 0:
-                    expires_at = (
-                        utc_now() + timedelta(days=days)
-                    ).isoformat(timespec="seconds")
+                    expires_at = (utc_now() + timedelta(days=days)).isoformat(
+                        timespec="seconds"
+                    )
                 try:
                     block_ip_addr(
                         ip,
@@ -9510,9 +9505,11 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
                 and ip not in auto_blocked_ips
             ):
                 try:
-                    expires_at = (
-                        utc_now() + timedelta(days=auto_block_expires_days)
-                    ).isoformat(timespec="seconds")
+                    expires_at = None
+                    if auto_block_expires_days > 0:
+                        expires_at = (
+                            utc_now() + timedelta(days=auto_block_expires_days)
+                        ).isoformat(timespec="seconds")
                     block_ip_addr(
                         ip,
                         reason="Auto-block: synchronized with blocked swarm",
@@ -9589,11 +9586,16 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
             and net not in auto_blocked_ips
         ):
             try:
-                expires_at = (
-                    utc_now() + timedelta(days=auto_block_expires_days)
-                ).isoformat(timespec="seconds")
+                expires_at = None
+                if auto_block_expires_days > 0:
+                    expires_at = (
+                        utc_now() + timedelta(days=auto_block_expires_days)
+                    ).isoformat(timespec="seconds")
                 block_ip_addr(
-                    net, reason="Auto-block: network swarm errors", expires_at=expires_at, db=db
+                    net,
+                    reason="Auto-block: network swarm errors",
+                    expires_at=expires_at,
+                    db=db,
                 )
                 auto_blocked_ips.add(net)
             except Exception:
