@@ -252,17 +252,13 @@ TRAFFIC_SWARM_CORR_WINDOW_SEC = int(
     os.environ.get("TRAFFIC_SWARM_CORR_WINDOW_SEC", "3")
 )
 TRAFFIC_SWARM_TOKEN_MIN = int(os.environ.get("TRAFFIC_SWARM_TOKEN_MIN", "6"))
-TRAFFIC_SWARM_MIN_CORR_HITS = int(
-    os.environ.get("TRAFFIC_SWARM_MIN_CORR_HITS", "1")
-)
-TRAFFIC_SWARM_REQUIRE_4XX = (
-    str(os.environ.get("TRAFFIC_SWARM_REQUIRE_4XX", "1")).strip().lower()
-    in {"1", "true", "yes", "on"}
-)
-TRAFFIC_SWARM_AUTOBLOCK = (
-    str(os.environ.get("TRAFFIC_SWARM_AUTOBLOCK", "0")).strip().lower()
-    in {"1", "true", "yes", "on"}
-)
+TRAFFIC_SWARM_MIN_CORR_HITS = int(os.environ.get("TRAFFIC_SWARM_MIN_CORR_HITS", "1"))
+TRAFFIC_SWARM_REQUIRE_4XX = str(
+    os.environ.get("TRAFFIC_SWARM_REQUIRE_4XX", "1")
+).strip().lower() in {"1", "true", "yes", "on"}
+TRAFFIC_SWARM_AUTOBLOCK = str(
+    os.environ.get("TRAFFIC_SWARM_AUTOBLOCK", "1")
+).strip().lower() in {"1", "true", "yes", "on"}
 TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS = int(
     os.environ.get("TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS", "30")
 )
