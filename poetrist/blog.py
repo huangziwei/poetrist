@@ -210,11 +210,9 @@ TRAFFIC_BOT_KEYWORDS = tuple(
     ).split(",")
     if s.strip()
 )
-TRAFFIC_SUSPICIOUS_PATH_LEN = int(
-    os.environ.get("TRAFFIC_SUSPICIOUS_PATH_LEN", "160")
-)
+TRAFFIC_SUSPICIOUS_PATH_LEN = int(os.environ.get("TRAFFIC_SUSPICIOUS_PATH_LEN", "160"))
 TRAFFIC_SUSPICIOUS_TOKEN_THRESHOLD = int(
-    os.environ.get("TRAFFIC_SUSPICIOUS_TOKEN_THRESHOLD", "8")
+    os.environ.get("TRAFFIC_SUSPICIOUS_TOKEN_THRESHOLD", "7")
 )
 TRAFFIC_SUSPICIOUS_MIN_UA_LEN = int(
     os.environ.get("TRAFFIC_SUSPICIOUS_MIN_UA_LEN", "14")
@@ -231,9 +229,7 @@ TRAFFIC_SUSPICIOUS_CHURN_MIN_HITS = int(
     os.environ.get("TRAFFIC_SUSPICIOUS_CHURN_MIN_HITS", "8")
 )
 TRAFFIC_SUSPICIOUS_SCORE = int(os.environ.get("TRAFFIC_SUSPICIOUS_SCORE", "3"))
-TRAFFIC_SUSPICIOUS_NET_HITS = int(
-    os.environ.get("TRAFFIC_SUSPICIOUS_NET_HITS", "80")
-)
+TRAFFIC_SUSPICIOUS_NET_HITS = int(os.environ.get("TRAFFIC_SUSPICIOUS_NET_HITS", "80"))
 TRAFFIC_SUSPICIOUS_NET_UNIQUE = int(
     os.environ.get("TRAFFIC_SUSPICIOUS_NET_UNIQUE", "20")
 )
@@ -251,6 +247,17 @@ TRAFFIC_SUSPICIOUS_NET_LOW_UNIQUE = int(
 )
 TRAFFIC_SUSPICIOUS_NET_LOW_NF_SHARE = float(
     os.environ.get("TRAFFIC_SUSPICIOUS_NET_LOW_NF_SHARE", "0.9")
+)
+TRAFFIC_SWARM_CORR_WINDOW_SEC = int(
+    os.environ.get("TRAFFIC_SWARM_CORR_WINDOW_SEC", "3")
+)
+TRAFFIC_SWARM_TOKEN_MIN = int(os.environ.get("TRAFFIC_SWARM_TOKEN_MIN", "6"))
+TRAFFIC_SWARM_MIN_CORR_HITS = int(
+    os.environ.get("TRAFFIC_SWARM_MIN_CORR_HITS", "1")
+)
+TRAFFIC_SWARM_REQUIRE_4XX = (
+    str(os.environ.get("TRAFFIC_SWARM_REQUIRE_4XX", "1")).strip().lower()
+    in {"1", "true", "yes", "on"}
 )
 TRAFFIC_SKIP_PATHS = {"/favicon.ico", "/robots.txt"}
 IP_BLOCK_DEFAULT_DAYS = int(os.environ.get("IP_BLOCK_DEFAULT_DAYS", "0") or 0)
@@ -353,6 +360,10 @@ app.config.update(
     TRAFFIC_SUSPICIOUS_NET_LOW_HITS=TRAFFIC_SUSPICIOUS_NET_LOW_HITS,
     TRAFFIC_SUSPICIOUS_NET_LOW_UNIQUE=TRAFFIC_SUSPICIOUS_NET_LOW_UNIQUE,
     TRAFFIC_SUSPICIOUS_NET_LOW_NF_SHARE=TRAFFIC_SUSPICIOUS_NET_LOW_NF_SHARE,
+    TRAFFIC_SWARM_CORR_WINDOW_SEC=TRAFFIC_SWARM_CORR_WINDOW_SEC,
+    TRAFFIC_SWARM_TOKEN_MIN=TRAFFIC_SWARM_TOKEN_MIN,
+    TRAFFIC_SWARM_MIN_CORR_HITS=TRAFFIC_SWARM_MIN_CORR_HITS,
+    TRAFFIC_SWARM_REQUIRE_4XX=TRAFFIC_SWARM_REQUIRE_4XX,
 )
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
@@ -3118,23 +3129,18 @@ def _keyword_tuple(value) -> tuple[str, ...]:
         raw_items = value.split(",")
     else:
         raw_items = value or []
-    return tuple(
-        str(item).strip().lower() for item in raw_items if str(item).strip()
-    )
+    return tuple(str(item).strip().lower() for item in raw_items if str(item).strip())
 
 
 def _path_token_burst(path: str) -> int:
     if not path:
         return 0
-    return (
-        path.count("+")
-        + path.count("%20")
-        + path.count(",")
-        + path.count(";")
-    )
+    return path.count("+") + path.count("%20") + path.count(",") + path.count(";")
 
 
-def _ua_suspicious(ua: str, *, min_len: int, keywords: tuple[str, ...]) -> tuple[bool, str]:
+def _ua_suspicious(
+    ua: str, *, min_len: int, keywords: tuple[str, ...]
+) -> tuple[bool, str]:
     ua_clean = (ua or "").strip()
     if not ua_clean:
         return True, "Missing UA"
@@ -9107,16 +9113,44 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
 
     events = _recent_traffic_events(hours)
     filtered_events: list[dict] = []
+    blocked_times: list[datetime] = []
     for ev in events:
         flags = ev.get("flags") or []
         ip = _normalize_ip(ev.get("ip") or "unknown")
+        ts_val = ev.get("_ts") if isinstance(ev.get("_ts"), datetime) else None
         if "admin_view" in flags:
             continue
         if _ip_in_blocked(ip, blocked_networks):
+            if ts_val:
+                blocked_times.append(ts_val)
             continue
         ev_copy = dict(ev)
         ev_copy["ip"] = ip
         filtered_events.append(ev_copy)
+
+    blocked_times.sort()
+    swarm_window = float(
+        app.config.get("TRAFFIC_SWARM_CORR_WINDOW_SEC", TRAFFIC_SWARM_CORR_WINDOW_SEC)
+    )
+
+    def _near_blocked(ts: datetime | None) -> bool:
+        if not blocked_times or ts is None:
+            return False
+        lo, hi = 0, len(blocked_times) - 1
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            delta = (ts - blocked_times[mid]).total_seconds()
+            if abs(delta) <= swarm_window:
+                return True
+            if delta > 0:
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        for idx in (lo, hi):
+            if 0 <= idx < len(blocked_times):
+                if abs((ts - blocked_times[idx]).total_seconds()) <= swarm_window:
+                    return True
+        return False
 
     ip_stats: dict[str, dict] = {}
     net_stats: dict[str, dict] = {}
@@ -9150,9 +9184,7 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
         app.config.get("TRAFFIC_SUSPICIOUS_NET_HITS", TRAFFIC_SUSPICIOUS_NET_HITS)
     )
     net_unique_threshold = int(
-        app.config.get(
-            "TRAFFIC_SUSPICIOUS_NET_UNIQUE", TRAFFIC_SUSPICIOUS_NET_UNIQUE
-        )
+        app.config.get("TRAFFIC_SUSPICIOUS_NET_UNIQUE", TRAFFIC_SUSPICIOUS_NET_UNIQUE)
     )
     net_nf_share = float(
         app.config.get(
@@ -9166,7 +9198,9 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
         )
     )
     net_low_hits = int(
-        app.config.get("TRAFFIC_SUSPICIOUS_NET_LOW_HITS", TRAFFIC_SUSPICIOUS_NET_LOW_HITS)
+        app.config.get(
+            "TRAFFIC_SUSPICIOUS_NET_LOW_HITS", TRAFFIC_SUSPICIOUS_NET_LOW_HITS
+        )
     )
     net_low_unique = int(
         app.config.get(
@@ -9259,12 +9293,25 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
             stat["ua_suspicious"] += 1
             if bad_reason:
                 stat["ua_reasons"][bad_reason] += 1
+        if _near_blocked(ev.get("_ts")):
+            stat["correlated_hits"] = stat.get("correlated_hits", 0) + 1
+            if status >= 400:
+                stat["correlated_4xx"] = stat.get("correlated_4xx", 0) + 1
 
     suspicious: list[dict] = []
     min_hits = int(
         app.config.get("TRAFFIC_SUSPICIOUS_MIN_HITS", TRAFFIC_SUSPICIOUS_MIN_HITS)
     )
     high_hits = int(app.config.get("TRAFFIC_HIGH_HITS", TRAFFIC_HIGH_HITS))
+    swarm_token_min = int(
+        app.config.get("TRAFFIC_SWARM_TOKEN_MIN", TRAFFIC_SWARM_TOKEN_MIN)
+    )
+    swarm_min_corr_hits = int(
+        app.config.get("TRAFFIC_SWARM_MIN_CORR_HITS", TRAFFIC_SWARM_MIN_CORR_HITS)
+    )
+    swarm_require_4xx = bool(
+        app.config.get("TRAFFIC_SWARM_REQUIRE_4XX", TRAFFIC_SWARM_REQUIRE_4XX)
+    )
 
     for ip, stat in ip_stats.items():
         hits = stat["hits"]
@@ -9308,6 +9355,15 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
             score += 1
         if hits >= min_hits and nf_rate >= 0.25 and "Elevated volume" not in reasons:
             reasons.append("Heavy traffic")
+        corr_hits = stat.get("correlated_hits", 0)
+        corr_4xx = stat.get("correlated_4xx", 0)
+        if (
+            corr_hits >= swarm_min_corr_hits
+            and stat["max_token_like"] >= swarm_token_min
+            and (not swarm_require_4xx or corr_4xx >= corr_hits)
+        ):
+            reasons.append("Synchronized with blocked swarm")
+            score = max(score, suspicious_score_min)
         if score < suspicious_score_min or not reasons:
             continue
         deduped_reasons = list(dict.fromkeys(reasons))
