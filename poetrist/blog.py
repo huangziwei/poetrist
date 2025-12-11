@@ -259,6 +259,21 @@ TRAFFIC_SWARM_REQUIRE_4XX = (
     str(os.environ.get("TRAFFIC_SWARM_REQUIRE_4XX", "1")).strip().lower()
     in {"1", "true", "yes", "on"}
 )
+TRAFFIC_SWARM_AUTOBLOCK = (
+    str(os.environ.get("TRAFFIC_SWARM_AUTOBLOCK", "0")).strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS = int(
+    os.environ.get("TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS", "30")
+)
+TRAFFIC_SWARM_AUTOBLOCK_UA_ALLOWLIST = tuple(
+    s.strip().lower()
+    for s in os.environ.get(
+        "TRAFFIC_SWARM_AUTOBLOCK_UA_ALLOWLIST",
+        "googlebot,bingbot,duckduckbot,slurp,linkedinbot",
+    ).split(",")
+    if s.strip()
+)
 TRAFFIC_SKIP_PATHS = {"/favicon.ico", "/robots.txt"}
 IP_BLOCK_DEFAULT_DAYS = int(os.environ.get("IP_BLOCK_DEFAULT_DAYS", "0") or 0)
 
@@ -364,6 +379,9 @@ app.config.update(
     TRAFFIC_SWARM_TOKEN_MIN=TRAFFIC_SWARM_TOKEN_MIN,
     TRAFFIC_SWARM_MIN_CORR_HITS=TRAFFIC_SWARM_MIN_CORR_HITS,
     TRAFFIC_SWARM_REQUIRE_4XX=TRAFFIC_SWARM_REQUIRE_4XX,
+    TRAFFIC_SWARM_AUTOBLOCK=TRAFFIC_SWARM_AUTOBLOCK,
+    TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS=TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS,
+    TRAFFIC_SWARM_AUTOBLOCK_UA_ALLOWLIST=TRAFFIC_SWARM_AUTOBLOCK_UA_ALLOWLIST,
 )
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
@@ -9312,6 +9330,33 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
     swarm_require_4xx = bool(
         app.config.get("TRAFFIC_SWARM_REQUIRE_4XX", TRAFFIC_SWARM_REQUIRE_4XX)
     )
+    auto_block_enabled = bool(
+        app.config.get("TRAFFIC_SWARM_AUTOBLOCK", TRAFFIC_SWARM_AUTOBLOCK)
+    )
+    auto_block_expires_days = int(
+        app.config.get(
+            "TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS", TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS
+        )
+    )
+    ua_allowlist_raw = app.config.get(
+        "TRAFFIC_SWARM_AUTOBLOCK_UA_ALLOWLIST", TRAFFIC_SWARM_AUTOBLOCK_UA_ALLOWLIST
+    )
+    ua_allowlist = tuple(
+        (ua_allowlist_raw or [])
+        if isinstance(ua_allowlist_raw, (list, tuple))
+        else [s.strip().lower() for s in str(ua_allowlist_raw).split(",") if s.strip()]
+    )
+
+    def _ua_allowlisted(stat: dict) -> bool:
+        if not ua_allowlist:
+            return False
+        for ua_val, _cnt in stat.get("ua_samples", {}).most_common(3):
+            ua_l = (ua_val or "").lower()
+            if any(kw and kw in ua_l for kw in ua_allowlist):
+                return True
+        return False
+
+    auto_blocked_ips: set[str] = set()
 
     for ip, stat in ip_stats.items():
         hits = stat["hits"]
@@ -9364,6 +9409,25 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
         ):
             reasons.append("Synchronized with blocked swarm")
             score = max(score, suspicious_score_min)
+            if (
+                auto_block_enabled
+                and stat["status_counts"].get("2xx", 0) == 0
+                and not _ua_allowlisted(stat)
+                and ip not in auto_blocked_ips
+            ):
+                try:
+                    expires_at = (
+                        utc_now() + timedelta(days=auto_block_expires_days)
+                    ).isoformat(timespec="seconds")
+                    block_ip_addr(
+                        ip,
+                        reason="Auto-block: synchronized with blocked swarm",
+                        expires_at=expires_at,
+                        db=db,
+                    )
+                    auto_blocked_ips.add(ip)
+                except Exception:
+                    pass
         if score < suspicious_score_min or not reasons:
             continue
         deduped_reasons = list(dict.fromkeys(reasons))
