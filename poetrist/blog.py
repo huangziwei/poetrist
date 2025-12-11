@@ -260,7 +260,7 @@ TRAFFIC_SWARM_AUTOBLOCK = str(
     os.environ.get("TRAFFIC_SWARM_AUTOBLOCK", "1")
 ).strip().lower() in {"1", "true", "yes", "on"}
 TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS = int(
-    os.environ.get("TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS", "30")
+    os.environ.get("TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS", "365")
 )
 TRAFFIC_SWARM_AUTOBLOCK_ON_REQUEST = (
     str(os.environ.get("TRAFFIC_SWARM_AUTOBLOCK_ON_REQUEST", "1"))
