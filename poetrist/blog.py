@@ -272,6 +272,11 @@ TRAFFIC_SWARM_AUTOBLOCK_UA_ALLOWLIST = tuple(
 )
 TRAFFIC_SKIP_PATHS = {"/favicon.ico", "/robots.txt"}
 IP_BLOCK_DEFAULT_DAYS = int(os.environ.get("IP_BLOCK_DEFAULT_DAYS", "0") or 0)
+IP_BLOCK_EXTEND_ON_HIT = (
+    str(os.environ.get("IP_BLOCK_EXTEND_ON_HIT", "1")).strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+IP_BLOCK_EXTEND_DAYS = int(os.environ.get("IP_BLOCK_EXTEND_DAYS", "30"))
 
 
 def canon(k: str) -> str:  # helper: ^pg → progress
@@ -378,6 +383,8 @@ app.config.update(
     TRAFFIC_SWARM_AUTOBLOCK=TRAFFIC_SWARM_AUTOBLOCK,
     TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS=TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS,
     TRAFFIC_SWARM_AUTOBLOCK_UA_ALLOWLIST=TRAFFIC_SWARM_AUTOBLOCK_UA_ALLOWLIST,
+    IP_BLOCK_EXTEND_ON_HIT=IP_BLOCK_EXTEND_ON_HIT,
+    IP_BLOCK_EXTEND_DAYS=IP_BLOCK_EXTEND_DAYS,
 )
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
@@ -3167,7 +3174,9 @@ def _ua_suspicious(
     return False, ""
 
 
-def is_ip_blocked(ip: str, *, db) -> bool:
+def is_ip_blocked(
+    ip: str, *, db, extend_on_hit: bool = False, extend_days: int | None = None
+) -> bool:
     if not ip:
         return False
     now = utc_now().isoformat()
@@ -3176,11 +3185,54 @@ def is_ip_blocked(ip: str, *, db) -> bool:
         (now,),
     ).fetchall()
     nets = []
+    matched_rows = []
     for row in rows:
         net = _parse_block_target(row["ip"])
         if net:
             nets.append(net)
-    return _ip_in_blocked(ip, nets)
+            matched_rows.append((net, row))
+    blocked = _ip_in_blocked(ip, nets)
+    if not blocked:
+        return False
+    should_extend = extend_on_hit or bool(
+        app.config.get("IP_BLOCK_EXTEND_ON_HIT", IP_BLOCK_EXTEND_ON_HIT)
+    )
+    if not should_extend:
+        return True
+    extension_days = (
+        extend_days
+        if extend_days is not None
+        else int(app.config.get("IP_BLOCK_EXTEND_DAYS", IP_BLOCK_EXTEND_DAYS))
+    )
+    if extension_days <= 0:
+        return True
+    updated = False
+    for net, row in matched_rows:
+        if not row.get("expires_at"):
+            continue  # permanent blocks stay as-is
+        try:
+            addr = ipaddress.ip_address((ip or "").strip())
+        except ValueError:
+            continue
+        if addr not in net:
+            continue
+        new_exp = (utc_now() + timedelta(days=extension_days)).isoformat(
+            timespec="seconds"
+        )
+        try:
+            db.execute(
+                "UPDATE ip_blocklist SET expires_at=? WHERE ip=?",
+                (new_exp, row["ip"]),
+            )
+            updated = True
+        except Exception:
+            continue
+    if updated:
+        try:
+            db.commit()
+        except Exception:
+            pass
+    return True
 
 
 def block_ip_addr(ip: str, *, reason: str, expires_at: str | None, db) -> None:
@@ -3244,7 +3296,9 @@ def traffic_gate():
     ip = client_ip()
     g.client_ip = ip
 
-    if not session.get("logged_in") and is_ip_blocked(ip, db=get_db()):
+    if not session.get("logged_in") and is_ip_blocked(
+        ip, db=get_db(), extend_on_hit=True
+    ):
         abort(403)
 
     if not app.config.get("TRAFFIC_LOG_ENABLED", True):
