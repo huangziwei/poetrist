@@ -210,6 +210,11 @@ TRAFFIC_BOT_KEYWORDS = tuple(
     ).split(",")
     if s.strip()
 )
+TRAFFIC_BLOCK_UA_KEYWORDS = tuple(
+    s.strip().lower()
+    for s in os.environ.get("TRAFFIC_BLOCK_UA_KEYWORDS", "thinkbot").split(",")
+    if s.strip()
+)
 TRAFFIC_SUSPICIOUS_PATH_LEN = int(os.environ.get("TRAFFIC_SUSPICIOUS_PATH_LEN", "160"))
 TRAFFIC_SUSPICIOUS_TOKEN_THRESHOLD = int(
     os.environ.get("TRAFFIC_SUSPICIOUS_TOKEN_THRESHOLD", "7")
@@ -393,6 +398,7 @@ app.config.update(
     TRAFFIC_SWARM_AUTOBLOCK_SCAN_HOURS=TRAFFIC_SWARM_AUTOBLOCK_SCAN_HOURS,
     TRAFFIC_SWARM_AUTOBLOCK_INTERVAL_SEC=TRAFFIC_SWARM_AUTOBLOCK_INTERVAL_SEC,
     TRAFFIC_SWARM_AUTOBLOCK_UA_ALLOWLIST=TRAFFIC_SWARM_AUTOBLOCK_UA_ALLOWLIST,
+    TRAFFIC_BLOCK_UA_KEYWORDS=TRAFFIC_BLOCK_UA_KEYWORDS,
 )
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
@@ -3303,7 +3309,39 @@ def traffic_gate():
     g.client_ip = ip
 
     if not session.get("logged_in"):
-        if is_ip_blocked(ip, db=get_db()):
+        ua = (request.user_agent.string or "").lower()
+        block_ua_kw = next(
+            (kw for kw in app.config.get("TRAFFIC_BLOCK_UA_KEYWORDS", ()) if kw in ua),
+            None,
+        )
+        db = get_db()
+        if block_ua_kw:
+            if not is_ip_blocked(ip, db=db):
+                try:
+                    days = int(
+                        app.config.get(
+                            "TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS",
+                            TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS,
+                        )
+                    )
+                except (TypeError, ValueError):
+                    days = TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS
+                expires_at = None
+                if days > 0:
+                    expires_at = (
+                        utc_now() + timedelta(days=days)
+                    ).isoformat(timespec="seconds")
+                try:
+                    block_ip_addr(
+                        ip,
+                        reason=f"Auto-block UA: {block_ua_kw}",
+                        expires_at=expires_at,
+                        db=db,
+                    )
+                except Exception:
+                    pass
+            abort(403)
+        if is_ip_blocked(ip, db=db):
             abort(403)
 
     if not app.config.get("TRAFFIC_LOG_ENABLED", True):

@@ -52,6 +52,18 @@ def test_blocked_ipv6_cidr_blocks_range(client):
     assert resp.status_code == 403
 
 
+def test_thinkbot_user_agent_is_auto_blocked(client):
+    ip = "198.51.100.77"
+    ua = "Mozilla/5.0 (compatible; ThinkBot/0.5.8; +test)"
+    resp = client.get("/", headers={"User-Agent": ua}, environ_overrides={"REMOTE_ADDR": ip})
+    assert resp.status_code == 403
+    row = get_db().execute(
+        "SELECT reason, expires_at FROM ip_blocklist WHERE ip=?", (ip,)
+    ).fetchone()
+    assert row
+    assert "thinkbot" in (row["reason"] or "").lower()
+
+
 def test_logged_in_bypasses_block_for_admin_views(client):
     with app.app_context():
         block_ip_addr("203.0.113.11", reason="test", expires_at=None, db=get_db())
