@@ -9966,9 +9966,8 @@ TEMPL_BLOCKLIST = wrap("""
     </section>
 
     <section style="margin:1.5rem 0;">
-      <h3 style="margin-bottom:.5rem;">Blocked IPs</h3>
-                       
-        <section style="margin:1rem 0;">
+      <h3 style="margin-bottom:.5rem;">Blocked IPs <small style="color:#888;">({{ blocklist_total }})</small></h3>
+      <section style="margin:1rem 0;">
         <h4 style="margin-bottom:.35rem;">Manually add IP</h4>
         <form method="post" action="{{ url_for('ip_blocklist_action') }}" style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:flex-end;">
             {% if csrf_token() %}<input type="hidden" name="csrf" value="{{ csrf_token() }}">{% endif %}
@@ -9989,45 +9988,65 @@ TEMPL_BLOCKLIST = wrap("""
             Add to blocklist
             </button>
         </form>
-        </section>
-
-      {% if data.blocklist %}
-        <div style="overflow-x:auto;">
-          <table style="width:100%;border-collapse:collapse;font-size:.9em;">
-            <thead>
-              <tr style="text-align:left;border-bottom:1px solid #444;">
-                <th style="padding:.35rem;">IP</th>
-                <th style="padding:.35rem;">Reason</th>
-                <th style="padding:.35rem;">Created</th>
-                <th style="padding:.35rem;">Expires</th>
-                <th style="padding:.35rem;">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-            {% for b in data.blocklist %}
-              <tr style="border-bottom:1px solid #333;">
-                <td style="padding:.35rem;">{{ b.ip }}</td>
-                <td style="padding:.35rem;">{{ b.reason or '—' }}</td>
-                <td style="padding:.35rem;">{{ b.created_at }}</td>
-                <td style="padding:.35rem;">{{ b.expires_at or '—' }}</td>
-                <td style="padding:.35rem;">
-                  <form method="post" action="{{ url_for('ip_blocklist_action') }}" style="display:inline;">
-                    {% if csrf_token() %}<input type="hidden" name="csrf" value="{{ csrf_token() }}">{% endif %}
-                    <input type="hidden" name="action" value="unblock">
-                    <input type="hidden" name="ip" value="{{ b.ip }}">
-                    <button type="submit" style="background:#444;color:#fff;border:1px solid #666;padding:.3rem .6rem;border-radius:.35rem;cursor:pointer;">
-                      Unblock
-                    </button>
-                  </form>
-                </td>
-              </tr>
-            {% endfor %}
-            </tbody>
-          </table>
+      </section>
+      <details style="border:1px solid #333;border-radius:.4rem;padding:0;background:#1e1e1e;" {% if request.args.get('open') %}open{% endif %}>
+        <summary style="cursor:pointer;padding:.75rem 1rem;font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:.75rem;">
+          <span>Show blocked IPs</span>
+          <span style="color:#888;font-size:.9em;">Page {{ blocklist_page }} / {{ blocklist_pages }}</span>
+        </summary>
+        <div style="padding:0 1rem 1rem;">
+          {% if data.blocklist_page %}
+            <div style="overflow-x:auto;">
+              <table style="width:100%;border-collapse:collapse;font-size:.9em;">
+                <thead>
+                  <tr style="text-align:left;border-bottom:1px solid #444;">
+                    <th style="padding:.35rem;">IP</th>
+                    <th style="padding:.35rem;">Reason</th>
+                    <th style="padding:.35rem;">Created</th>
+                    <th style="padding:.35rem;">Expires</th>
+                    <th style="padding:.35rem;">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                {% for b in data.blocklist_page %}
+                  <tr style="border-bottom:1px solid #333;">
+                    <td style="padding:.35rem;">{{ b.ip }}</td>
+                    <td style="padding:.35rem;">{{ b.reason or '—' }}</td>
+                    <td style="padding:.35rem;">{{ b.created_at }}</td>
+                    <td style="padding:.35rem;">{{ b.expires_at or '—' }}</td>
+                    <td style="padding:.35rem;">
+                      <form method="post" action="{{ url_for('ip_blocklist_action') }}" style="display:inline;">
+                        {% if csrf_token() %}<input type="hidden" name="csrf" value="{{ csrf_token() }}">{% endif %}
+                        <input type="hidden" name="action" value="unblock">
+                        <input type="hidden" name="ip" value="{{ b.ip }}">
+                        <button type="submit" style="background:#444;color:#fff;border:1px solid #666;padding:.3rem .6rem;border-radius:.35rem;cursor:pointer;">
+                          Unblock
+                        </button>
+                      </form>
+                    </td>
+                  </tr>
+                {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% if blocklist_pages > 1 %}
+              <div style="margin-top:.75rem;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;font-size:.9em;">
+                <span style="color:#888;">Page {{ blocklist_page }} of {{ blocklist_pages }}</span>
+                <div style="display:flex;gap:.35rem;flex-wrap:wrap;">
+                  {% if blocklist_page > 1 %}
+                    <a href="{{ url_for('blocklist', page=blocklist_page-1, page_size=blocklist_page_size, traffic_hours=traffic_hours, open=1) }}" style="padding:.3rem .6rem;border:1px solid #444;border-radius:.3rem;color:{{ theme_color() }};text-decoration:none;">Previous</a>
+                  {% endif %}
+                  {% if blocklist_page < blocklist_pages %}
+                    <a href="{{ url_for('blocklist', page=blocklist_page+1, page_size=blocklist_page_size, traffic_hours=traffic_hours, open=1) }}" style="padding:.3rem .6rem;border:1px solid #444;border-radius:.3rem;color:{{ theme_color() }};text-decoration:none;">Next</a>
+                  {% endif %}
+                </div>
+              </div>
+            {% endif %}
+          {% else %}
+            <p style="color:#888;">No IPs are blocked.</p>
+          {% endif %}
         </div>
-      {% else %}
-        <p style="color:#888;">No IPs are blocked.</p>
-      {% endif %}
+      </details>
     </section>
   {% endif %}
 {% endblock %}
@@ -10080,13 +10099,33 @@ def blocklist():
     except (TypeError, ValueError):
         traffic_hours = 24
     traffic_hours = min(max(traffic_hours, 1), 168)
+    try:
+        page = int(request.args.get("page", 1))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        page_size = int(request.args.get("page_size", 50))
+    except (TypeError, ValueError):
+        page_size = 50
+    page_size = min(max(page_size, 10), 200)
     snap = traffic_snapshot(db=get_db(), hours=traffic_hours)
+    total_blocks = len(snap.get("blocklist") or [])
+    total_pages = max((total_blocks + page_size - 1) // page_size, 1)
+    page = min(max(page, 1), total_pages)
+    start = (page - 1) * page_size
+    end = start + page_size
+    paged_blocklist = (snap.get("blocklist") or [])[start:end]
+    snap["blocklist_page"] = paged_blocklist
     return render_template_string(
         TEMPL_BLOCKLIST,
         title=get_setting("site_name", "po.etr.ist"),
         username=current_username(),
         traffic_hours=traffic_hours,
         data=snap,
+        blocklist_total=total_blocks,
+        blocklist_page=page,
+        blocklist_pages=total_pages,
+        blocklist_page_size=page_size,
         IP_BLOCK_DEFAULT_DAYS=IP_BLOCK_DEFAULT_DAYS,
         kind="blocklist",
     )
