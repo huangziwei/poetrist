@@ -9576,21 +9576,36 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
         if stat["max_token_like"] >= token_threshold:
             reasons.append("Tokenized paths")
         score = max(suspicious_score_min, 3)
-        suspicious.append(
-            {
-                "ip": net,
-                "hits": hits,
-                "errors": stat["errors"],
-                "not_found": stat["not_found"],
-                "flags": ["net_aggregate"],
-                "top_paths": [p for p, _ in stat["paths"].most_common(3)],
-                "status_counts": stat["status_counts"],
-                "reason": "; ".join(dict.fromkeys(reasons)),
-                "score": score,
-                "blockable": True,
-                "unique_ips": unique_ips,
-            }
-        )
+        entry = {
+            "ip": net,
+            "hits": hits,
+            "errors": stat["errors"],
+            "not_found": stat["not_found"],
+            "flags": ["net_aggregate"],
+            "top_paths": [p for p, _ in stat["paths"].most_common(3)],
+            "status_counts": stat["status_counts"],
+            "reason": "; ".join(dict.fromkeys(reasons)),
+            "score": score,
+            "blockable": True,
+            "unique_ips": unique_ips,
+        }
+        suspicious.append(entry)
+        if (
+            auto_block_enabled
+            and stat["status_counts"].get("2xx", 0) == 0
+            and stat["status_counts"].get("5xx", 0) > 0
+            and net not in auto_blocked_ips
+        ):
+            try:
+                expires_at = (
+                    utc_now() + timedelta(days=auto_block_expires_days)
+                ).isoformat(timespec="seconds")
+                block_ip_addr(
+                    net, reason="Auto-block: network swarm errors", expires_at=expires_at, db=db
+                )
+                auto_blocked_ips.add(net)
+            except Exception:
+                pass
 
     suspicious.sort(key=lambda r: (-r["hits"], -r["not_found"], r["ip"]))
 
