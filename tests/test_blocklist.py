@@ -34,6 +34,24 @@ def test_blocked_ip_gets_403(client):
     assert resp.status_code == 403
 
 
+def test_blocked_cidr_blocks_range(client):
+    with app.app_context():
+        block_ip_addr("203.0.113.0/24", reason="test", expires_at=None, db=get_db())
+
+    client.environ_base["REMOTE_ADDR"] = "203.0.113.55"
+    resp = client.get("/")
+    assert resp.status_code == 403
+
+
+def test_blocked_ipv6_cidr_blocks_range(client):
+    with app.app_context():
+        block_ip_addr("2001:db8::/126", reason="test", expires_at=None, db=get_db())
+
+    client.environ_base["REMOTE_ADDR"] = "2001:db8::1"
+    resp = client.get("/")
+    assert resp.status_code == 403
+
+
 def test_logged_in_bypasses_block_for_admin_views(client):
     with app.app_context():
         block_ip_addr("203.0.113.11", reason="test", expires_at=None, db=get_db())
@@ -140,6 +158,41 @@ def test_single_suspicious_path_and_ua_gets_flagged(client, tmp_path: Path):
     snap = traffic_snapshot(db=get_db(), hours=24)
     assert any(s["ip"] == "198.51.100.99" for s in snap["suspicious"])
     assert snap["suspicious"][0]["score"] >= 3
+
+
+def test_network_swarm_flagged_even_with_low_per_ip_hits(client, tmp_path: Path):
+    _login(client)
+    app.config.update(
+        TRAFFIC_LOG_DIR=str(tmp_path),
+        TRAFFIC_LOG_ENABLED=True,
+        TRAFFIC_SUSPICIOUS_NET_HITS=20,
+        TRAFFIC_SUSPICIOUS_NET_UNIQUE=10,
+        TRAFFIC_SUSPICIOUS_NET_NOTFOUND_SHARE=0.8,
+        TRAFFIC_SUSPICIOUS_NET_ERROR_SHARE=0.8,
+    )
+
+    log_path = tmp_path / f"traffic-{blog.utc_now():%Y%m%d}.log"
+    entries = []
+    for i in range(10):
+        ip = f"198.51.100.{i}"
+        for _ in range(2):
+            entries.append(
+                {
+                    "ts": blog.utc_now().isoformat(),
+                    "ip": ip,
+                    "path": "/probing",
+                    "m": "GET",
+                    "st": 404,
+                    "flags": ["nonexistent_path"],
+                }
+            )
+    log_path.write_text("\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
+
+    snap = traffic_snapshot(db=get_db(), hours=24)
+    swarm = next((s for s in snap["suspicious"] if s["ip"] == "198.51.0.0/16"), None)
+    assert swarm
+    assert swarm["blockable"] is True
+    assert swarm["not_found"] == 20
 
 
 def test_blocked_ips_filtered_from_traffic_json(client, tmp_path: Path):

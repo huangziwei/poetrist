@@ -231,6 +231,18 @@ TRAFFIC_SUSPICIOUS_CHURN_MIN_HITS = int(
     os.environ.get("TRAFFIC_SUSPICIOUS_CHURN_MIN_HITS", "8")
 )
 TRAFFIC_SUSPICIOUS_SCORE = int(os.environ.get("TRAFFIC_SUSPICIOUS_SCORE", "3"))
+TRAFFIC_SUSPICIOUS_NET_HITS = int(
+    os.environ.get("TRAFFIC_SUSPICIOUS_NET_HITS", "80")
+)
+TRAFFIC_SUSPICIOUS_NET_UNIQUE = int(
+    os.environ.get("TRAFFIC_SUSPICIOUS_NET_UNIQUE", "20")
+)
+TRAFFIC_SUSPICIOUS_NET_NOTFOUND_SHARE = float(
+    os.environ.get("TRAFFIC_SUSPICIOUS_NET_NOTFOUND_SHARE", "0.8")
+)
+TRAFFIC_SUSPICIOUS_NET_ERROR_SHARE = float(
+    os.environ.get("TRAFFIC_SUSPICIOUS_NET_ERROR_SHARE", "0.8")
+)
 TRAFFIC_SKIP_PATHS = {"/favicon.ico", "/robots.txt"}
 IP_BLOCK_DEFAULT_DAYS = int(os.environ.get("IP_BLOCK_DEFAULT_DAYS", "0") or 0)
 
@@ -319,6 +331,16 @@ app.config.update(
     TRAFFIC_READ_MAX_LINES=TRAFFIC_READ_MAX_LINES,
     TRAFFIC_NOTFOUND_SHARE=TRAFFIC_NOTFOUND_SHARE,
     TRAFFIC_HIGH_HITS=TRAFFIC_HIGH_HITS,
+    TRAFFIC_SUSPICIOUS_PATH_LEN=TRAFFIC_SUSPICIOUS_PATH_LEN,
+    TRAFFIC_SUSPICIOUS_TOKEN_THRESHOLD=TRAFFIC_SUSPICIOUS_TOKEN_THRESHOLD,
+    TRAFFIC_SUSPICIOUS_MIN_UA_LEN=TRAFFIC_SUSPICIOUS_MIN_UA_LEN,
+    TRAFFIC_SUSPICIOUS_UA_KEYWORDS=TRAFFIC_SUSPICIOUS_UA_KEYWORDS,
+    TRAFFIC_SUSPICIOUS_CHURN_MIN_HITS=TRAFFIC_SUSPICIOUS_CHURN_MIN_HITS,
+    TRAFFIC_SUSPICIOUS_SCORE=TRAFFIC_SUSPICIOUS_SCORE,
+    TRAFFIC_SUSPICIOUS_NET_HITS=TRAFFIC_SUSPICIOUS_NET_HITS,
+    TRAFFIC_SUSPICIOUS_NET_UNIQUE=TRAFFIC_SUSPICIOUS_NET_UNIQUE,
+    TRAFFIC_SUSPICIOUS_NET_NOTFOUND_SHARE=TRAFFIC_SUSPICIOUS_NET_NOTFOUND_SHARE,
+    TRAFFIC_SUSPICIOUS_NET_ERROR_SHARE=TRAFFIC_SUSPICIOUS_NET_ERROR_SHARE,
 )
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
@@ -3005,6 +3027,57 @@ def _normalize_ip(ip: str) -> str:
         return (ip or "").strip()
 
 
+def _normalize_block_value(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        raise ValueError("empty IP")
+    if "/" in raw:
+        try:
+            return str(ipaddress.ip_network(raw, strict=False))
+        except ValueError:
+            raise ValueError("invalid CIDR")
+    return _normalize_ip(raw)
+
+
+def _parse_block_target(raw: str):
+    val = (raw or "").strip()
+    try:
+        net = ipaddress.ip_network(val, strict=False)
+        return net
+    except ValueError:
+        try:
+            addr = ipaddress.ip_address(val)
+            return ipaddress.ip_network(f"{addr}/{addr.max_prefixlen}", strict=False)
+        except ValueError:
+            return None
+
+
+def _ip_in_blocked(ip: str, blocked_networks: list) -> bool:
+    try:
+        addr = ipaddress.ip_address((ip or "").strip())
+    except ValueError:
+        return False
+    for net in blocked_networks:
+        try:
+            if addr.version != net.version:
+                continue
+            if addr in net:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _net_bucket(ip: str) -> str | None:
+    try:
+        addr = ipaddress.ip_address((ip or "").strip())
+    except ValueError:
+        return None
+    if isinstance(addr, ipaddress.IPv4Address):
+        return str(ipaddress.IPv4Network(f"{addr}/16", strict=False))
+    return str(ipaddress.IPv6Network(f"{addr}/32", strict=False))
+
+
 def _should_skip_traffic_log(path: str) -> bool:
     if path in TRAFFIC_SKIP_PATHS:
         return True
@@ -3065,17 +3138,21 @@ def _ua_suspicious(ua: str, *, min_len: int, keywords: tuple[str, ...]) -> tuple
 def is_ip_blocked(ip: str, *, db) -> bool:
     if not ip:
         return False
-    norm = _normalize_ip(ip)
     now = utc_now().isoformat()
-    row = db.execute(
-        "SELECT 1 FROM ip_blocklist WHERE ip=? AND (expires_at IS NULL OR expires_at > ?)",
-        (norm, now),
-    ).fetchone()
-    return bool(row)
+    rows = db.execute(
+        "SELECT ip, expires_at FROM ip_blocklist WHERE (expires_at IS NULL OR expires_at > ?)",
+        (now,),
+    ).fetchall()
+    nets = []
+    for row in rows:
+        net = _parse_block_target(row["ip"])
+        if net:
+            nets.append(net)
+    return _ip_in_blocked(ip, nets)
 
 
 def block_ip_addr(ip: str, *, reason: str, expires_at: str | None, db) -> None:
-    norm = _normalize_ip(ip)
+    norm = _normalize_block_value(ip)
     db.execute(
         "INSERT OR REPLACE INTO ip_blocklist (ip, reason, created_at, expires_at) VALUES (?,?,?,?)",
         (norm, reason, utc_now().isoformat(timespec="seconds"), expires_at),
@@ -3084,7 +3161,7 @@ def block_ip_addr(ip: str, *, reason: str, expires_at: str | None, db) -> None:
 
 
 def unblock_ip_addr(ip: str, *, db) -> None:
-    norm = _normalize_ip(ip)
+    norm = _normalize_block_value(ip)
     db.execute("DELETE FROM ip_blocklist WHERE ip=?", (norm,))
     db.commit()
 
@@ -9006,7 +9083,15 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
         "SELECT ip, reason, created_at, expires_at FROM ip_blocklist ORDER BY created_at DESC"
     ).fetchall()
     blocklist = [dict(r) for r in blocklist_rows]
-    blocked_ips = {_normalize_ip(b["ip"]) for b in blocklist}
+    now_iso = utc_now().isoformat()
+    blocked_networks = []
+    for row in blocklist:
+        exp = row.get("expires_at")
+        if exp and exp <= now_iso:
+            continue
+        net = _parse_block_target(row["ip"])
+        if net:
+            blocked_networks.append(net)
 
     events = _recent_traffic_events(hours)
     filtered_events: list[dict] = []
@@ -9015,13 +9100,14 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
         ip = _normalize_ip(ev.get("ip") or "unknown")
         if "admin_view" in flags:
             continue
-        if ip in blocked_ips:
+        if _ip_in_blocked(ip, blocked_networks):
             continue
         ev_copy = dict(ev)
         ev_copy["ip"] = ip
         filtered_events.append(ev_copy)
 
     ip_stats: dict[str, dict] = {}
+    net_stats: dict[str, dict] = {}
     notfound_share = float(
         app.config.get("TRAFFIC_NOTFOUND_SHARE", TRAFFIC_NOTFOUND_SHARE)
     )
@@ -9048,6 +9134,25 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
         "TRAFFIC_SUSPICIOUS_UA_KEYWORDS", TRAFFIC_SUSPICIOUS_UA_KEYWORDS
     )
     ua_keywords = _keyword_tuple(ua_kw_cfg)
+    net_hits_threshold = int(
+        app.config.get("TRAFFIC_SUSPICIOUS_NET_HITS", TRAFFIC_SUSPICIOUS_NET_HITS)
+    )
+    net_unique_threshold = int(
+        app.config.get(
+            "TRAFFIC_SUSPICIOUS_NET_UNIQUE", TRAFFIC_SUSPICIOUS_NET_UNIQUE
+        )
+    )
+    net_nf_share = float(
+        app.config.get(
+            "TRAFFIC_SUSPICIOUS_NET_NOTFOUND_SHARE",
+            TRAFFIC_SUSPICIOUS_NET_NOTFOUND_SHARE,
+        )
+    )
+    net_err_share = float(
+        app.config.get(
+            "TRAFFIC_SUSPICIOUS_NET_ERROR_SHARE", TRAFFIC_SUSPICIOUS_NET_ERROR_SHARE
+        )
+    )
 
     for ev in filtered_events:
         ip = ev.get("ip") or "unknown"
@@ -9069,17 +9174,40 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
             },
         )
         stat["hits"] += 1
+        net = _net_bucket(ip)
+        if net:
+            nstat = net_stats.setdefault(
+                net,
+                {
+                    "hits": 0,
+                    "errors": 0,
+                    "not_found": 0,
+                    "paths": Counter(),
+                    "status_counts": Counter(),
+                    "ips": set(),
+                    "max_path_len": 0,
+                    "max_token_like": 0,
+                },
+            )
+            nstat["hits"] += 1
+            nstat["ips"].add(ip)
         is_admin_view = "admin_view" in (ev.get("flags") or [])
         if is_admin_view:
             stat["admin_hits"] += 1
         status = int(ev.get("st") or 0)
         if status >= 400:
             stat["errors"] += 1
+            if net:
+                nstat["errors"] += 1
         if status == 404:
             stat["not_found"] += 1
+            if net:
+                nstat["not_found"] += 1
         if status:
             bucket = f"{(status // 100)}xx"
             stat["status_counts"][bucket] += 1
+            if net:
+                nstat["status_counts"][bucket] += 1
         for f in ev.get("flags") or []:
             stat["flags"].add(f)
         path = ev.get("path") or ""
@@ -9089,6 +9217,12 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
             stat["max_token_like"] = max(
                 stat["max_token_like"], _path_token_burst(path)
             )
+            if net:
+                nstat["paths"][path] += 1
+                nstat["max_path_len"] = max(nstat["max_path_len"], len(path))
+                nstat["max_token_like"] = max(
+                    nstat["max_token_like"], _path_token_burst(path)
+                )
         ua_val = ev.get("ua") or ""
         if ua_val:
             stat["ua_samples"][ua_val] += 1
@@ -9099,11 +9233,6 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
             stat["ua_suspicious"] += 1
             if bad_reason:
                 stat["ua_reasons"][bad_reason] += 1
-
-    blocklist_rows = db.execute(
-        "SELECT ip, reason, created_at, expires_at FROM ip_blocklist ORDER BY created_at DESC"
-    ).fetchall()
-    blocklist = [dict(r) for r in blocklist_rows]
 
     suspicious: list[dict] = []
     min_hits = int(
@@ -9153,7 +9282,7 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
             score += 1
         if hits >= min_hits and nf_rate >= 0.25 and "Elevated volume" not in reasons:
             reasons.append("Heavy traffic")
-        if score < suspicious_score_min or not reasons or ip in blocked_ips:
+        if score < suspicious_score_min or not reasons:
             continue
         deduped_reasons = list(dict.fromkeys(reasons))
         suspicious.append(
@@ -9167,6 +9296,42 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
                 "status_counts": stat["status_counts"],
                 "reason": "; ".join(deduped_reasons),
                 "score": score,
+                "blockable": True,
+            }
+        )
+
+    for net, stat in net_stats.items():
+        hits = stat["hits"]
+        unique_ips = len(stat["ips"])
+        if hits < net_hits_threshold or unique_ips < net_unique_threshold:
+            continue
+        nf_rate = (stat["not_found"] / hits) if hits else 0
+        err_rate = (stat["errors"] / hits) if hits else 0
+        if nf_rate < net_nf_share and err_rate < net_err_share:
+            continue
+        reasons = [f"Network swarm ({unique_ips} IPs)"]
+        if nf_rate >= net_nf_share:
+            reasons.append("High 404 share")
+        if err_rate >= net_err_share and err_rate >= nf_rate:
+            reasons.append("High error share")
+        if stat["max_path_len"] >= path_len_threshold:
+            reasons.append("Very long paths")
+        if stat["max_token_like"] >= token_threshold:
+            reasons.append("Tokenized paths")
+        score = max(suspicious_score_min, 3)
+        suspicious.append(
+            {
+                "ip": net,
+                "hits": hits,
+                "errors": stat["errors"],
+                "not_found": stat["not_found"],
+                "flags": ["net_aggregate"],
+                "top_paths": [p for p, _ in stat["paths"].most_common(3)],
+                "status_counts": stat["status_counts"],
+                "reason": "; ".join(dict.fromkeys(reasons)),
+                "score": score,
+                "blockable": True,
+                "unique_ips": unique_ips,
             }
         )
 
@@ -9478,17 +9643,22 @@ TEMPL_STATS = wrap("""
                   {% if s.top_paths %}{{ s.top_paths|join(', ') }}{% else %}—{% endif %}
                 </td>
                 <td style="padding:.35rem;">
-                  <form method="post" action="{{ url_for('ip_blocklist_action') }}" style="display:inline;">
-                    {% if csrf_token() %}
-                      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-                    {% endif %}
-                    <input type="hidden" name="action" value="block">
-                    <input type="hidden" name="ip" value="{{ s.ip }}">
-                    <input type="hidden" name="reason" value="{{ s.reason }}">
-                    <button type="submit" style="background:#c0392b;color:#fff;border:1px solid #922b21;padding:.3rem .6rem;border-radius:.35rem;cursor:pointer;">
-                      Block
-                    </button>
-                  </form>
+                  {% set can_block = s.blockable is not defined or s.blockable %}
+                  {% if can_block %}
+                    <form method="post" action="{{ url_for('ip_blocklist_action') }}" style="display:inline;">
+                      {% if csrf_token() %}
+                        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+                      {% endif %}
+                      <input type="hidden" name="action" value="block">
+                      <input type="hidden" name="ip" value="{{ s.ip }}">
+                      <input type="hidden" name="reason" value="{{ s.reason }}">
+                      <button type="submit" style="background:#c0392b;color:#fff;border:1px solid #922b21;padding:.3rem .6rem;border-radius:.35rem;cursor:pointer;">
+                        Block
+                      </button>
+                    </form>
+                  {% else %}
+                    <span style="color:#888;">—</span>
+                  {% endif %}
                 </td>
               </tr>
             {% endfor %}
@@ -9681,11 +9851,17 @@ def ip_blocklist_action():
                     expires_at = (utc_now() + timedelta(days=days_int)).isoformat()
             except ValueError:
                 expires_at = None
-        block_ip_addr(ip, reason=reason, expires_at=expires_at, db=db)
-        flash(f"Blocked {ip}")
+        try:
+            block_ip_addr(ip, reason=reason, expires_at=expires_at, db=db)
+            flash(f"Blocked {ip}")
+        except ValueError:
+            flash("Invalid IP or CIDR", "error")
     elif action == "unblock":
-        unblock_ip_addr(ip, db=db)
-        flash(f"Unblocked {ip}")
+        try:
+            unblock_ip_addr(ip, db=db)
+            flash(f"Unblocked {ip}")
+        except ValueError:
+            flash("Invalid IP or CIDR", "error")
     else:
         abort(400)
     return redirect(url_for("blocklist"))
