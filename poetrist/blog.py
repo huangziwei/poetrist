@@ -243,6 +243,15 @@ TRAFFIC_SUSPICIOUS_NET_NOTFOUND_SHARE = float(
 TRAFFIC_SUSPICIOUS_NET_ERROR_SHARE = float(
     os.environ.get("TRAFFIC_SUSPICIOUS_NET_ERROR_SHARE", "0.8")
 )
+TRAFFIC_SUSPICIOUS_NET_LOW_HITS = int(
+    os.environ.get("TRAFFIC_SUSPICIOUS_NET_LOW_HITS", "12")
+)
+TRAFFIC_SUSPICIOUS_NET_LOW_UNIQUE = int(
+    os.environ.get("TRAFFIC_SUSPICIOUS_NET_LOW_UNIQUE", "10")
+)
+TRAFFIC_SUSPICIOUS_NET_LOW_NF_SHARE = float(
+    os.environ.get("TRAFFIC_SUSPICIOUS_NET_LOW_NF_SHARE", "0.9")
+)
 TRAFFIC_SKIP_PATHS = {"/favicon.ico", "/robots.txt"}
 IP_BLOCK_DEFAULT_DAYS = int(os.environ.get("IP_BLOCK_DEFAULT_DAYS", "0") or 0)
 
@@ -341,6 +350,9 @@ app.config.update(
     TRAFFIC_SUSPICIOUS_NET_UNIQUE=TRAFFIC_SUSPICIOUS_NET_UNIQUE,
     TRAFFIC_SUSPICIOUS_NET_NOTFOUND_SHARE=TRAFFIC_SUSPICIOUS_NET_NOTFOUND_SHARE,
     TRAFFIC_SUSPICIOUS_NET_ERROR_SHARE=TRAFFIC_SUSPICIOUS_NET_ERROR_SHARE,
+    TRAFFIC_SUSPICIOUS_NET_LOW_HITS=TRAFFIC_SUSPICIOUS_NET_LOW_HITS,
+    TRAFFIC_SUSPICIOUS_NET_LOW_UNIQUE=TRAFFIC_SUSPICIOUS_NET_LOW_UNIQUE,
+    TRAFFIC_SUSPICIOUS_NET_LOW_NF_SHARE=TRAFFIC_SUSPICIOUS_NET_LOW_NF_SHARE,
 )
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
@@ -9153,6 +9165,20 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
             "TRAFFIC_SUSPICIOUS_NET_ERROR_SHARE", TRAFFIC_SUSPICIOUS_NET_ERROR_SHARE
         )
     )
+    net_low_hits = int(
+        app.config.get("TRAFFIC_SUSPICIOUS_NET_LOW_HITS", TRAFFIC_SUSPICIOUS_NET_LOW_HITS)
+    )
+    net_low_unique = int(
+        app.config.get(
+            "TRAFFIC_SUSPICIOUS_NET_LOW_UNIQUE", TRAFFIC_SUSPICIOUS_NET_LOW_UNIQUE
+        )
+    )
+    net_low_nf_share = float(
+        app.config.get(
+            "TRAFFIC_SUSPICIOUS_NET_LOW_NF_SHARE",
+            TRAFFIC_SUSPICIOUS_NET_LOW_NF_SHARE,
+        )
+    )
 
     for ev in filtered_events:
         ip = ev.get("ip") or "unknown"
@@ -9303,11 +9329,20 @@ def traffic_snapshot(*, db, hours: int = 24) -> dict:
     for net, stat in net_stats.items():
         hits = stat["hits"]
         unique_ips = len(stat["ips"])
-        if hits < net_hits_threshold or unique_ips < net_unique_threshold:
-            continue
         nf_rate = (stat["not_found"] / hits) if hits else 0
         err_rate = (stat["errors"] / hits) if hits else 0
-        if nf_rate < net_nf_share and err_rate < net_err_share:
+        meets_primary = (
+            hits >= net_hits_threshold
+            and unique_ips >= net_unique_threshold
+            and (nf_rate >= net_nf_share or err_rate >= net_err_share)
+        )
+        meets_low_volume = (
+            hits >= net_low_hits
+            and unique_ips >= net_low_unique
+            and nf_rate >= net_low_nf_share
+            and stat["status_counts"].get("2xx", 0) == 0
+        )
+        if not (meets_primary or meets_low_volume):
             continue
         reasons = [f"Network swarm ({unique_ips} IPs)"]
         if nf_rate >= net_nf_share:
