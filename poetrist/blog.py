@@ -262,6 +262,18 @@ TRAFFIC_SWARM_AUTOBLOCK = str(
 TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS = int(
     os.environ.get("TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS", "30")
 )
+TRAFFIC_SWARM_AUTOBLOCK_ON_REQUEST = (
+    str(os.environ.get("TRAFFIC_SWARM_AUTOBLOCK_ON_REQUEST", "1"))
+    .strip()
+    .lower()
+    in {"1", "true", "yes", "on"}
+)
+TRAFFIC_SWARM_AUTOBLOCK_SCAN_HOURS = int(
+    os.environ.get("TRAFFIC_SWARM_AUTOBLOCK_SCAN_HOURS", "6")
+)
+TRAFFIC_SWARM_AUTOBLOCK_INTERVAL_SEC = int(
+    os.environ.get("TRAFFIC_SWARM_AUTOBLOCK_INTERVAL_SEC", "30")
+)
 TRAFFIC_SWARM_AUTOBLOCK_UA_ALLOWLIST = tuple(
     s.strip().lower()
     for s in os.environ.get(
@@ -382,6 +394,9 @@ app.config.update(
     TRAFFIC_SWARM_REQUIRE_4XX=TRAFFIC_SWARM_REQUIRE_4XX,
     TRAFFIC_SWARM_AUTOBLOCK=TRAFFIC_SWARM_AUTOBLOCK,
     TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS=TRAFFIC_SWARM_AUTOBLOCK_EXPIRES_DAYS,
+    TRAFFIC_SWARM_AUTOBLOCK_ON_REQUEST=TRAFFIC_SWARM_AUTOBLOCK_ON_REQUEST,
+    TRAFFIC_SWARM_AUTOBLOCK_SCAN_HOURS=TRAFFIC_SWARM_AUTOBLOCK_SCAN_HOURS,
+    TRAFFIC_SWARM_AUTOBLOCK_INTERVAL_SEC=TRAFFIC_SWARM_AUTOBLOCK_INTERVAL_SEC,
     TRAFFIC_SWARM_AUTOBLOCK_UA_ALLOWLIST=TRAFFIC_SWARM_AUTOBLOCK_UA_ALLOWLIST,
     IP_BLOCK_EXTEND_ON_HIT=IP_BLOCK_EXTEND_ON_HIT,
     IP_BLOCK_EXTEND_DAYS=IP_BLOCK_EXTEND_DAYS,
@@ -3055,6 +3070,7 @@ def rate_limit(max_requests: int, window: int = 60):
 ###############################################################################
 _traffic_hits: DefaultDict[str, deque] = defaultdict(deque)
 _traffic_pruned_once = False
+_last_swarm_autoblock_run = 0.0
 
 
 def client_ip() -> str:
@@ -3138,6 +3154,41 @@ def _mark_burst(ip: str, now: float) -> bool:
         dq.popleft()
     dq.append(now)
     return len(dq) >= limit
+
+
+def _maybe_autoblock_synchronized(*, db) -> None:
+    if not app.config.get(
+        "TRAFFIC_SWARM_AUTOBLOCK_ON_REQUEST", TRAFFIC_SWARM_AUTOBLOCK_ON_REQUEST
+    ):
+        return
+    if not app.config.get("TRAFFIC_SWARM_AUTOBLOCK", TRAFFIC_SWARM_AUTOBLOCK):
+        return
+    interval = int(
+        app.config.get(
+            "TRAFFIC_SWARM_AUTOBLOCK_INTERVAL_SEC",
+            TRAFFIC_SWARM_AUTOBLOCK_INTERVAL_SEC,
+        )
+    )
+    now = time()
+    global _last_swarm_autoblock_run
+    if _last_swarm_autoblock_run and now - _last_swarm_autoblock_run < max(
+        interval, 1
+    ):
+        return
+    _last_swarm_autoblock_run = now
+    try:
+        hours = int(
+            app.config.get(
+                "TRAFFIC_SWARM_AUTOBLOCK_SCAN_HOURS",
+                TRAFFIC_SWARM_AUTOBLOCK_SCAN_HOURS,
+            )
+        )
+    except (TypeError, ValueError):
+        hours = TRAFFIC_SWARM_AUTOBLOCK_SCAN_HOURS
+    try:
+        traffic_snapshot(db=db, hours=hours)
+    except Exception:
+        pass
 
 
 def _is_bot_ua(ua: str | None) -> bool:
@@ -3346,6 +3397,7 @@ def log_traffic(resp):
             "flags": flags,
         }
         _append_traffic_event(event)
+        _maybe_autoblock_synchronized(db=get_db())
     except Exception:
         pass
 
