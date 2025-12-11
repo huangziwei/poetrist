@@ -3172,8 +3172,8 @@ def _extend_block_entries(
     if extension_days <= 0:
         return
     try:
-        conn = sqlite3.connect(db_path or app.config["DATABASE"])
-        conn.execute("PRAGMA busy_timeout = 2000;")
+        # Use a short timeout so we never stall the request when the DB is busy.
+        conn = sqlite3.connect(db_path or app.config["DATABASE"], timeout=0.05)
         new_exp = (utc_now() + timedelta(days=extension_days)).isoformat(
             timespec="seconds"
         )
@@ -3361,7 +3361,7 @@ def traffic_gate():
     g.client_ip = ip
 
     if not session.get("logged_in"):
-        if is_ip_blocked(ip, db=get_db(), extend_on_hit=True):
+        if is_ip_blocked(ip, db=get_db(), extend_on_hit=False):
             abort(403)
 
     if not app.config.get("TRAFFIC_LOG_ENABLED", True):
