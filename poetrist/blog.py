@@ -1210,6 +1210,7 @@ _RATING_COL_CHECKED = False
 def get_db():
     if "db" not in g:
         g.db = sqlite3.connect(app.config["DATABASE"])
+        g.db.execute("PRAGMA busy_timeout = 2000;")  # reduce transient lock errors
         g.db.execute("PRAGMA foreign_keys = ON;")
         g.db.row_factory = sqlite3.Row
         g.db.create_function("strip_caret", 1, strip_caret)
@@ -3156,6 +3157,43 @@ def _mark_burst(ip: str, now: float) -> bool:
     return len(dq) >= limit
 
 
+def _extend_block_entries(
+    targets: set[str], *, extend_days: int | None = None, db_path: str | None = None
+) -> None:
+    if not targets:
+        return
+    if not app.config.get("IP_BLOCK_EXTEND_ON_HIT", IP_BLOCK_EXTEND_ON_HIT):
+        return
+    extension_days = (
+        extend_days
+        if extend_days is not None
+        else int(app.config.get("IP_BLOCK_EXTEND_DAYS", IP_BLOCK_EXTEND_DAYS))
+    )
+    if extension_days <= 0:
+        return
+    try:
+        conn = sqlite3.connect(db_path or app.config["DATABASE"])
+        conn.execute("PRAGMA busy_timeout = 2000;")
+        new_exp = (utc_now() + timedelta(days=extension_days)).isoformat(
+            timespec="seconds"
+        )
+        for val in targets:
+            try:
+                conn.execute(
+                    "UPDATE ip_blocklist SET expires_at=? WHERE ip=?", (new_exp, val)
+                )
+            except Exception:
+                continue
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def _maybe_autoblock_synchronized(*, db) -> None:
     if not app.config.get(
         "TRAFFIC_SWARM_AUTOBLOCK_ON_REQUEST", TRAFFIC_SWARM_AUTOBLOCK_ON_REQUEST
@@ -3231,12 +3269,17 @@ def is_ip_blocked(
     if not ip:
         return False
     now = utc_now().isoformat()
-    rows = db.execute(
-        "SELECT ip, expires_at FROM ip_blocklist WHERE (expires_at IS NULL OR expires_at > ?)",
-        (now,),
-    ).fetchall()
+    try:
+        rows = db.execute(
+            "SELECT ip, expires_at FROM ip_blocklist WHERE (expires_at IS NULL OR expires_at > ?)",
+            (now,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return True  # fail closed if the table is locked
+    except Exception:
+        return False
     nets = []
-    matched_rows = []
+    matched_rows: list[tuple[ipaddress._BaseNetwork, sqlite3.Row]] = []
     for row in rows:
         net = _parse_block_target(row["ip"])
         if net:
@@ -3245,44 +3288,14 @@ def is_ip_blocked(
     blocked = _ip_in_blocked(ip, nets)
     if not blocked:
         return False
-    should_extend = extend_on_hit or bool(
-        app.config.get("IP_BLOCK_EXTEND_ON_HIT", IP_BLOCK_EXTEND_ON_HIT)
-    )
-    if not should_extend:
-        return True
-    extension_days = (
-        extend_days
-        if extend_days is not None
-        else int(app.config.get("IP_BLOCK_EXTEND_DAYS", IP_BLOCK_EXTEND_DAYS))
-    )
-    if extension_days <= 0:
-        return True
-    updated = False
-    for net, row in matched_rows:
-        if not row.get("expires_at"):
-            continue  # permanent blocks stay as-is
-        try:
-            addr = ipaddress.ip_address((ip or "").strip())
-        except ValueError:
-            continue
-        if addr not in net:
-            continue
-        new_exp = (utc_now() + timedelta(days=extension_days)).isoformat(
-            timespec="seconds"
+    if extend_on_hit:
+        # best-effort refresh of expiry using a separate connection; never raise
+        expirable_targets = {
+            row["ip"] for _net, row in matched_rows if row["expires_at"]
+        }
+        _extend_block_entries(
+            expirable_targets, extend_days=extend_days, db_path=app.config["DATABASE"]
         )
-        try:
-            db.execute(
-                "UPDATE ip_blocklist SET expires_at=? WHERE ip=?",
-                (new_exp, row["ip"]),
-            )
-            updated = True
-        except Exception:
-            continue
-    if updated:
-        try:
-            db.commit()
-        except Exception:
-            pass
     return True
 
 
@@ -3348,13 +3361,7 @@ def traffic_gate():
     g.client_ip = ip
 
     if not session.get("logged_in"):
-        try:
-            blocked = is_ip_blocked(ip, db=get_db(), extend_on_hit=True)
-        except Exception:
-            # If the blocklist lookup fails (e.g., transient DB error), fall back to
-            # denying the request so bots don’t get a 500 instead of 403.
-            abort(403)
-        if blocked:
+        if is_ip_blocked(ip, db=get_db(), extend_on_hit=True):
             abort(403)
 
     if not app.config.get("TRAFFIC_LOG_ENABLED", True):
