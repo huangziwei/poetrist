@@ -3347,10 +3347,15 @@ def traffic_gate():
     ip = client_ip()
     g.client_ip = ip
 
-    if not session.get("logged_in") and is_ip_blocked(
-        ip, db=get_db(), extend_on_hit=True
-    ):
-        abort(403)
+    if not session.get("logged_in"):
+        try:
+            blocked = is_ip_blocked(ip, db=get_db(), extend_on_hit=True)
+        except Exception:
+            # If the blocklist lookup fails (e.g., transient DB error), fall back to
+            # denying the request so bots don’t get a 500 instead of 403.
+            abort(403)
+        if blocked:
+            abort(403)
 
     if not app.config.get("TRAFFIC_LOG_ENABLED", True):
         return
