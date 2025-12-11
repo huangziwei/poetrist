@@ -284,11 +284,6 @@ TRAFFIC_SWARM_AUTOBLOCK_UA_ALLOWLIST = tuple(
 )
 TRAFFIC_SKIP_PATHS = {"/favicon.ico", "/robots.txt"}
 IP_BLOCK_DEFAULT_DAYS = int(os.environ.get("IP_BLOCK_DEFAULT_DAYS", "0") or 0)
-IP_BLOCK_EXTEND_ON_HIT = (
-    str(os.environ.get("IP_BLOCK_EXTEND_ON_HIT", "1")).strip().lower()
-    in {"1", "true", "yes", "on"}
-)
-IP_BLOCK_EXTEND_DAYS = int(os.environ.get("IP_BLOCK_EXTEND_DAYS", "30"))
 
 
 def canon(k: str) -> str:  # helper: ^pg → progress
@@ -398,8 +393,6 @@ app.config.update(
     TRAFFIC_SWARM_AUTOBLOCK_SCAN_HOURS=TRAFFIC_SWARM_AUTOBLOCK_SCAN_HOURS,
     TRAFFIC_SWARM_AUTOBLOCK_INTERVAL_SEC=TRAFFIC_SWARM_AUTOBLOCK_INTERVAL_SEC,
     TRAFFIC_SWARM_AUTOBLOCK_UA_ALLOWLIST=TRAFFIC_SWARM_AUTOBLOCK_UA_ALLOWLIST,
-    IP_BLOCK_EXTEND_ON_HIT=IP_BLOCK_EXTEND_ON_HIT,
-    IP_BLOCK_EXTEND_DAYS=IP_BLOCK_EXTEND_DAYS,
 )
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
@@ -3157,43 +3150,6 @@ def _mark_burst(ip: str, now: float) -> bool:
     return len(dq) >= limit
 
 
-def _extend_block_entries(
-    targets: set[str], *, extend_days: int | None = None, db_path: str | None = None
-) -> None:
-    if not targets:
-        return
-    if not app.config.get("IP_BLOCK_EXTEND_ON_HIT", IP_BLOCK_EXTEND_ON_HIT):
-        return
-    extension_days = (
-        extend_days
-        if extend_days is not None
-        else int(app.config.get("IP_BLOCK_EXTEND_DAYS", IP_BLOCK_EXTEND_DAYS))
-    )
-    if extension_days <= 0:
-        return
-    try:
-        # Use a short timeout so we never stall the request when the DB is busy.
-        conn = sqlite3.connect(db_path or app.config["DATABASE"], timeout=0.05)
-        new_exp = (utc_now() + timedelta(days=extension_days)).isoformat(
-            timespec="seconds"
-        )
-        for val in targets:
-            try:
-                conn.execute(
-                    "UPDATE ip_blocklist SET expires_at=? WHERE ip=?", (new_exp, val)
-                )
-            except Exception:
-                continue
-        conn.commit()
-    except Exception:
-        pass
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-
 def _maybe_autoblock_synchronized(*, db) -> None:
     if not app.config.get(
         "TRAFFIC_SWARM_AUTOBLOCK_ON_REQUEST", TRAFFIC_SWARM_AUTOBLOCK_ON_REQUEST
@@ -3263,9 +3219,7 @@ def _ua_suspicious(
     return False, ""
 
 
-def is_ip_blocked(
-    ip: str, *, db, extend_on_hit: bool = False, extend_days: int | None = None
-) -> bool:
+def is_ip_blocked(ip: str, *, db) -> bool:
     if not ip:
         return False
     now = utc_now().isoformat()
@@ -3279,24 +3233,12 @@ def is_ip_blocked(
     except Exception:
         return False
     nets = []
-    matched_rows: list[tuple[ipaddress._BaseNetwork, sqlite3.Row]] = []
     for row in rows:
         net = _parse_block_target(row["ip"])
         if net:
             nets.append(net)
-            matched_rows.append((net, row))
     blocked = _ip_in_blocked(ip, nets)
-    if not blocked:
-        return False
-    if extend_on_hit:
-        # best-effort refresh of expiry using a separate connection; never raise
-        expirable_targets = {
-            row["ip"] for _net, row in matched_rows if row["expires_at"]
-        }
-        _extend_block_entries(
-            expirable_targets, extend_days=extend_days, db_path=app.config["DATABASE"]
-        )
-    return True
+    return blocked
 
 
 def block_ip_addr(ip: str, *, reason: str, expires_at: str | None, db) -> None:
@@ -3361,7 +3303,7 @@ def traffic_gate():
     g.client_ip = ip
 
     if not session.get("logged_in"):
-        if is_ip_blocked(ip, db=get_db(), extend_on_hit=False):
+        if is_ip_blocked(ip, db=get_db()):
             abort(403)
 
     if not app.config.get("TRAFFIC_LOG_ENABLED", True):
