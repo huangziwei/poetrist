@@ -199,6 +199,8 @@ TRAFFIC_LOG_ENABLED = os.environ.get("TRAFFIC_LOG_ENABLED", "1") != "0"
 TRAFFIC_LOG_RETENTION_DAYS = int(os.environ.get("TRAFFIC_LOG_RETENTION_DAYS", "14"))
 TRAFFIC_BURST_WINDOW_SEC = int(os.environ.get("TRAFFIC_BURST_WINDOW", "5"))
 TRAFFIC_BURST_LIMIT = int(os.environ.get("TRAFFIC_BURST_LIMIT", "50"))
+TRAFFIC_GLOBAL_LIMIT = int(os.environ.get("TRAFFIC_GLOBAL_LIMIT", "60"))
+TRAFFIC_GLOBAL_WINDOW_SEC = int(os.environ.get("TRAFFIC_GLOBAL_WINDOW_SEC", "60"))
 TRAFFIC_SUSPICIOUS_MIN_HITS = int(os.environ.get("TRAFFIC_SUSPICIOUS_MIN_HITS", "10"))
 TRAFFIC_NOTFOUND_SHARE = float(os.environ.get("TRAFFIC_NOTFOUND_SHARE", "0.4"))
 TRAFFIC_READ_MAX_LINES = int(os.environ.get("TRAFFIC_READ_MAX_LINES", "5000"))
@@ -369,6 +371,8 @@ app.config.update(
     TRAFFIC_LOG_RETENTION_DAYS=TRAFFIC_LOG_RETENTION_DAYS,
     TRAFFIC_BURST_WINDOW=TRAFFIC_BURST_WINDOW_SEC,
     TRAFFIC_BURST_LIMIT=TRAFFIC_BURST_LIMIT,
+    TRAFFIC_GLOBAL_LIMIT=TRAFFIC_GLOBAL_LIMIT,
+    TRAFFIC_GLOBAL_WINDOW_SEC=TRAFFIC_GLOBAL_WINDOW_SEC,
     TRAFFIC_READ_MAX_LINES=TRAFFIC_READ_MAX_LINES,
     TRAFFIC_NOTFOUND_SHARE=TRAFFIC_NOTFOUND_SHARE,
     TRAFFIC_HIGH_HITS=TRAFFIC_HIGH_HITS,
@@ -3065,6 +3069,7 @@ def rate_limit(max_requests: int, window: int = 60):
 ###############################################################################
 # Traffic logging + blocklist
 ###############################################################################
+_global_hits: DefaultDict[str, deque] = defaultdict(deque)
 _traffic_hits: DefaultDict[str, deque] = defaultdict(deque)
 _traffic_pruned_once = False
 _last_swarm_autoblock_run = 0.0
@@ -3302,15 +3307,20 @@ def _append_traffic_event(event: dict) -> None:
 def traffic_gate():
     ip = client_ip()
     g.client_ip = ip
+    now = time()
+    path = request.path or ""
+    db = None
+    testing = bool(app.config.get("TESTING"))
 
     if not session.get("logged_in"):
-        ua = (request.user_agent.string or "").lower()
+        ua_raw = request.user_agent.string or ""
+        ua = ua_raw.lower()
         block_ua_kw = next(
             (kw for kw in app.config.get("TRAFFIC_BLOCK_UA_KEYWORDS", ()) if kw in ua),
             None,
         )
-        db = get_db()
         if block_ua_kw:
+            db = get_db()
             if not is_ip_blocked(ip, db=db):
                 try:
                     days = int(
@@ -3336,19 +3346,46 @@ def traffic_gate():
                 except Exception:
                     pass
             abort(403)
+        db = db or get_db()
         if is_ip_blocked(ip, db=db):
             abort(403)
 
+    global_limit = int(app.config.get("TRAFFIC_GLOBAL_LIMIT", TRAFFIC_GLOBAL_LIMIT))
+    global_window = int(
+        app.config.get("TRAFFIC_GLOBAL_WINDOW_SEC", TRAFFIC_GLOBAL_WINDOW_SEC)
+    )
+    if testing and global_limit == TRAFFIC_GLOBAL_LIMIT:
+        global_limit = 0  # opt-in only for tests that explicitly set a value
+    if global_limit > 0 and global_window > 0 and not _should_skip_traffic_log(path):
+        dq = _global_hits[ip]
+        while dq and now - dq[0] > global_window:
+            dq.popleft()
+        if len(dq) >= global_limit:
+            db = db or get_db()
+            try:
+                block_ip_addr(
+                    ip,
+                    reason="Auto-block: rate limit exceeded",
+                    expires_at=None,
+                    db=db,
+                )
+            except Exception:
+                pass
+            return Response(
+                "Forbidden",
+                status=403,
+            )
+        dq.append(now)
+
     if not app.config.get("TRAFFIC_LOG_ENABLED", True):
         return
-    if _should_skip_traffic_log(request.path or ""):
+    if _should_skip_traffic_log(path):
         g.skip_traffic_log = True
         return
 
-    started = time()
-    g._traffic_started_at = started
-    flags: list[str] = []
-    if _mark_burst(ip, started):
+    g._traffic_started_at = now
+    flags: list[str] = list(getattr(g, "_traffic_flags", []))
+    if _mark_burst(ip, now):
         flags.append("burst_suspect")
     g._traffic_flags = flags
 
