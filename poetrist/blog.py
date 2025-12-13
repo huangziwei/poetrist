@@ -214,7 +214,10 @@ TRAFFIC_BOT_KEYWORDS = tuple(
 )
 TRAFFIC_BLOCK_UA_KEYWORDS = tuple(
     s.strip().lower()
-    for s in os.environ.get("TRAFFIC_BLOCK_UA_KEYWORDS", "thinkbot").split(",")
+    for s in os.environ.get(
+        "TRAFFIC_BLOCK_UA_KEYWORDS",
+        "thinkbot,gptbot,perplexitybot,duckassistbot,archive.org_bot,meta-externalfetcher",
+    ).split(",")
     if s.strip()
 )
 TRAFFIC_SUSPICIOUS_PATH_LEN = int(os.environ.get("TRAFFIC_SUSPICIOUS_PATH_LEN", "160"))
