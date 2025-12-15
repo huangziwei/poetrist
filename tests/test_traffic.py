@@ -60,3 +60,35 @@ def test_traffic_log_includes_host_and_type(monkeypatch, client, tmp_path: Path)
 
     assert by_host["poetrist.fly.dev"]["host_type"] == "fly_dev"
     assert by_host["custom.example.com"]["host_type"] == "custom"
+
+
+def test_traffic_log_marks_cloudflare(monkeypatch, client, tmp_path: Path):
+    monkeypatch.setitem(blog.app.config, "TRAFFIC_LOG_DIR", str(tmp_path))
+    monkeypatch.setitem(blog.app.config, "TRAFFIC_LOG_ENABLED", True)
+
+    cf_edge_ip = "173.245.48.10"  # in default Cloudflare ranges
+    client.get(
+        "/",
+        headers={
+            "CF-Ray": "abcd1234-ORD",
+            "CF-Connecting-IP": "203.0.113.50",
+            "X-Forwarded-For": "203.0.113.50, 173.245.48.10",
+        },
+        environ_overrides={"REMOTE_ADDR": cf_edge_ip},
+    )
+    client.get("/", environ_overrides={"REMOTE_ADDR": "198.51.100.1"})
+
+    files = sorted(tmp_path.glob("traffic-*.log"))
+    assert files
+    events = [
+        json.loads(line) for line in files[-1].read_text().splitlines() if line.strip()
+    ]
+
+    cf_events = [ev for ev in events if ev.get("cf") is True]
+    assert cf_events
+    cf_event = cf_events[-1]
+    assert cf_event.get("cfray") == "abcd1234-ORD"
+    assert cf_event.get("cfip") == "203.0.113.50"
+    assert cf_event.get("edge") == cf_edge_ip
+    assert cf_event.get("cf_src") == "header+edge"
+    assert any(ev.get("cf") is False for ev in events)

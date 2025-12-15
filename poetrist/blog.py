@@ -289,6 +289,37 @@ TRAFFIC_SWARM_AUTOBLOCK_UA_ALLOWLIST = tuple(
     ).split(",")
     if s.strip()
 )
+CLOUDFLARE_IP_RANGES_DEFAULT = (
+    "173.245.48.0/20",
+    "103.21.244.0/22",
+    "103.22.200.0/22",
+    "103.31.4.0/22",
+    "141.101.64.0/18",
+    "108.162.192.0/18",
+    "190.93.240.0/20",
+    "188.114.96.0/20",
+    "197.234.240.0/22",
+    "198.41.128.0/17",
+    "162.158.0.0/15",
+    "104.16.0.0/13",
+    "104.24.0.0/14",
+    "172.64.0.0/13",
+    "131.0.72.0/22",
+    "2400:cb00::/32",
+    "2606:4700::/32",
+    "2803:f800::/32",
+    "2405:b500::/32",
+    "2405:8100::/32",
+    "2a06:98c0::/29",
+    "2c0f:f248::/32",
+)
+CLOUDFLARE_IP_RANGES = tuple(
+    s.strip()
+    for s in os.environ.get(
+        "CLOUDFLARE_IP_RANGES", ",".join(CLOUDFLARE_IP_RANGES_DEFAULT)
+    ).split(",")
+    if s.strip()
+)
 TRAFFIC_SKIP_PATHS = {"/favicon.ico", "/robots.txt"}
 IP_BLOCK_DEFAULT_DAYS = int(os.environ.get("IP_BLOCK_DEFAULT_DAYS", "0") or 0)
 
@@ -403,6 +434,7 @@ app.config.update(
     TRAFFIC_SWARM_AUTOBLOCK_INTERVAL_SEC=TRAFFIC_SWARM_AUTOBLOCK_INTERVAL_SEC,
     TRAFFIC_SWARM_AUTOBLOCK_UA_ALLOWLIST=TRAFFIC_SWARM_AUTOBLOCK_UA_ALLOWLIST,
     TRAFFIC_BLOCK_UA_KEYWORDS=TRAFFIC_BLOCK_UA_KEYWORDS,
+    CLOUDFLARE_IP_RANGES=CLOUDFLARE_IP_RANGES,
 )
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
@@ -3107,6 +3139,59 @@ def _normalize_ip(ip: str) -> str:
         return (ip or "").strip()
 
 
+def _first_header_value(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    head = str(raw).split(",", 1)[0].strip()
+    return head or None
+
+
+def _cloudflare_networks() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    ranges_cfg = app.config.get("CLOUDFLARE_IP_RANGES", CLOUDFLARE_IP_RANGES)
+    if isinstance(ranges_cfg, (list, tuple, set)):
+        raw_ranges = ranges_cfg
+    else:
+        raw_ranges = str(ranges_cfg or "").split(",")
+    nets: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for raw in raw_ranges:
+        cidr = str(raw or "").strip()
+        if not cidr:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(cidr, strict=False))
+        except ValueError:
+            continue
+    return nets
+
+
+def _cloudflare_info() -> dict[str, object]:
+    cf_ray = _first_header_value(request.headers.get("CF-Ray"))
+    cf_connecting_ip = _first_header_value(request.headers.get("CF-Connecting-IP"))
+    cf_ip = _normalize_ip(cf_connecting_ip) if cf_connecting_ip else None
+    edge_ip_raw = (
+        request.environ.get("werkzeug.proxy_fix.orig_remote_addr")
+        or request.remote_addr
+        or ""
+    )
+    edge_ip = _normalize_ip(edge_ip_raw) if edge_ip_raw else ""
+    nets = _cloudflare_networks()
+    from_cf_ip = bool(edge_ip and nets and _ip_in_blocked(edge_ip, nets))
+    via_cf = bool(cf_ray or cf_ip or from_cf_ip)
+    info: dict[str, object] = {"cf": via_cf}
+    if cf_ray:
+        info["cfray"] = cf_ray[:64]
+    if cf_ip:
+        info["cfip"] = cf_ip
+    if edge_ip and via_cf:
+        info["edge"] = edge_ip
+    if via_cf:
+        if cf_ray or cf_ip:
+            info["cf_src"] = "header+edge" if from_cf_ip else "header"
+        else:
+            info["cf_src"] = "ip_range"
+    return info
+
+
 def _normalize_block_value(value: str) -> str:
     raw = (value or "").strip()
     if not raw:
@@ -3428,6 +3513,7 @@ def log_traffic(resp):
         if session.get("logged_in"):
             flags.append("admin_view")
         host, host_type = _request_host_info()
+        cf_meta = _cloudflare_info()
 
         event = {
             "ts": utc_now().isoformat(),
@@ -3441,6 +3527,7 @@ def log_traffic(resp):
             "dur": dur_ms,
             "flags": flags,
         }
+        event.update(cf_meta)
         _append_traffic_event(event)
         _maybe_autoblock_synchronized(db=get_db())
     except Exception:
