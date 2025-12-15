@@ -3,6 +3,9 @@ tests/test_traffic.py
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from poetrist import blog
 
 
@@ -39,3 +42,21 @@ def test_rate_limit_auto_blocks_ip(monkeypatch, client):
 
     resp_again = client.get("/")
     assert resp_again.status_code == 403
+
+
+def test_traffic_log_includes_host_and_type(monkeypatch, client, tmp_path: Path):
+    monkeypatch.setitem(blog.app.config, "TRAFFIC_LOG_DIR", str(tmp_path))
+    monkeypatch.setitem(blog.app.config, "TRAFFIC_LOG_ENABLED", True)
+
+    client.get("/", headers={"Host": "poetrist.fly.dev"})
+    client.get("/", headers={"Host": "custom.example.com"})
+
+    files = sorted(tmp_path.glob("traffic-*.log"))
+    assert files
+    events = [
+        json.loads(line) for line in files[-1].read_text().splitlines() if line.strip()
+    ]
+    by_host = {ev.get("host"): ev for ev in events}
+
+    assert by_host["poetrist.fly.dev"]["host_type"] == "fly_dev"
+    assert by_host["custom.example.com"]["host_type"] == "custom"

@@ -3085,6 +3085,21 @@ def client_ip() -> str:
     ) or "unknown"
 
 
+def _request_host_info() -> tuple[str, str]:
+    """Return normalized host and a simple classification for logging."""
+    raw_host = (request.headers.get("Host") or request.host or "").strip()
+    if not raw_host:
+        return "", "unknown"
+    host = raw_host.split(",", 1)[0].split(":", 1)[0].strip().lower()
+    if host.endswith(".fly.dev") or host == "fly.dev":
+        kind = "fly_dev"
+    elif host.endswith(".flycast") or host == "flycast":
+        kind = "flycast"
+    else:
+        kind = "custom"
+    return host, kind
+
+
 def _normalize_ip(ip: str) -> str:
     try:
         return str(ipaddress.ip_address((ip or "").strip()))
@@ -3412,10 +3427,13 @@ def log_traffic(resp):
             flags.append("bot_ua")
         if session.get("logged_in"):
             flags.append("admin_view")
+        host, host_type = _request_host_info()
 
         event = {
             "ts": utc_now().isoformat(),
             "ip": _normalize_ip(getattr(g, "client_ip", client_ip())),
+            "host": host,
+            "host_type": host_type,
             "path": request.path,
             "m": request.method,
             "st": resp.status_code,
