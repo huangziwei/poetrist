@@ -8041,6 +8041,8 @@ def item_detail(verb, item_type, slug):
             )
 
         db.execute("UPDATE entry SET body=? WHERE id=?", (body, entry_id))
+        # make hashtags searchable immediately (skip requires manual re-edit)
+        sync_tags(entry_id, extract_tags(body), db=db)
         db.commit()
 
         flash("Check-in added.")
