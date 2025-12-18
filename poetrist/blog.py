@@ -963,7 +963,7 @@ def render_entry_embed(
                        ei.action AS item_action,
                        ei.progress,
                        MIN(CASE
-                            WHEN im.k = 'date'
+                            WHEN LOWER(im.k) = 'date'
                                  AND LENGTH(im.v) >= 4
                             THEN SUBSTR(im.v, 1, 4)
                        END)      AS item_year
@@ -4732,7 +4732,7 @@ def index():
                 i.slug        AS item_slug,
                 i.item_type   AS item_type,
                 MIN(CASE
-                        WHEN im.k = 'date' AND LENGTH(im.v) >= 4
+                        WHEN LOWER(im.k) = 'date' AND LENGTH(im.v) >= 4
                         THEN SUBSTR(im.v, 1, 4)
                     END)      AS item_year,
                 EXISTS (SELECT 1 FROM entry_item ei2
@@ -5238,7 +5238,7 @@ def by_kind(slug):
                 WITH item_rows AS (
                     SELECT i.id, i.title, i.item_type, i.slug,
                         i.rating,
-                        MIN(CASE WHEN im.k='date' AND LENGTH(im.v)>=4
+                        MIN(CASE WHEN LOWER(im.k)='date' AND LENGTH(im.v)>=4
                                     THEN SUBSTR(im.v,1,4) END)         AS year,
                         COUNT(DISTINCT e.id)                           AS cnt,
                         MAX(e.created_at)                              AS last_at,
@@ -6970,7 +6970,7 @@ def entry_detail(kind_slug, entry_slug):
                 MIN(i.slug)                    AS item_slug,
                 MIN(i.item_type)               AS item_type,
                 MIN(CASE                     
-                    WHEN im.k = 'date'
+                    WHEN LOWER(im.k) = 'date'
                         AND LENGTH(im.v) >= 4
                     THEN SUBSTR(im.v,1,4)
                 END)                           AS item_year
@@ -7488,7 +7488,7 @@ def _render_tags(tag_list: str):
                     i.slug       AS item_slug,
                     i.item_type  AS item_type,
                     MIN(CASE
-                            WHEN im.k = 'date' AND LENGTH(im.v) >= 4
+                            WHEN LOWER(im.k) = 'date' AND LENGTH(im.v) >= 4
                             THEN SUBSTR(im.v, 1, 4)
                         END)     AS item_year
             FROM entry        e
@@ -7726,7 +7726,7 @@ def _rss(entries, *, title, feed_url, site_url, feed_kind: str | None = None):
                    ei.action AS item_action,
                    ei.progress,
                    MIN(CASE
-                        WHEN im.k = 'date'
+                        WHEN LOWER(im.k) = 'date'
                              AND LENGTH(im.v) >= 4
                         THEN SUBSTR(im.v, 1, 4)
                    END)      AS item_year
@@ -8165,6 +8165,14 @@ def item_detail(verb, item_type, slug):
 
     back_map = backlinks(timeline_rows, db=db)
     rating_value = int(itm["rating"]) if itm["rating"] is not None else 0
+    meta_year = next(
+        (
+            (r["v"] or "")[:4]
+            for r in meta
+            if (r["k"] or "").lower() == "date" and r["v"]
+        ),
+        "",
+    )
 
     return render_template_string(
         TEMPL_ITEM_DETAIL,
@@ -8173,6 +8181,7 @@ def item_detail(verb, item_type, slug):
         entries=timeline_rows,
         can_rate=rating_ready,
         rating_value=rating_value,
+        meta_year=meta_year,
         verb=verb,
         verb_slug=kind_to_slug(verb),
         sort=sort,
@@ -8185,8 +8194,7 @@ def item_detail(verb, item_type, slug):
 TEMPL_ITEM_DETAIL = wrap("""
 {% block body %}
 <hr>
-{% set _dates = meta | selectattr('k', 'equalto', 'date') | map(attribute='v') | list %}
-{% set _year  = _dates[0][:4] if _dates else '' %}
+{% set _year  = meta_year %}
 <div style="margin-top:0;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
     <h2 style="margin:0;min-width:0;flex:1 1 auto;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;">
         <span>{{ item['title'] }}{% if _year %} ({{ _year }}){% endif %}</span>
@@ -8756,7 +8764,7 @@ def search_entries(
                    i.slug        AS item_slug,
                    i.item_type   AS item_type,
                    MIN(CASE
-                         WHEN im.k='date' AND LENGTH(im.v)>=4
+                         WHEN LOWER(im.k)='date' AND LENGTH(im.v)>=4
                          THEN SUBSTR(im.v,1,4)
                        END)       AS item_year
               FROM entry e
@@ -8810,7 +8818,7 @@ def search_entries(
                 JOIN item       i  ON i.id = ei.item_id
                 JOIN item_meta  im ON im.item_id = i.id
                 WHERE ei.entry_id = e.id
-                AND im.k = 'date' AND LENGTH(im.v) >= 4
+                AND LOWER(im.k) = 'date' AND LENGTH(im.v) >= 4
                 LIMIT 1)                                          AS item_year
 
         FROM entry_fts
@@ -8922,7 +8930,7 @@ def search_items(q: str, *, db, page=1, per_page=PAGE_DEFAULT):
     base_sql = f"""
         SELECT i.*,
                MIN(CASE
-                     WHEN im.k='date' AND LENGTH(im.v)>=4
+                     WHEN LOWER(im.k)='date' AND LENGTH(im.v)>=4
                      THEN SUBSTR(im.v,1,4)
                    END) AS year,
                COUNT(DISTINCT ei.entry_id) AS cnt,
@@ -10467,7 +10475,7 @@ def today(year):
                 i.slug        AS item_slug,
                 i.item_type   AS item_type,
                 MIN(CASE
-                        WHEN im.k='date' AND LENGTH(im.v)>=4
+                        WHEN LOWER(im.k)='date' AND LENGTH(im.v)>=4
                         THEN SUBSTR(im.v,1,4)
                     END)      AS item_year
         FROM entry e
