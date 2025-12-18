@@ -333,6 +333,13 @@ def canon_meta_key(k: str) -> str:
     return ALIASES.get(k.lower(), k)
 
 
+def normalize_item_type(value: str | None) -> str:
+    """Canonicalise user-provided item types (trim + collapse case/whitespace)."""
+    if not value:
+        return ""
+    return re.sub(r"\s+", " ", value).strip().casefold()
+
+
 GENRE_SPLIT_RE = re.compile(r"\s*/\s*")
 
 
@@ -2307,6 +2314,7 @@ def parse_trigger(
                 slug = slug_tok
                 progress_val = prog
 
+            item_type_norm = normalize_item_type(item_type)
             action_lc = (action or "").lower()
             verb, err_msg = _resolve_verb(
                 action_lc,
@@ -2318,7 +2326,7 @@ def parse_trigger(
                 "verb": verb,
                 "_explicit_verb": explicit_verb,
                 "action": action_lc,
-                "item_type": item_type,
+                "item_type": item_type_norm,
                 "title": title,
                 "slug": slug,
                 "progress": progress_val,
@@ -2352,7 +2360,7 @@ def parse_trigger(
             err = err_msg or _block_error(blk)
             if not err:
                 out_blocks.append(blk)
-                new_lines.append(f"^{item_type}:$PENDING${len(out_blocks) - 1}$")
+                new_lines.append(f"^{item_type_norm}:$PENDING${len(out_blocks) - 1}$")
             else:
                 errors.append(f"{err} (line {start_idx + 1})")
                 # treat as plain text if incomplete/invalid
@@ -2407,6 +2415,7 @@ def parse_trigger(
                     tmp["meta"][k] = v
                 i += 1
 
+            tmp["item_type"] = normalize_item_type(tmp["item_type"]) or None
             action_lc = (tmp["action"] or "").lower()
             tmp["verb"], verb_err = _resolve_verb(
                 action_lc,
@@ -2434,17 +2443,30 @@ def parse_trigger(
 def get_or_create_item(
     *, item_type, title, meta, slug: str | None = None, db, update_meta: bool = True
 ):
+    item_type_norm = normalize_item_type(item_type)
+    if not item_type_norm:
+        raise ValueError("item_type missing or empty")
+
     if slug:
         row = db.execute(
-            "SELECT id, slug, uuid FROM item WHERE slug=?", (slug,)
+            "SELECT id, slug, uuid, item_type FROM item WHERE slug=?", (slug,)
         ).fetchone()
         if row:
+            if row["item_type"] != item_type_norm:
+                db.execute(
+                    "UPDATE item SET item_type=? WHERE id=?", (item_type_norm, row["id"])
+                )
             return row["id"], row["slug"], row["uuid"]
         if UUID4_RE.fullmatch(slug):
             row = db.execute(
-                "SELECT id, slug, uuid FROM item WHERE uuid=?", (slug,)
+                "SELECT id, slug, uuid, item_type FROM item WHERE uuid=?", (slug,)
             ).fetchone()
             if row:
+                if row["item_type"] != item_type_norm:
+                    db.execute(
+                        "UPDATE item SET item_type=? WHERE id=?",
+                        (item_type_norm, row["id"]),
+                    )
                 return row["id"], row["slug"], row["uuid"]
 
     if title is None:
@@ -2454,7 +2476,7 @@ def get_or_create_item(
     slug = slug or uuid_
     db.execute(
         "INSERT INTO item (uuid, slug, item_type, title) VALUES (?,?,?,?)",
-        (uuid_, slug, item_type, title),
+        (uuid_, slug, item_type_norm, title),
     )
     item_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -4550,12 +4572,19 @@ def upload_cover(verb, item_type, slug):
     if verb not in VERB_KINDS:
         abort(404)
 
+    item_type_norm = normalize_item_type(item_type)
+    if not item_type_norm:
+        abort(404)
+
     db = get_db()
     itm = db.execute(
-        "SELECT id, uuid FROM item WHERE slug=? AND item_type=?", (slug, item_type)
+        "SELECT id, uuid, item_type FROM item WHERE slug=? AND LOWER(item_type)=?",
+        (slug, item_type_norm),
     ).fetchone()
     if not itm:
         abort(404)
+    if itm["item_type"] != item_type_norm:
+        db.execute("UPDATE item SET item_type=? WHERE id=?", (item_type_norm, itm["id"]))
 
     if "file" not in request.files:
         return {"error": "No file received."}, 400
@@ -7904,6 +7933,10 @@ def item_detail(verb, item_type, slug):
     if verb == tags_slug():
         return _render_tags(f"{item_type}/{slug}")
 
+    item_type_norm = normalize_item_type(item_type)
+    if not item_type_norm:
+        abort(404)
+
     verb = slug_to_kind(verb)
     if verb not in VERB_KINDS:
         abort(404)
@@ -7911,11 +7944,16 @@ def item_detail(verb, item_type, slug):
     ensure_item_rating_column(db)
     itm = db.execute(
         "SELECT id, uuid, slug, item_type, title, rating "
-        "FROM item WHERE slug=? AND item_type=?",
-        (slug, item_type),
+        "FROM item WHERE slug=? AND LOWER(item_type)=?",
+        (slug, item_type_norm),
     ).fetchone()
     if not itm:
         abort(404)
+    if itm["item_type"] != item_type_norm:
+        db.execute("UPDATE item SET item_type=? WHERE id=?", (item_type_norm, itm["id"]))
+        db.commit()
+        itm = dict(itm)
+        itm["item_type"] = item_type_norm
 
     actions_for_item = db.execute(
         "SELECT action FROM entry_item WHERE item_id=? AND verb=?", (itm["id"], verb)
@@ -8433,21 +8471,32 @@ TEMPL_ITEM_DETAIL = wrap("""
 
 @app.route("/<verb>/<item_type>/<slug>/edit", methods=["GET", "POST"])
 def edit_item(verb, item_type, slug):
+    item_type_norm = normalize_item_type(item_type)
+    if not item_type_norm:
+        abort(404)
+
     verb = slug_to_kind(verb)
     if verb not in VERB_KINDS:
         abort(404)
     login_required()
     db = get_db()
     itm = db.execute(
-        "SELECT * FROM item WHERE slug=? AND item_type=?", (slug, item_type)
+        "SELECT * FROM item WHERE slug=? AND LOWER(item_type)=?",
+        (slug, item_type_norm),
     ).fetchone()
     if not itm:
         abort(404)
+    if itm["item_type"] != item_type_norm:
+        db.execute("UPDATE item SET item_type=? WHERE id=?", (item_type_norm, itm["id"]))
+        db.commit()
+        itm = dict(itm)
+        itm["item_type"] = item_type_norm
 
     if request.method == "POST":
         title = request.form["title"].strip()
         new_slug = request.form["slug"].strip() or itm["slug"]
-        new_type = request.form["item_type"].strip() or itm["item_type"]
+        new_type_raw = request.form["item_type"].strip() or itm["item_type"]
+        new_type = normalize_item_type(new_type_raw) or itm["item_type"]
 
         # ➊ update main row ---------------------------------------------------
         db.execute(
@@ -8593,16 +8642,26 @@ TEMPL_EDIT_ITEM = wrap("""
 
 @app.route("/<verb>/<item_type>/<slug>/delete", methods=["GET", "POST"])
 def delete_item(verb, item_type, slug):
+    item_type_norm = normalize_item_type(item_type)
+    if not item_type_norm:
+        abort(404)
+
     verb = slug_to_kind(verb)
     if verb not in VERB_KINDS:
         abort(404)
     login_required()
     db = get_db()
     itm = db.execute(
-        "SELECT * FROM item WHERE slug=? AND item_type=?", (slug, item_type)
+        "SELECT * FROM item WHERE slug=? AND LOWER(item_type)=?",
+        (slug, item_type_norm),
     ).fetchone()
     if not itm:
         abort(404)
+    if itm["item_type"] != item_type_norm:
+        db.execute("UPDATE item SET item_type=? WHERE id=?", (item_type_norm, itm["id"]))
+        db.commit()
+        itm = dict(itm)
+        itm["item_type"] = item_type_norm
 
     if request.method == "POST":
         db.execute("DELETE FROM item WHERE id=?", (itm["id"],))
@@ -10647,6 +10706,10 @@ TEMPL_500 = wrap("""
 @app.route("/<verb>/<item_type>/<slug>/json")
 @rate_limit(max_requests=30, window=60)
 def export_item_json(verb, item_type, slug):
+    item_type_norm = normalize_item_type(item_type)
+    if not item_type_norm:
+        abort(404)
+
     verb = slug_to_kind(verb)
     if verb not in VERB_KINDS:
         abort(404)
@@ -10654,11 +10717,16 @@ def export_item_json(verb, item_type, slug):
     itm = db.execute(
         """SELECT id, uuid, slug, item_type, title
                           FROM item
-                         WHERE item_type=? AND slug=?""",
-        (item_type, slug),
+                         WHERE LOWER(item_type)=? AND slug=?""",
+        (item_type_norm, slug),
     ).fetchone()
     if not itm:
         abort(404)
+    if itm["item_type"] != item_type_norm:
+        db.execute("UPDATE item SET item_type=? WHERE id=?", (item_type_norm, itm["id"]))
+        db.commit()
+        itm = dict(itm)
+        itm["item_type"] = item_type_norm
 
     meta = db.execute(
         """SELECT k, v, ord
@@ -10805,13 +10873,17 @@ def import_item_json(url: str, *, action: str):
         reason = err_msg or "Verb/action mismatch"
         raise ValueError(reason)
 
+    item_type_norm = normalize_item_type(data["item_type"])
+    if not item_type_norm:
+        raise ValueError("Remote item is missing an item_type")
+
     # ------------------------------------------------------------------ #
     # 4 . craft block-dict for caller
     # ------------------------------------------------------------------ #
     return {
         "verb": verb_from_action,
         "action": action.lower(),
-        "item_type": data["item_type"],
+        "item_type": item_type_norm,
         "title": data["title"],
         "slug": data["slug"],
         "progress": None,
