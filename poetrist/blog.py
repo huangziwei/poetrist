@@ -2109,7 +2109,7 @@ CARET_COMPACT_RE = re.compile(
     ^\^
     (?:(?:"([^"]+)"|([a-z0-9_-]+))\:)?    # ➊ verb (optional; grp 1 quoted, 2 plain)
     (?:"([^"]+)"|([a-z0-9_-]+)) :         # ➋ action (grp 3/4)
-    (?:"([^"]+)"|([a-z0-9_-]+)) :         # ➌ item_type (grp 5/6)
+    (?:"([^"]+)"|([^":\s]+)) :            # ➌ item_type (grp 5/6)
     (?:
         "([^"]+)"                         # ➍ title — quoted          (grp 7)
       | ([^":\s]+)                        #     title — **un-quoted** (grp 8)

@@ -80,6 +80,31 @@ def test_parse_trigger_treats_unknown_prefix_as_action():
     assert blk["action"] == "finished"
     assert blk["progress"] == "5%"
 
+def test_parse_trigger_allows_unicode_item_type():
+    item_type = "\u30e9\u30ce\u30d9"
+    title = "\u593e\u5728\u6708\u53f0\u4e0a\u6709\u7406\u60f3\u7684\u4eba"
+    body, blocks, errors = parse_trigger(f"^finished:{item_type}:{title}")
+    assert errors == []
+    assert body == f"^{item_type}:$PENDING$0$"
+    blk = blocks[0]
+    assert blk["verb"] == "read"
+    assert blk["action"] == "finished"
+    assert blk["item_type"] == item_type
+    assert blk["title"] == title
+
+def test_parse_trigger_allows_unicode_item_type_with_explicit_verb():
+    item_type = "\u30e9\u30ce\u30d9"
+    title = "\u593e\u5728\u6708\u53f0\u4e0a\u6709\u7406\u60f3\u7684\u4eba"
+    body, blocks, errors = parse_trigger(f"^read:finished:{item_type}:{title}")
+    assert errors == []
+    assert body == f"^{item_type}:$PENDING$0$"
+    blk = blocks[0]
+    assert blk["verb"] == "read"
+    assert blk["action"] == "finished"
+    assert blk["item_type"] == item_type
+    assert blk["title"] == title
+    assert blk["progress"] is None
+
 def test_parse_trigger_accepts_item_alias():
     body, blocks, errors = parse_trigger('^action:reading\n^item:book\n^title:"Foo"')
     assert errors == []
