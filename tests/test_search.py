@@ -175,6 +175,31 @@ def test_item_search_by_specific_field(client):
     assert "iliad" not in html.lower()
 
 
+def test_item_search_all_types(client):
+    slug_book = _add_item(
+        item_type="book",
+        title="Shared Story",
+        meta={"author": "Shared Author"},
+    )
+    slug_anime = _add_item(
+        item_type="anime",
+        title="Shared Saga",
+        meta={"author": "Shared Author"},
+    )
+    slug_other = _add_item(
+        item_type="book",
+        title="Other Story",
+        meta={"author": "Other Author"},
+    )
+
+    html = client.get("/search", query_string={"q": 'all:author:"Shared Author"'}).data.decode()
+    slugs = _item_slugs(html)
+
+    assert slug_book in slugs
+    assert slug_anime in slugs
+    assert slug_other not in slugs
+
+
 def test_item_search_allows_multiword_type(client):
     slug = _add_item(
         item_type="short story",

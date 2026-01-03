@@ -8877,6 +8877,7 @@ def search_items(q: str, *, db, page=1, per_page=PAGE_DEFAULT):
         book:"Kafka"          ← any field
         book:title:kafka      ← title only
         book:author:kafka     ← specific meta field
+        all:"Kafka"           ← any type, any field
 
     Returns (rows_on_page, total_hits)
     """
@@ -8887,7 +8888,10 @@ def search_items(q: str, *, db, page=1, per_page=PAGE_DEFAULT):
     # ------------------------------------------------------------------
     # Build WHERE-clause and parameter list
     # ------------------------------------------------------------------
-    conds, params = ["LOWER(i.item_type) = ?"], [spec["type"]]
+    conds, params = [], []
+    if spec["type"] != "all":
+        conds.append("LOWER(i.item_type) = ?")
+        params.append(spec["type"])
     like = f"%{spec['term'].lower()}%"
 
     # --- helper fragment: exclude base64 images -----------------------

@@ -166,6 +166,7 @@ def test_highlight_marks_all_terms(monkeypatch):
     ('book:"Kafka"',              ("book", None, "Kafka")),
     ('book:title:kafka',          ("book", "title", "kafka")),
     ('book:author:"Haruki M."',   ("book", "author", "Haruki M.")),
+    ('all:"Kafka"',               ("all", None, "Kafka")),
     ('not a match',               None),
 ])
 def test_parse_item_query(q, ok):
