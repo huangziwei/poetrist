@@ -4822,7 +4822,7 @@ def index():
     def _latest(kind: str) -> list[dict]:
         rows = db.execute(
             """
-                SELECT id, slug, kind, title, body
+                SELECT id, slug, kind, title, body, created_at
                   FROM entry
                  WHERE kind=?
                  ORDER BY created_at DESC
@@ -4843,6 +4843,7 @@ def index():
                     "kind": kind,
                     "title": row["title"] or row["slug"],
                     "snippet": snippet,
+                    "created_at": row["created_at"],
                     "url": url_for(
                         "entry_detail",
                         kind_slug=kind_to_slug(kind),
@@ -5046,14 +5047,14 @@ TEMPL_HOME = wrap("""{% block body %}
     }
     .home-writings-list{
         list-style:none;
-        padding:0;
-        margin:1rem 0 0 0;
+        padding:.9rem 0 0;
+        margin:0;
         display:flex;
         flex-direction:column;
         gap:1.4rem;
     }
     .home-writings-subtitle{
-        margin:1.9rem 0 .6rem;
+        margin:1.9rem 0 .4rem;
         font-size:.8em;
         text-transform:uppercase;
         letter-spacing:.08em;
@@ -5071,6 +5072,18 @@ TEMPL_HOME = wrap("""{% block body %}
         font-weight:inherit;
         color:#c9c9c9;
         text-decoration-color:currentColor;
+    }
+    .home-writings-time{
+        display:block;
+        margin-top:.25rem;
+        color:#8a8a8a;
+        font-size:.72em;
+        font-variant-numeric:tabular-nums;
+        line-height:1.1;
+        white-space:nowrap;
+    }
+    .home-writings-time-tight{
+        margin-top:0;
     }
     .home-writings-line{
         display:inline-block;
@@ -5185,16 +5198,22 @@ TEMPL_HOME = wrap("""{% block body %}
             {% for e in writings.get(key, []) %}
             <li>
                 {% if key == 'say' %}
-                    <a class="h-entry u-url u-uid p-name home-writings-link home-writings-line"
-                       href="{{ e.url }}">
-                        {{ e.snippet }}
-                    </a>
+                    <article class="h-entry">
+                        <a class="u-url u-uid p-name home-writings-link home-writings-line"
+                           href="{{ e.url }}">
+                            {{ e.snippet }}
+                        </a>
+                        <time class="dt-published home-writings-time"
+                              datetime="{{ e.created_at }}">{{ e.created_at|ts }}</time>
+                    </article>
                 {% else %}
                     <article class="h-entry">
                         <a class="p-name u-url u-uid home-writings-link home-writings-line"
                            href="{{ e.url }}">
                             <strong>{{ e.title }}</strong>
                         </a>
+                        <time class="dt-published home-writings-time home-writings-time-tight"
+                              datetime="{{ e.created_at }}">{{ e.created_at|ts }}</time>
                         {% if e.snippet %}
                         <div class="home-writings-card">
                             <div class="e-content home-writings-snippet">
