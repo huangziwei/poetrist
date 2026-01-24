@@ -1574,9 +1574,15 @@ def strip_caret(text: str | None) -> str:
     return "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("^"))
 
 
-def normalize_text_preview(text: str | None) -> str:
+def normalize_text_preview(text: str | None, *, strip_blockquotes: bool = False) -> str:
     """Return a plain-text preview suitable for list views."""
-    clean = strip_caret(text)
+    raw = text or ""
+    if strip_blockquotes:
+        raw = re.sub(r"<blockquote[^>]*>.*?</blockquote>", "", raw, flags=re.S)
+        raw = "\n".join(
+            ln for ln in raw.splitlines() if not ln.lstrip().startswith(">")
+        )
+    clean = strip_caret(raw)
     if not clean:
         return ""
     # normalize images, embeds, and markdown so only plain text remains
@@ -4686,7 +4692,9 @@ def index():
         ).fetchall()
         items = []
         for row in rows:
-            snippet = normalize_text_preview(row["body"])
+            snippet = normalize_text_preview(
+                row["body"], strip_blockquotes=(kind in ("post", "pin"))
+            )
             if kind == "say" and not snippet:
                 snippet = "(untitled)"
             items.append(
