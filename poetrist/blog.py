@@ -2823,9 +2823,6 @@ nav a[aria-current=page]:hover,nav a[aria-current=page]:focus-visible{text-decor
     </div>
     <nav aria-label="Primary" class="nav-primary">
         <div class="nav-row nav-primary-links">
-            <a href="{{ url_for('timeline') }}"
-            {% if request.endpoint=='timeline' %}aria-current="page"{% endif %}>
-            Timeline</a>
             <a href="{{ url_for('by_kind', slug=kind_to_slug('say')) }}"
             {% if kind=='say' %}aria-current="page"{% endif %}>
             Says</a>
@@ -4676,9 +4673,152 @@ def upload_cover(verb, item_type, slug):
 ###############################################################################
 # Index + Listings
 ###############################################################################
-@app.route("/", methods=["GET"])
+def _handle_quick_add(db, *, redirect_endpoint: str) -> tuple[Response | None, str]:
+    form_body = ""
+    if request.method != "POST":
+        return None, form_body
+    login_required()
+    form_body = request.form.get("body", "")
+    body_input = form_body.strip()
+
+    if not body_input:
+        flash("Text is required.")
+        return None, form_body
+
+    body_parsed, blocks, errors = parse_trigger(body_input)
+    if errors:
+        flash("Errors in caret blocks found. Entry was not saved.")
+        for err in errors:
+            flash(err)
+        return None, form_body
+
+    tags = extract_tags(body_parsed)
+    kind = (
+        blocks[0]["verb"] if blocks else apply_photo_kind(infer_kind("", ""), tags)
+    )
+    now_dt = utc_now()
+    now = now_dt.isoformat(timespec="seconds")
+    slug = now_dt.strftime("%Y%m%d%H%M%S")
+
+    db.execute(
+        """INSERT INTO entry (body, created_at, slug, kind)
+                  VALUES (?,?,?,?)""",
+        (body_parsed, now, slug, kind),
+    )
+    entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    sync_tags(entry_id, tags, db=db)
+
+    for idx, blk in enumerate(blocks):
+        item_id, _, uuid_i = get_or_create_item(
+            item_type=blk["item_type"],
+            title=blk["title"],
+            meta=blk["meta"],
+            slug=blk["slug"],
+            db=db,
+            update_meta=True,  # only on creation
+        )
+
+        db.execute(
+            """INSERT OR IGNORE INTO entry_item
+                        (entry_id, item_id, verb, action, progress)
+                    VALUES (?,?,?,?,?)""",
+            (
+                entry_id,
+                item_id,
+                blk["verb"],
+                blk["action"],
+                blk["progress"],
+            ),
+        )
+
+        # patch placeholder in the *local* variable
+        body_parsed = body_parsed.replace(
+            f"^{blk['item_type']}:$PENDING${idx}$",
+            _verbose_block(blk, uuid_i),
+        )
+
+    # 🔑  NOW write the patched body back ↓↓↓
+    db.execute("UPDATE entry SET body=? WHERE id=?", (body_parsed, entry_id))
+    db.commit()
+    return redirect(url_for(redirect_endpoint)), form_body
+
+
+@app.route("/", methods=["GET", "POST"])
 def index():
     db = get_db()
+    resp, form_body = _handle_quick_add(db, redirect_endpoint="index")
+    if resp:
+        return resp
+
+    def _cover_src(val: str | None) -> str | None:
+        if not val:
+            return None
+        val = val.strip()
+        if not val:
+            return None
+        if val.startswith("data:image/"):
+            return val
+        if _is_urlish(val):
+            return val
+        return f"data:image/webp;base64,{val}"
+
+    def _covers_for(verb: str, limit: int = 8) -> list[dict]:
+        rows = db.execute(
+            """
+                SELECT i.id,
+                       i.slug,
+                       i.item_type,
+                       i.title,
+                       (
+                           SELECT im.v
+                             FROM item_meta im
+                            WHERE im.item_id=i.id
+                              AND LOWER(im.k) IN ('cover','img','poster')
+                            ORDER BY CASE LOWER(im.k)
+                                    WHEN 'cover' THEN 0
+                                    WHEN 'img' THEN 1
+                                    ELSE 2
+                                END,
+                                im.ord
+                            LIMIT 1
+                       ) AS cover,
+                       MAX(e.created_at) AS last_at
+                  FROM item i
+                  JOIN entry_item ei ON ei.item_id = i.id
+                  JOIN entry e ON e.id = ei.entry_id
+                 WHERE ei.verb=?
+                   AND e.kind=?
+                   AND EXISTS (
+                       SELECT 1
+                         FROM item_meta im2
+                        WHERE im2.item_id=i.id
+                          AND LOWER(im2.k) IN ('cover','img','poster')
+                   )
+                 GROUP BY i.id
+                 ORDER BY last_at DESC
+                 LIMIT ?
+            """,
+            (verb, verb, limit),
+        ).fetchall()
+        items = []
+        for row in rows:
+            cover = _cover_src(row["cover"])
+            if not cover:
+                continue
+            items.append(
+                {
+                    "title": row["title"] or row["slug"],
+                    "cover": cover,
+                    "url": url_for(
+                        "item_detail",
+                        verb=kind_to_slug(verb),
+                        item_type=row["item_type"],
+                        slug=row["slug"],
+                    ),
+                }
+            )
+        return items
     def _latest(kind: str) -> list[dict]:
         rows = db.execute(
             """
@@ -4712,6 +4852,45 @@ def index():
             )
         return items
 
+    def _photo_cards(limit: int = 8) -> list[dict]:
+        rows = db.execute(
+            """
+                SELECT slug, body
+                  FROM entry
+                 WHERE kind='photo'
+                 ORDER BY created_at DESC
+                 LIMIT ?
+            """,
+            (limit * 3,),
+        ).fetchall()
+        items = []
+        for row in rows:
+            imgs = entry_images(row["body"], row["slug"])
+            if not imgs:
+                continue
+            img = imgs[0]
+            items.append(
+                {
+                    "src": img["src"],
+                    "alt": img["alt"] or "Photo",
+                    "url": url_for(
+                        "entry_detail",
+                        kind_slug=kind_to_slug("photo"),
+                        entry_slug=row["slug"],
+                    ),
+                }
+            )
+            if len(items) >= limit:
+                break
+        return items
+
+    media = {
+        "read": _covers_for("read"),
+        "watch": _covers_for("watch"),
+        "listen": _covers_for("listen"),
+        "play": _covers_for("play"),
+    }
+    photos = _photo_cards()
     writings = {
         "say": _latest("say"),
         "post": _latest("post"),
@@ -4720,7 +4899,10 @@ def index():
 
     return render_template_string(
         TEMPL_HOME,
+        media=media,
+        photos=photos,
         writings=writings,
+        form_body=form_body,
         title=get_setting("site_name", "po.etr.ist"),
         username=current_username(),
         kind="home",
@@ -4730,77 +4912,9 @@ def index():
 @app.route("/timeline", methods=["GET", "POST"])
 def timeline():
     db = get_db()
-
-    # Quick-add “Say” for logged-in admin
-    form_body = ""
-    if request.method == "POST":
-        login_required()
-        form_body = request.form.get("body", "")
-        body_input = form_body.strip()
-
-        if not body_input:
-            flash("Text is required.")
-        else:
-            body_parsed, blocks, errors = parse_trigger(body_input)
-            if errors:
-                flash("Errors in caret blocks found. Entry was not saved.")
-                for err in errors:
-                    flash(err)
-            else:
-                tags = extract_tags(body_parsed)
-                kind = (
-                    blocks[0]["verb"]
-                    if blocks
-                    else apply_photo_kind(infer_kind("", ""), tags)
-                )
-                now_dt = utc_now()
-                now = now_dt.isoformat(timespec="seconds")
-                slug = now_dt.strftime("%Y%m%d%H%M%S")
-
-                db.execute(
-                    """INSERT INTO entry (body, created_at, slug, kind)
-                              VALUES (?,?,?,?)""",
-                    (body_parsed, now, slug, kind),
-                )
-                entry_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-
-                sync_tags(entry_id, tags, db=db)
-
-                for idx, blk in enumerate(blocks):
-                    item_id, slug_i, uuid_i = get_or_create_item(
-                        item_type=blk["item_type"],
-                        title=blk["title"],
-                        meta=blk["meta"],
-                        slug=blk["slug"],
-                        db=db,
-                        update_meta=True,  # only on creation
-                    )
-
-                    db.execute(
-                        """INSERT OR IGNORE INTO entry_item
-                                    (entry_id, item_id, verb, action, progress)
-                                VALUES (?,?,?,?,?)""",
-                        (
-                            entry_id,
-                            item_id,
-                            blk["verb"],
-                            blk["action"],
-                            blk["progress"],
-                        ),
-                    )
-
-                    # patch placeholder in the *local* variable
-                    body_parsed = body_parsed.replace(
-                        f"^{blk['item_type']}:$PENDING${idx}$",
-                        _verbose_block(blk, uuid_i),
-                    )
-
-                # 🔑  NOW write the patched body back ↓↓↓
-                db.execute(
-                    "UPDATE entry SET body=? WHERE id=?", (body_parsed, entry_id)
-                )
-                db.commit()
-                return redirect(url_for("timeline"))
+    resp, form_body = _handle_quick_add(db, redirect_endpoint="timeline")
+    if resp:
+        return resp
 
     # pagination
     page = max(int(request.args.get("page", 1)), 1)
@@ -4852,6 +4966,58 @@ TEMPL_HOME = wrap("""{% block body %}
         --home-muted:#b4b4b4;
         --home-border:#3f3f3f;
         --home-surface:#262626;
+        margin-top:2.4rem;
+    }
+    .home-media{
+        margin-top:2.4rem;
+    }
+    .home-media-title{
+        margin:0 0 .45rem;
+        font-family:"Iowan Old Style","Palatino Linotype","Book Antiqua",Palatino,Georgia,serif;
+        font-size:1.55em;
+        letter-spacing:.02em;
+    }
+    .home-media-row{
+        display:flex;
+        gap:.6rem;
+        overflow-x:auto;
+        padding:.2rem 0 .4rem;
+        -webkit-overflow-scrolling:touch;
+    }
+    .home-media-row::-webkit-scrollbar{display:none;}
+    .home-media-cover{
+        flex:0 0 auto;
+        height:110px;
+        width:auto;
+        border:1px solid var(--home-border);
+        background:#1f1f1f;
+        border-radius:.2rem;
+        overflow:hidden;
+        display:block;
+        box-shadow:0 2px 6px rgba(0,0,0,.25);
+    }
+    .home-media-more{
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        text-align:center;
+        color:var(--home-ink);
+        text-decoration:none;
+        font-size:.85em;
+        text-transform:uppercase;
+        letter-spacing:.08em;
+        min-width:110px;
+        height:110px;
+    }
+    .home-media-more:hover{
+        color:#c9c9c9;
+        border-color:#555;
+    }
+    .home-media-cover img{
+        width:auto;
+        height:100%;
+        object-fit:contain;
+        display:block;
     }
     .home-writings-header{
         display:flex;
@@ -4863,7 +5029,7 @@ TEMPL_HOME = wrap("""{% block body %}
     .home-writings-title{
         margin:0;
         font-family:"Iowan Old Style","Palatino Linotype","Book Antiqua",Palatino,Georgia,serif;
-        font-size:2.1em;
+        font-size:1.55em;
         letter-spacing:.02em;
     }
     .home-writings-meta{
@@ -4884,10 +5050,10 @@ TEMPL_HOME = wrap("""{% block body %}
         margin:1rem 0 0 0;
         display:flex;
         flex-direction:column;
-        gap:.7rem;
+        gap:1.4rem;
     }
     .home-writings-subtitle{
-        margin:1.25rem 0 .4rem;
+        margin:1.9rem 0 .6rem;
         font-size:.8em;
         text-transform:uppercase;
         letter-spacing:.08em;
@@ -4896,14 +5062,15 @@ TEMPL_HOME = wrap("""{% block body %}
     .home-writings-link{
         color:inherit;
         text-decoration:underline;
-        text-decoration-color:currentColor;
+        text-decoration-color:transparent;
         text-decoration-thickness:1px;
         text-underline-offset:.2em;
         border-bottom:none;
     }
     .home-writings-link:hover{
+        font-weight:inherit;
         color:#c9c9c9;
-        text-decoration-color:#c9c9c9;
+        text-decoration-color:currentColor;
     }
     .home-writings-line{
         display:inline-block;
@@ -4932,12 +5099,81 @@ TEMPL_HOME = wrap("""{% block body %}
         overflow:hidden;
     }
     @media (max-width:560px){
-        .home-writings-title{font-size:1.8em;}
+        .home-writings-title{font-size:1.35em;}
         .home-writings-card{margin-left:.6rem;}
+        .home-media-title{font-size:1.35em;}
+        .home-media-cover{height:96px;}
+        .home-media-more{min-width:96px;height:96px;}
     }
     </style>
+    {% if session.get('logged_in') %}
+        <hr style="margin:10px 0">
+        <form method="post" id="quick-add-form"
+              style="display:flex;
+                     flex-direction:column;
+                     gap:10px;
+                     align-items:flex-start;">
+            {% if csrf_token() %}
+            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+            {% endif %}
+            <textarea name="body"
+                      class="writing-area"
+                      rows="3"
+                      data-autogrow="true"
+                      style="margin:0"
+                      placeholder="What's on your mind?">{{ form_body or '' }}</textarea>
+            <div style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;">
+                <button>Add&nbsp;Say</button>
+                {% if r2_enabled() %}
+                    <input type="file" class="img-upload-input" accept="image/*" style="display:none">
+                    <button type="button"
+                            class="img-upload-btn"
+                            aria-label="Upload images"
+                            title="Upload images"
+                            style="background:#333;color:#FFF;border:1px solid #666;display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;padding:5px 10px;">
+                        {{ upload_icon() }}
+                    </button>
+                    <span class="img-upload-status" style="font-size:.85em;color:#888;"></span>
+                {% endif %}
+            </div>
+        </form>
+    {% endif %}
     <hr>
-    <section aria-labelledby="home-writings" class="home-writings" style="margin-top:1rem;">
+    {% set media_groups = [('Reading','read'), ('Watching','watch'), ('Playing','play'), ('Listening','listen')] %}
+    {% for label, key in media_groups %}
+    <section class="home-media">
+        <h2 class="home-media-title">{{ label }}</h2>
+        {% set covers = media.get(key, []) %}
+        <div class="home-media-row" role="list">
+            {% for item in covers %}
+                <a class="home-media-cover" role="listitem" href="{{ item.url }}">
+                    <img src="{{ item.cover }}" alt="{{ item.title }}" loading="lazy">
+                </a>
+            {% endfor %}
+            <a class="home-media-cover home-media-more"
+               role="listitem"
+               href="{{ url_for('by_kind', slug=kind_to_slug(key)) }}">
+                See all
+            </a>
+        </div>
+    </section>
+    {% endfor %}
+    <section class="home-media">
+        <h2 class="home-media-title">Photographing</h2>
+        <div class="home-media-row" role="list">
+            {% for item in photos %}
+                <a class="home-media-cover" role="listitem" href="{{ item.url }}">
+                    <img src="{{ item.src }}" alt="{{ item.alt }}" loading="lazy">
+                </a>
+            {% endfor %}
+            <a class="home-media-cover home-media-more"
+               role="listitem"
+               href="{{ url_for('by_kind', slug=kind_to_slug('photo')) }}">
+                See all
+            </a>
+        </div>
+    </section>
+    <section aria-labelledby="home-writings" class="home-writings">
         <div class="home-writings-header">
             <h2 id="home-writings" class="home-writings-title">Writings</h2>
             <a href="{{ url_for('timeline') }}" class="home-writings-meta">Timeline</a>
@@ -4957,7 +5193,7 @@ TEMPL_HOME = wrap("""{% block body %}
                     <article class="h-entry">
                         <a class="p-name u-url u-uid home-writings-link home-writings-line"
                            href="{{ e.url }}">
-                            {{ e.title }}
+                            <strong>{{ e.title }}</strong>
                         </a>
                         {% if e.snippet %}
                         <div class="home-writings-card">
