@@ -1574,6 +1574,28 @@ def strip_caret(text: str | None) -> str:
     return "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("^"))
 
 
+def normalize_text_preview(text: str | None) -> str:
+    """Return a plain-text preview suitable for list views."""
+    clean = strip_caret(text)
+    if not clean:
+        return ""
+    # normalize images, embeds, and markdown so only plain text remains
+    clean = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", clean)
+    clean = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", clean)
+    clean = re.sub(r"\*\*([^*]+)\*\*", r"\1", clean)
+    clean = re.sub(r"__([^_]+)__", r"\1", clean)
+    clean = re.sub(r"\*([^*]+)\*", r"\1", clean)
+    clean = re.sub(r"_([^_]+)_", r"\1", clean)
+    clean = re.sub(r"~~([^~]+)~~", r"\1", clean)
+    clean = re.sub(r"<img[^>]*alt=['\"]([^'\"]+)['\"][^>]*>", r"\1", clean)
+    clean = re.sub(r"<img\b[^>]*>", "", clean)
+    clean = re.sub(r"@(entry|item):[^\s]+", "", clean)
+    clean = re.sub(r"`{1,3}([^`]+)`{1,3}", r"\1", clean)
+    clean = re.sub(r"<[^>]+>", "", clean)
+    clean = re.sub(r"\s+", " ", clean).strip()
+    return clean
+
+
 def infer_kind(title, link):
     if not title and not link:
         return "say"
@@ -2795,6 +2817,9 @@ nav a[aria-current=page]:hover,nav a[aria-current=page]:focus-visible{text-decor
     </div>
     <nav aria-label="Primary" class="nav-primary">
         <div class="nav-row nav-primary-links">
+            <a href="{{ url_for('timeline') }}"
+            {% if request.endpoint=='timeline' %}aria-current="page"{% endif %}>
+            Timeline</a>
             <a href="{{ url_for('by_kind', slug=kind_to_slug('say')) }}"
             {% if kind=='say' %}aria-current="page"{% endif %}>
             Says</a>
@@ -4645,8 +4670,50 @@ def upload_cover(verb, item_type, slug):
 ###############################################################################
 # Index + Listings
 ###############################################################################
-@app.route("/", methods=["GET", "POST"])
+@app.route("/", methods=["GET"])
 def index():
+    db = get_db()
+    rows = db.execute(
+        """
+            SELECT id, slug, kind, title, body
+              FROM entry
+             WHERE kind IN ('say', 'post', 'pin')
+             ORDER BY created_at DESC
+             LIMIT 10
+        """
+    ).fetchall()
+
+    writings = []
+    for row in rows:
+        kind = row["kind"]
+        snippet = normalize_text_preview(row["body"])
+        if kind == "say" and not snippet:
+            snippet = "(untitled)"
+        writings.append(
+            {
+                "id": row["id"],
+                "kind": kind,
+                "title": row["title"] or row["slug"],
+                "snippet": snippet,
+                "url": url_for(
+                    "entry_detail",
+                    kind_slug=kind_to_slug(kind),
+                    entry_slug=row["slug"],
+                ),
+            }
+        )
+
+    return render_template_string(
+        TEMPL_HOME,
+        writings=writings,
+        title=get_setting("site_name", "po.etr.ist"),
+        username=current_username(),
+        kind="home",
+    )
+
+
+@app.route("/timeline", methods=["GET", "POST"])
+def timeline():
     db = get_db()
 
     # Quick-add “Say” for logged-in admin
@@ -4718,7 +4785,7 @@ def index():
                     "UPDATE entry SET body=? WHERE id=?", (body_parsed, entry_id)
                 )
                 db.commit()
-                return redirect(url_for("index"))
+                return redirect(url_for("timeline"))
 
     # pagination
     page = max(int(request.args.get("page", 1)), 1)
@@ -4752,7 +4819,7 @@ def index():
     pages = list(range(1, total_pages + 1))
     back_map = backlinks(entries, db=db)
     return render_template_string(
-        TEMPL_INDEX,
+        TEMPL_TIMELINE,
         entries=entries,
         page=page,
         pages=pages,
@@ -4763,7 +4830,130 @@ def index():
     )
 
 
-TEMPL_INDEX = wrap("""{% block body %}
+TEMPL_HOME = wrap("""{% block body %}
+    <style>
+    .home-writings{
+        --home-ink:#e6e6e6;
+        --home-muted:#b4b4b4;
+        --home-border:#3f3f3f;
+        --home-surface:#262626;
+    }
+    .home-writings-header{
+        display:flex;
+        align-items:baseline;
+        justify-content:space-between;
+        gap:1rem;
+        flex-wrap:wrap;
+    }
+    .home-writings-title{
+        margin:0;
+        font-family:"Iowan Old Style","Palatino Linotype","Book Antiqua",Palatino,Georgia,serif;
+        font-size:2.1em;
+        letter-spacing:.02em;
+    }
+    .home-writings-meta{
+        font-size:.8em;
+        text-transform:uppercase;
+        letter-spacing:.08em;
+        color:var(--home-muted);
+        text-decoration:none;
+        border-bottom:1px solid transparent;
+    }
+    .home-writings-meta:hover{
+        color:var(--home-ink);
+        border-bottom-color:currentColor;
+    }
+    .home-writings-list{
+        list-style:none;
+        padding:0;
+        margin:1rem 0 0 0;
+        display:flex;
+        flex-direction:column;
+        gap:.7rem;
+    }
+    .home-writings-link{
+        color:inherit;
+        text-decoration:underline;
+        text-decoration-color:currentColor;
+        text-decoration-thickness:1px;
+        text-underline-offset:.2em;
+        border-bottom:none;
+    }
+    .home-writings-link:hover{
+        color:#c9c9c9;
+        text-decoration-color:#c9c9c9;
+    }
+    .home-writings-line{
+        display:inline-block;
+        max-width:100%;
+        font-size:1em;
+        line-height:1.35;
+        white-space:nowrap;
+        overflow:hidden;
+        text-overflow:ellipsis;
+    }
+    .home-writings-card{
+        border:1px solid var(--home-border);
+        background:var(--home-surface);
+        padding:1rem 1.1rem;
+        border-radius:.2rem;
+        margin-top:.55rem;
+        margin-left:1rem;
+    }
+    .home-writings-snippet{
+        color:var(--home-muted);
+        font-size:1em;
+        line-height:1.5;
+        display:-webkit-box;
+        -webkit-line-clamp:3;
+        -webkit-box-orient:vertical;
+        overflow:hidden;
+    }
+    @media (max-width:560px){
+        .home-writings-title{font-size:1.8em;}
+        .home-writings-card{margin-left:.6rem;}
+    }
+    </style>
+    <hr>
+    <section aria-labelledby="home-writings" class="home-writings" style="margin-top:1rem;">
+        <div class="home-writings-header">
+            <h2 id="home-writings" class="home-writings-title">Writings</h2>
+            <a href="{{ url_for('timeline') }}" class="home-writings-meta">Timeline</a>
+        </div>
+        <ul class="home-writings-list">
+        {% for e in writings %}
+            <li>
+                {% if e.kind == 'say' %}
+                    <a class="h-entry u-url u-uid p-name home-writings-link home-writings-line"
+                       href="{{ e.url }}">
+                        {{ e.snippet }}
+                    </a>
+                {% else %}
+                    <article class="h-entry">
+                        <a class="p-name u-url u-uid home-writings-link home-writings-line"
+                           href="{{ e.url }}">
+                            {{ e.title }}
+                        </a>
+                        {% if e.snippet %}
+                        <div class="home-writings-card">
+                            <div class="e-content home-writings-snippet">
+                                {{ e.snippet }}
+                            </div>
+                        </div>
+                        {% endif %}
+                    </article>
+                {% endif %}
+            </li>
+        {% else %}
+            <li><p>No writings yet.</p></li>
+        {% endfor %}
+        </ul>
+    </section>
+{% endblock %}
+""")
+
+
+TEMPL_TIMELINE = wrap("""{% block body %}
     {% if session.get('logged_in') %}
         <hr style="margin:10px 0">
         <form method="post" id="quick-add-form"
@@ -7387,7 +7577,8 @@ def delete_entry(kind_slug, entry_slug):
             "DELETE FROM tag WHERE id NOT IN (SELECT DISTINCT tag_id FROM entry_tag)"
         )
         db.commit()
-        return redirect(url_for("index"))
+        dest = "index" if row["kind"] == "page" else "timeline"
+        return redirect(url_for(dest))
 
     return render_template_string(
         TEMPL_DELETE_ENTRY, e=row, title=get_setting("site_name", "po.etr.ist")
@@ -7408,7 +7599,7 @@ TEMPL_DELETE_ENTRY = wrap("""
             <input type="hidden" name="csrf" value="{{ csrf_token() }}">
             {% endif %}
         <button style="background:#c00; color:#fff;">Yes – delete it</button>
-        <a href="{{ url_for('index') }}" style="margin-left:1rem;">Cancel</a>
+        <a href="{{ url_for('index' if e['kind']=='page' else 'timeline') }}" style="margin-left:1rem;">Cancel</a>
     </form>
     {% endblock %}
 </div>

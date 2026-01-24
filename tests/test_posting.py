@@ -18,7 +18,7 @@ def _login(client) -> None:
 
 def _submit(
     client,
-    path: str,               # "/", "/posts", "/pins"
+    path: str,               # "/timeline", "/posts", "/pins"
     payload: dict[str, Any],
     href_regex: str,         # e.g. r'href="/posts/([^"]+)"'
 ) -> str:
@@ -43,7 +43,7 @@ def _detail_ok(client, url: str, *expect: bytes) -> None:
 def test_quick_add_say(client):
     slug = _submit(
         client,
-        "/",                                   # index form
+        "/timeline",                           # timeline form
         payload={"body": "hello **say**"},
         href_regex=r'href="/says/([^"]+)"',
     )
@@ -85,7 +85,7 @@ def test_caret_checkin_creates_item(client):
     body = '^reading:book:"The Hobbit":42%'
 
     # POST quick-add
-    rv = client.post("/", data={"body": body, "csrf": CSRF}, follow_redirects=True)
+    rv = client.post("/timeline", data={"body": body, "csrf": CSRF}, follow_redirects=True)
     assert rv.status_code == 200
 
     html = rv.data.decode()
@@ -129,7 +129,11 @@ def test_invalid_caret_is_ignored_no_item_or_link(client):
     links_before = db.execute("SELECT COUNT(*) AS c FROM entry_item").fetchone()["c"]
     entries_before = db.execute("SELECT COUNT(*) AS c FROM entry").fetchone()["c"]
 
-    rv = client.post("/", data={"body": '^watched:"The Matrix"', "csrf": CSRF}, follow_redirects=True)
+    rv = client.post(
+        "/timeline",
+        data={"body": '^watched:"The Matrix"', "csrf": CSRF},
+        follow_redirects=True,
+    )
     assert rv.status_code == 200, rv.data.decode()
 
     items_after = db.execute("SELECT COUNT(*) AS c FROM item").fetchone()["c"]

@@ -239,14 +239,14 @@ def test_embed_accepts_full_url(client):
     _login(client)
 
     client.post(
-        "/",
+        "/timeline",
         data={"body": "origin body", "csrf": CSRF},
         follow_redirects=True,
     )
     src = _latest_entry()
 
     client.post(
-        "/",
+        "/timeline",
         data={"body": f"@entry:http://localhost/says/{src['slug']}", "csrf": CSRF},
         follow_redirects=True,
     )
@@ -262,7 +262,11 @@ def test_embed_accepts_full_url(client):
 def test_embed_self_loop_warns(client):
     _login(client)
 
-    client.post("/", data={"body": "self ref placeholder", "csrf": CSRF}, follow_redirects=True)
+    client.post(
+        "/timeline",
+        data={"body": "self ref placeholder", "csrf": CSRF},
+        follow_redirects=True,
+    )
     row = _latest_entry()
     db = get_db()
     db.execute("UPDATE entry SET body=? WHERE slug=?", (f"@entry:{row['slug']}", row["slug"]))
@@ -278,11 +282,19 @@ def test_embed_self_loop_warns(client):
 def test_embed_titleless_entry_shows_no_title_block(client):
     _login(client)
     # create source "say" without title
-    client.post("/", data={"body": "just a say", "csrf": CSRF}, follow_redirects=True)
+    client.post(
+        "/timeline",
+        data={"body": "just a say", "csrf": CSRF},
+        follow_redirects=True,
+    )
     src = _latest_entry()
 
     # create another entry embedding it
-    client.post("/", data={"body": f"@entry:{src['slug']}", "csrf": CSRF}, follow_redirects=True)
+    client.post(
+        "/timeline",
+        data={"body": f"@entry:{src['slug']}", "csrf": CSRF},
+        follow_redirects=True,
+    )
     dest = _latest_entry()
 
     resp = client.get(_detail_url(dest["kind"], dest["slug"]))
