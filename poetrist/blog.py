@@ -4673,35 +4673,42 @@ def upload_cover(verb, item_type, slug):
 @app.route("/", methods=["GET"])
 def index():
     db = get_db()
-    rows = db.execute(
-        """
-            SELECT id, slug, kind, title, body
-              FROM entry
-             WHERE kind IN ('say', 'post', 'pin')
-             ORDER BY created_at DESC
-             LIMIT 10
-        """
-    ).fetchall()
+    def _latest(kind: str) -> list[dict]:
+        rows = db.execute(
+            """
+                SELECT id, slug, kind, title, body
+                  FROM entry
+                 WHERE kind=?
+                 ORDER BY created_at DESC
+                 LIMIT 3
+            """,
+            (kind,),
+        ).fetchall()
+        items = []
+        for row in rows:
+            snippet = normalize_text_preview(row["body"])
+            if kind == "say" and not snippet:
+                snippet = "(untitled)"
+            items.append(
+                {
+                    "id": row["id"],
+                    "kind": kind,
+                    "title": row["title"] or row["slug"],
+                    "snippet": snippet,
+                    "url": url_for(
+                        "entry_detail",
+                        kind_slug=kind_to_slug(kind),
+                        entry_slug=row["slug"],
+                    ),
+                }
+            )
+        return items
 
-    writings = []
-    for row in rows:
-        kind = row["kind"]
-        snippet = normalize_text_preview(row["body"])
-        if kind == "say" and not snippet:
-            snippet = "(untitled)"
-        writings.append(
-            {
-                "id": row["id"],
-                "kind": kind,
-                "title": row["title"] or row["slug"],
-                "snippet": snippet,
-                "url": url_for(
-                    "entry_detail",
-                    kind_slug=kind_to_slug(kind),
-                    entry_slug=row["slug"],
-                ),
-            }
-        )
+    writings = {
+        "say": _latest("say"),
+        "post": _latest("post"),
+        "pin": _latest("pin"),
+    }
 
     return render_template_string(
         TEMPL_HOME,
@@ -4871,6 +4878,13 @@ TEMPL_HOME = wrap("""{% block body %}
         flex-direction:column;
         gap:.7rem;
     }
+    .home-writings-subtitle{
+        margin:1.25rem 0 .4rem;
+        font-size:.8em;
+        text-transform:uppercase;
+        letter-spacing:.08em;
+        color:var(--home-muted);
+    }
     .home-writings-link{
         color:inherit;
         text-decoration:underline;
@@ -4920,10 +4934,13 @@ TEMPL_HOME = wrap("""{% block body %}
             <h2 id="home-writings" class="home-writings-title">Writings</h2>
             <a href="{{ url_for('timeline') }}" class="home-writings-meta">Timeline</a>
         </div>
+        {% set groups = [('Says','say'), ('Posts','post'), ('Pins','pin')] %}
+        {% for label, key in groups %}
+        <h3 class="home-writings-subtitle">{{ label }}</h3>
         <ul class="home-writings-list">
-        {% for e in writings %}
+            {% for e in writings.get(key, []) %}
             <li>
-                {% if e.kind == 'say' %}
+                {% if key == 'say' %}
                     <a class="h-entry u-url u-uid p-name home-writings-link home-writings-line"
                        href="{{ e.url }}">
                         {{ e.snippet }}
@@ -4944,10 +4961,11 @@ TEMPL_HOME = wrap("""{% block body %}
                     </article>
                 {% endif %}
             </li>
-        {% else %}
-            <li><p>No writings yet.</p></li>
-        {% endfor %}
+            {% else %}
+            <li><p>No {{ label|lower }} yet.</p></li>
+            {% endfor %}
         </ul>
+        {% endfor %}
     </section>
 {% endblock %}
 """)
