@@ -2482,7 +2482,8 @@ def get_or_create_item(
         if row:
             if row["item_type"] != item_type_norm:
                 db.execute(
-                    "UPDATE item SET item_type=? WHERE id=?", (item_type_norm, row["id"])
+                    "UPDATE item SET item_type=? WHERE id=?",
+                    (item_type_norm, row["id"]),
                 )
             return row["id"], row["slug"], row["uuid"]
         if UUID4_RE.fullmatch(slug):
@@ -4612,7 +4613,9 @@ def upload_cover(verb, item_type, slug):
     if not itm:
         abort(404)
     if itm["item_type"] != item_type_norm:
-        db.execute("UPDATE item SET item_type=? WHERE id=?", (item_type_norm, itm["id"]))
+        db.execute(
+            "UPDATE item SET item_type=? WHERE id=?", (item_type_norm, itm["id"])
+        )
 
     if "file" not in request.files:
         return {"error": "No file received."}, 400
@@ -4693,9 +4696,7 @@ def _handle_quick_add(db, *, redirect_endpoint: str) -> tuple[Response | None, s
         return None, form_body
 
     tags = extract_tags(body_parsed)
-    kind = (
-        blocks[0]["verb"] if blocks else apply_photo_kind(infer_kind("", ""), tags)
-    )
+    kind = blocks[0]["verb"] if blocks else apply_photo_kind(infer_kind("", ""), tags)
     now_dt = utc_now()
     now = now_dt.isoformat(timespec="seconds")
     slug = now_dt.strftime("%Y%m%d%H%M%S")
@@ -4819,6 +4820,7 @@ def index():
                 }
             )
         return items
+
     def _latest(kind: str) -> list[dict]:
         rows = db.execute(
             """
@@ -4967,15 +4969,15 @@ TEMPL_HOME = wrap("""{% block body %}
         --home-muted:#b4b4b4;
         --home-border:#3f3f3f;
         --home-surface:#262626;
-        margin-top:2.4rem;
+        margin-top:3.2rem;
     }
     .home-media{
-        margin-top:2.4rem;
+        margin-top:3rem;
     }
     .home-media-title{
         margin:0 0 .45rem;
         font-family:"Iowan Old Style","Palatino Linotype","Book Antiqua",Palatino,Georgia,serif;
-        font-size:1.55em;
+        font-size:1.45em;
         letter-spacing:.02em;
     }
     .home-media-row{
@@ -5026,11 +5028,12 @@ TEMPL_HOME = wrap("""{% block body %}
         justify-content:space-between;
         gap:1rem;
         flex-wrap:wrap;
+        margin-bottom:.4rem;
     }
     .home-writings-title{
         margin:0;
         font-family:"Iowan Old Style","Palatino Linotype","Book Antiqua",Palatino,Georgia,serif;
-        font-size:1.55em;
+        font-size:1.75em;
         letter-spacing:.02em;
     }
     .home-writings-meta{
@@ -5047,18 +5050,41 @@ TEMPL_HOME = wrap("""{% block body %}
     }
     .home-writings-list{
         list-style:none;
-        padding:.9rem 0 0;
+        padding:1.2rem 0 0;
         margin:0;
         display:flex;
         flex-direction:column;
-        gap:1.4rem;
+        gap:1.8rem;
+    }
+    .home-writings-list li{
+        margin:0;
+    }
+    .home-writings-list article{
+        display:grid;
+        grid-template-columns:minmax(0,1fr) auto;
+        column-gap:.8rem;
+        row-gap:.2rem;
+        align-items:baseline;
     }
     .home-writings-subtitle{
-        margin:1.9rem 0 .4rem;
-        font-size:.8em;
+        margin:2.8rem 0 .75rem;
+        font-size:.75em;
         text-transform:uppercase;
         letter-spacing:.08em;
-        color:var(--home-muted);
+        color:#9a9a9a;
+        font-weight:600;
+        position:relative;
+        padding-top:2rem;
+    }
+    .home-writings-subtitle::before{
+        content:"";
+        position:absolute;
+        left:0;
+        right:0;
+        top:0;
+        height:1px;
+        background:var(--home-border);
+        opacity:.7;
     }
     .home-writings-link{
         color:inherit;
@@ -5067,6 +5093,9 @@ TEMPL_HOME = wrap("""{% block body %}
         text-decoration-thickness:1px;
         text-underline-offset:.2em;
         border-bottom:none;
+        display:block;
+        grid-column:1;
+        min-width:0;
     }
     .home-writings-link:hover{
         font-weight:inherit;
@@ -5075,12 +5104,14 @@ TEMPL_HOME = wrap("""{% block body %}
     }
     .home-writings-time{
         display:block;
-        margin-top:.25rem;
+        margin-top:0;
         color:#8a8a8a;
         font-size:.72em;
         font-variant-numeric:tabular-nums;
         line-height:1.1;
         white-space:nowrap;
+        grid-column:2;
+        justify-self:end;
     }
     .home-writings-time-tight{
         margin-top:0;
@@ -5088,33 +5119,43 @@ TEMPL_HOME = wrap("""{% block body %}
     .home-writings-line{
         display:inline-block;
         max-width:100%;
-        font-size:1em;
-        line-height:1.35;
+        font-size:1.02em;
+        line-height:1.45;
         white-space:nowrap;
         overflow:hidden;
         text-overflow:ellipsis;
     }
     .home-writings-card{
-        border:1px solid var(--home-border);
-        background:var(--home-surface);
-        padding:1rem 1.1rem;
-        border-radius:.2rem;
-        margin-top:.55rem;
-        margin-left:1rem;
+        border:0;
+        border-left:2px solid var(--home-border);
+        background:transparent;
+        padding:.5rem 0 .5rem .9rem;
+        border-radius:0;
+        margin-top:.6rem;
+        margin-left:0;
+        grid-column:1 / -1;
     }
     .home-writings-snippet{
         color:var(--home-muted);
         font-size:1em;
-        line-height:1.5;
+        line-height:1.55;
         display:-webkit-box;
         -webkit-line-clamp:3;
         -webkit-box-orient:vertical;
         overflow:hidden;
     }
     @media (max-width:560px){
-        .home-writings-title{font-size:1.35em;}
-        .home-writings-card{margin-left:.6rem;}
-        .home-media-title{font-size:1.35em;}
+        .home-writings-title{font-size:1.5em;}
+        .home-media-title{font-size:1.3em;}
+        .home-writings-list article{grid-template-columns:1fr;}
+        .home-writings-time{
+            grid-column:1;
+            justify-self:start;
+            margin-top:.2rem;
+        }
+        .home-writings-card{
+            padding-left:.7rem;
+        }
         .home-media-cover{height:96px;}
         .home-media-more{min-width:96px;height:96px;}
     }
@@ -5188,7 +5229,7 @@ TEMPL_HOME = wrap("""{% block body %}
     </section>
     <section aria-labelledby="home-writings" class="home-writings">
         <div class="home-writings-header">
-            <h2 id="home-writings" class="home-writings-title">Writings</h2>
+            <h2 id="home-writings" class="home-writings-title">Writing</h2>
             <a href="{{ url_for('timeline') }}" class="home-writings-meta">Timeline</a>
         </div>
         {% set groups = [('Says','say'), ('Posts','post'), ('Pins','pin')] %}
@@ -8422,7 +8463,9 @@ def item_detail(verb, item_type, slug):
     if not itm:
         abort(404)
     if itm["item_type"] != item_type_norm:
-        db.execute("UPDATE item SET item_type=? WHERE id=?", (item_type_norm, itm["id"]))
+        db.execute(
+            "UPDATE item SET item_type=? WHERE id=?", (item_type_norm, itm["id"])
+        )
         db.commit()
         itm = dict(itm)
         itm["item_type"] = item_type_norm
@@ -8967,7 +9010,9 @@ def edit_item(verb, item_type, slug):
     if not itm:
         abort(404)
     if itm["item_type"] != item_type_norm:
-        db.execute("UPDATE item SET item_type=? WHERE id=?", (item_type_norm, itm["id"]))
+        db.execute(
+            "UPDATE item SET item_type=? WHERE id=?", (item_type_norm, itm["id"])
+        )
         db.commit()
         itm = dict(itm)
         itm["item_type"] = item_type_norm
@@ -9138,7 +9183,9 @@ def delete_item(verb, item_type, slug):
     if not itm:
         abort(404)
     if itm["item_type"] != item_type_norm:
-        db.execute("UPDATE item SET item_type=? WHERE id=?", (item_type_norm, itm["id"]))
+        db.execute(
+            "UPDATE item SET item_type=? WHERE id=?", (item_type_norm, itm["id"])
+        )
         db.commit()
         itm = dict(itm)
         itm["item_type"] = item_type_norm
@@ -11207,7 +11254,9 @@ def export_item_json(verb, item_type, slug):
     if not itm:
         abort(404)
     if itm["item_type"] != item_type_norm:
-        db.execute("UPDATE item SET item_type=? WHERE id=?", (item_type_norm, itm["id"]))
+        db.execute(
+            "UPDATE item SET item_type=? WHERE id=?", (item_type_norm, itm["id"])
+        )
         db.commit()
         itm = dict(itm)
         itm["item_type"] = item_type_norm
