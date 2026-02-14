@@ -173,3 +173,53 @@ def test_item_detail_allows_custom_action_for_existing_item(client):
         "SELECT action FROM entry_item ORDER BY rowid DESC LIMIT 1"
     ).fetchone()
     assert row and row["action"] == "afterparty"
+
+
+def test_edit_entry_allows_custom_action_with_explicit_verb(client):
+    """
+    Editing an existing entry should not reject a custom action when the body
+    already contains an explicit '^verb:' line.
+    """
+    _login(client)
+    db = get_db()
+    db.execute(
+        "INSERT INTO item (uuid, slug, item_type, title) VALUES (?,?,?,?)",
+        ("223e4567-e89b-42d3-a456-426614174000", "edit-item", "book", "Edit Book"),
+    )
+    db.commit()
+
+    create = client.post(
+        "/read/book/edit-item",
+        data={"meta": "^action:afterthought\n^progress:10%", "csrf": CSRF},
+        follow_redirects=True,
+    )
+    assert create.status_code == 200
+
+    entry = db.execute(
+        "SELECT id, slug, kind, body FROM entry ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert entry and entry["kind"] == "read"
+
+    new_slug = f"{entry['slug']}-edited"
+    edit = client.post(
+        f"/{entry['kind']}/{entry['slug']}/edit",
+        data={
+            "body": f"{entry['body']}\n\nedited note",
+            "slug": new_slug,
+            "csrf": CSRF,
+        },
+        follow_redirects=False,
+    )
+    assert edit.status_code == 302
+    assert edit.headers["Location"].endswith(f"/read/{new_slug}")
+
+    updated_entry = db.execute(
+        "SELECT slug, body FROM entry WHERE id=?", (entry["id"],)
+    ).fetchone()
+    assert updated_entry and updated_entry["slug"] == new_slug
+    assert "edited note" in updated_entry["body"]
+
+    action_row = db.execute(
+        "SELECT action FROM entry_item WHERE entry_id=?", (entry["id"],)
+    ).fetchone()
+    assert action_row and action_row["action"] == "afterthought"

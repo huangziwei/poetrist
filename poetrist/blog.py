@@ -7640,8 +7640,8 @@ def edit_entry(kind_slug, entry_slug):
         # ── single pass ───────────────────────────────────────────────
         verb_hint = row["kind"] if row["kind"] in VERB_KINDS else None
         body_parsed, blocks, errors = parse_trigger(
-            body_for_parse, verb_hint=verb_hint
-        )  # ← only call once
+            body_for_parse, verb_hint=verb_hint, allow_unknown_actions=True
+        )  # allow custom actions when editing existing check-ins
 
         if errors:
             flash("Errors in caret blocks found. Entry was not saved.")
