@@ -44,6 +44,23 @@ def test_rate_limit_auto_blocks_ip(monkeypatch, client):
     assert resp_again.status_code == 403
 
 
+def test_fly_dev_host_is_forbidden(monkeypatch, client):
+    monkeypatch.setitem(blog.app.config, "BLOCK_FLY_DEV_HOSTS", True)
+
+    blocked = client.get("/", headers={"Host": "poetrist.fly.dev"})
+    allowed = client.get("/", headers={"Host": "custom.example.com"})
+
+    assert blocked.status_code == 403
+    assert allowed.status_code == 200
+
+
+def test_fly_dev_host_block_can_be_disabled(monkeypatch, client):
+    monkeypatch.setitem(blog.app.config, "BLOCK_FLY_DEV_HOSTS", False)
+
+    resp = client.get("/", headers={"Host": "poetrist.fly.dev"})
+    assert resp.status_code == 200
+
+
 def test_traffic_log_includes_host_and_type(monkeypatch, client, tmp_path: Path):
     monkeypatch.setitem(blog.app.config, "TRAFFIC_LOG_DIR", str(tmp_path))
     monkeypatch.setitem(blog.app.config, "TRAFFIC_LOG_ENABLED", True)

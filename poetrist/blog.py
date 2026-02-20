@@ -322,6 +322,12 @@ CLOUDFLARE_IP_RANGES = tuple(
 )
 TRAFFIC_SKIP_PATHS = {"/favicon.ico", "/robots.txt"}
 IP_BLOCK_DEFAULT_DAYS = int(os.environ.get("IP_BLOCK_DEFAULT_DAYS", "0") or 0)
+BLOCK_FLY_DEV_HOSTS = str(os.environ.get("BLOCK_FLY_DEV_HOSTS", "1")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 def canon(k: str) -> str:  # helper: ^pg → progress
@@ -442,6 +448,7 @@ app.config.update(
     TRAFFIC_SWARM_AUTOBLOCK_UA_ALLOWLIST=TRAFFIC_SWARM_AUTOBLOCK_UA_ALLOWLIST,
     TRAFFIC_BLOCK_UA_KEYWORDS=TRAFFIC_BLOCK_UA_KEYWORDS,
     CLOUDFLARE_IP_RANGES=CLOUDFLARE_IP_RANGES,
+    BLOCK_FLY_DEV_HOSTS=BLOCK_FLY_DEV_HOSTS,
 )
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
@@ -3465,6 +3472,11 @@ def traffic_gate():
     path = request.path or ""
     db = None
     testing = bool(app.config.get("TESTING"))
+
+    if app.config.get("BLOCK_FLY_DEV_HOSTS", BLOCK_FLY_DEV_HOSTS):
+        _, host_type = _request_host_info()
+        if host_type == "fly_dev":
+            return Response("Forbidden", status=403)
 
     if not session.get("logged_in"):
         ua_raw = request.user_agent.string or ""
